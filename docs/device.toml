@@ -1,0 +1,28 @@
+# Kiosk display — recorded from the owner 2026-08-29. Read by T0.0 (device gate) and the tv-probe subcommand.
+[tv]
+name = "Lonzo's TV"
+model = "INSIGNIA_NS-50F301NA22"          # Insignia 50" 4K Fire TV Edition television (not a stick)
+os = "Fire OS 7.7.1.5 (PS7715/5585)"       # Fire OS 7 = Android 9, API 28 -> Branch A (sideloadable)
+android_api = 28
+ip = "10.0.0.178"                           # DHCP lease at time of writing; owner should reserve it on the router
+mac = "00:D2:B1:B3:31:B9"
+gateway = "10.0.0.1"
+adb_enabled = true
+kiosk_branch = "A"                          # A = Fire OS + Fully Kiosk Browser; see docs/FIRE_TV.md
+
+# Probed over adb 2026-08-29 (Fable):
+[tv.probe]
+codename = "AFTDCT31"
+android_release = "9"
+webview = "com.amazon.webview.chromium 138.amazon-webview-v138-7204-tv-r29"   # Chromium 138 — canvas/WS/pointer events/ResizeObserver all fine
+silk = "com.amazon.cloud9 138.16.11.0"                                          # Silk installed -> zero-install bookmark fallback to Fully Kiosk
+launcher = "com.amazon.tv.launcher"
+physical_size = "3840x2160"
+render_size = "1920x1080"                    # wm override; design the /tv layout for 1920x1080 @ density 320
+sleep_timeout_ms = 840000                   # 14 min -> runbook sets `settings put secure sleep_timeout 0`
+screen_off_timeout_ms = 300000              # 5 min  -> runbook sets to never
+
+[server]
+lan = "10.0.0.0/24"
+# The server PC's reserved IP goes here once the owner sets the DHCP reservation (Appendix A2).
+# ip = "10.0.0.x"
