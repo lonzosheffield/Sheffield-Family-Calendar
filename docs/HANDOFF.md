@@ -334,3 +334,142 @@ set:
 - **T1.7:** `realtime::connected_clients()` returns the live WebSocket count
   for `/health`; `ServerMessage::Health { stale, last_update }` is the badge
   message and `RealtimeBus::{connected, stale}` the client-side signals.
+
+## From T1.3 (TLS + PKI + dual listener + mDNS + QR) → Boss
+
+### H-7. `CryptoProvider::install_default` is the first line of `run`, not of `main`
+
+PURPLE_TEAM.md §P5.4 (rustls row) and the T1.3 task line both word the
+requirement as "call `CryptoProvider::install_default(...)` as the **first
+line of `main()`**". §P4's ownership table freezes `src/main.rs` after T0.6
+("Later editors: **none** (frozen)"), and §P5.1.4 reserves changing a
+protected file to a Boss decision, so T1.3 did not edit it.
+
+The call is instead the first statement of `server::router::run()` — the
+only thing the server `main` does after building the tokio runtime, and
+therefore the first line that executes before anything can touch rustls. It
+is idempotent (`install_default` returns `Err` when a provider is already
+installed, which this treats as the no-op it is), so test binaries call it
+too via `tls::install_crypto_provider()`.
+
+This matters because `reqwest` also links rustls: with a second provider in
+the tree, `CryptoProvider::get_default()` panics rather than choosing. The
+current tree resolves to `ring` only (`cargo tree` shows no `aws-lc-rs`), so
+the install is belt-and-braces today and load-bearing the moment any
+dependency pulls `aws-lc-rs` in.
+
+**If Boss wants the literal wording**, the one-line change is to add
+`family_calendar::server::tls::install_crypto_provider();` as the first
+statement of the `#[cfg(feature = "server")] fn main()` in `src/main.rs`.
+It is safe to have in both places. `main.rs` would grow from 18 to 20 lines,
+still inside T0.6's `< 25` assertion.
+
+### H-8. `Cargo.toml`: T1.3's crate additions (serialized Boss micro-change)
+
+§P4 routes later crate additions through a Boss micro-commit between waves,
+but T1.3 cannot exist without its crates, and no other wave 1-a task
+(T1.1 migrations, T1.2 realtime) needs `Cargo.toml` — the same reasoning
+Boss applied to T0.7 at the wave 0-e close. Added, all pinned exactly per
+§P5.4:
+
+| Crate | Pin / features | Why |
+| --- | --- | --- |
+| `rustls` | `=0.23.43`, `default-features = false`, `["ring","tls12","logging","std"]` | §P5.4 verbatim. `ring`, never `aws-lc-rs` (needs CMake + NASM on Windows). |
+| `tokio-rustls` | `=0.26.4`, `default-features = false`, `["ring","tls12","logging"]` | **Trap:** its default features are `["logging","tls12","aws_lc_rs"]` — leaving defaults on drags aws-lc-rs in. |
+| `hyper-util` | `=0.1.20`, `["server","server-auto","http1","http2","tokio","service"]` | The auto h1/h2 server; `service` gives `TowerToHyperService`, which is the whole axum-to-hyper adapter. Not `axum-server`. |
+| `hyper` | `=1.11.1`, `["server","http1","http2"]` | Already in the tree via axum; named explicitly because `tls.rs` uses it directly. |
+| `rcgen` | `=0.14.10`, `default-features = false`, `["ring","pem","x509-parser"]` | §P5.4 verbatim. |
+| `x509-parser` | `=0.18.1` | Reads `not_before`/`not_after`/SANs back **out of the stored certificate** rather than trusting what the issuer believed it wrote. Same version rcgen resolves, so no duplicate. |
+| `time` | `0.3`, `["std"]` | rcgen's public API takes `time::OffsetDateTime`. |
+| `mdns-sd` | `=0.21.0` | §P5.4 verbatim. |
+| `if-addrs` | `=0.15.0` | Host IPv4 enumeration for the SAN list and the A record. `mdns-sd` already pulls this exact version, so it adds no new subtree. |
+| `fast_qr` | `=0.13.1`, `default-features = false`, `["svg"]` | **Not** feature-gated: the QR component compiles for `web` (wasm32) as well as `server`. Its `image` feature would drag `resvg` into the shipped binary, so only `svg` is on. |
+| dev: `resvg` 0.45, `rqrr` 0.10 | | Acceptance (g) rasterises the component's own SVG (`resvg`, whose `tiny_skia` re-export is the pixmap) and decodes it with an independent reader, rather than round-tripping the encoder against itself. |
+
+Assertion (f) needed no crate at all: mdns-sd answers a querier whose source
+port is not 5353 with an RFC 6762 §6.7 legacy-unicast reply, so a plain
+`std::net::UdpSocket` and a hand-built 33-byte DNS query are enough — no
+`SO_REUSEADDR` bind on 5353, and therefore no `socket2`.
+
+`cargo tree -d --features server | Select-String '^(axum|tower-http|hyper) v'`
+is still empty, so T0.8's CI duplicate check is unaffected.
+
+### H-9. `assets/tailwind.css` rebuilt in this branch
+
+Per the wave 0-e note, `assets/tailwind.css` follows `src/`. The new
+`src/client/components/qr.rs` introduces Tailwind tokens, so the CSS was
+rebuilt in this branch with the pinned standalone binary
+(`tailwindcss.exe -i input.css -o assets/tailwind.css --minify`, v3.4.17)
+and the diff is committed. CI's fail-on-diff step is clean.
+
+### H-10. `build_router` is unchanged for `/m`; the 308 lives in `build_http_router`
+
+D3' wants `GET http://…:8080/m` to be a 308 while `GET https://…:8443/m` is
+a 200. Both of T0.3's and T0.6's protected assertions
+(`http_tests.rs::http_m_serves_routine_only_view`,
+`router_tests.rs::m_route_serves_the_phone_routine_view`) call
+`build_router(&config)` directly and expect 200 — so making `build_router`
+itself redirect would have broken a protected test on T1.3's own authority.
+
+Resolution: `build_router` stays the shared router (200 on `/m`, unchanged
+behaviour for every existing test) and a new `build_http_router(&config)`
+wraps it in the plain-HTTP origin's single upgrade rule. `run()` serves
+`build_http_router` on `:8080` and `build_router` on `:8443`. The upgrade
+set is `/m`, `/m/*`, `/mobile`, `/mobile/*`, `/manifest.webmanifest`,
+`/sw.js`; `/mobile` is included because it is a phone view and matches D3''s
+literal `/m*`, and no existing assertion covers `/mobile` on the HTTP
+*origin* (only on `build_router`). Everything the TV needs — `/tv`, `/ws`,
+`/assets`, `/uploads`, `/ca.crt`, `/health` — is served on plain HTTP, never
+redirected.
+
+### H-11. `certs.mode` is read but has only one legal value until T1.8
+
+`CertSource::from_mode(None)` is what `run()` calls today. The hand-rolled
+TOML subset in `src/server/config.rs` (H-6) was **not** replaced:
+`[certs] mode = "self_signed"` is a flat string and `TomlValues` already
+namespaces it as `certs.mode`, so the `toml` crate is still not needed.
+T1.8 should wire `FamilyHubConfig` to surface `certs.mode` and pass it to
+`CertSource::from_mode`, which already rejects anything unknown with a clear
+startup error — PURPLE §P3 T1.8 assertion (d).
+
+### H-12. Private-key ACLs use `icacls.exe`, not the `windows` crate
+
+`<data>\pki\ca.key` and `leaf.key` get `/inheritance:r` plus grants to
+SYSTEM, Administrators and the running user, applied only when a key is
+newly written. `icacls.exe` is a Windows built-in — the OS's own ACL API
+surfaced as a command, not a new project dependency, so `docs/NON_RUST.md`
+is unchanged. The alternative was the `windows` crate's
+`SetNamedSecurityInfoW` for one call. Failure is logged and never fatal: a
+hub that cannot tighten an ACL must still boot. T3.1's elevated `install`
+subcommand is where the data directory's inherited permissions get set
+properly, and it will shell to `netsh advfirewall` on the same reasoning
+(PLAN v2 T3.1's own acceptance test asserts against `netsh` output).
+
+**Boss decision requested:** if you count an OS built-in invoked at runtime
+as a declared exception, `docs/NON_RUST.md` needs a row for `icacls.exe`
+(and, at T3.1, `netsh.exe` / `sc.exe`). T1.3 did not add one because
+`docs/NON_RUST.md` is T0.1-owned and this is an OS API call rather than a
+component of the stack — but it is a one-line call to make either way, and
+the alternative (dropping the ACL narrowing) would leave §P5.5 default 7's
+"CA key ACL-restricted" unimplemented until T3.1.
+
+### H-13. For T1.6 — what must stay out of backups
+
+`<data>\pki\` contains `ca.crt`, `ca.key`, `leaf.crt`, `leaf.key`. T1.6's
+assertion (f) is "`backups/` contains no `.key` file": excluding the whole
+`pki/` directory satisfies it and is the right rule — the CA key is the one
+secret whose loss would let someone mint certificates for the hub, and it is
+regenerable (re-install the new `/ca.crt` on the phones) where the database
+is not.
+
+### H-14. For T1.7 — `/health` cert fields
+
+`pki::parse_certificate_validity(&pem)` returns
+`(not_before, not_after, SAN set)` read out of the certificate itself, and
+`IssuedLeaf::days_remaining()` is the same number the renewal predicate
+uses. `router::pki_for(&config.pki_dir())` hands back the *same*
+`Arc<SelfSignedCa>` the HTTPS listener and `/ca.crt` are using, so
+`/health`'s `days_to_expiry` cannot drift from the leaf actually being
+served (T1.7's assertion "expiry matches leaf"). `/health` itself is still
+T0.6's stub — T1.7 owns `src/server/health.rs` and replaces
+`router::health_stub` when it lands.

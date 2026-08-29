@@ -1,35 +1,66 @@
-//! Central axum router construction (PLAN v2 T0.6).
+//! Central axum router construction (PLAN v2 T0.6, extended by T1.3).
 //!
 //! [`build_router`] is the single place production HTTP routes are
 //! registered. `src/main.rs` is reduced to booting the tokio runtime and
 //! delegating to [`run`] so it stays under 25 lines and is **frozen**
 //! thereafter (`docs/reviews/PURPLE_TEAM.md` §P4). Later tasks extend this
-//! router in their own waves rather than duplicating it: T1.3 adds the HTTPS
-//! listener and a real `/ca.crt`, T2.5 adds the multipart photo-upload route
-//! — both serialized after T0.6 per the file-ownership table.
+//! router in their own waves rather than duplicating it: T1.3 (this wave)
+//! adds the HTTPS listener and a real `/ca.crt`, T2.5 adds the multipart
+//! photo-upload route.
 //!
-//! The four root routes below (`/manifest.webmanifest`, `/sw.js`, `/ca.crt`,
-//! `/health`) are deliberately **stubs**: they exist and answer with the
-//! right status/content-type so downstream tasks (T1.3, T1.7, T2.2) can wire
-//! real behaviour behind an already-stable URL, per G6/G8's root-cause
-//! (serving these from a hashed `/assets/` path breaks PWA `scope`).
+//! **Split origins (PLAN v2 D3′).** There is one router and two listeners:
+//!
+//! ```text
+//! :8080  HTTP   serves everything the TV needs — /tv, /ws, /assets,
+//!               /uploads, /ca.crt, /health — and 308s only the phone
+//!               surface (/m*, /manifest.webmanifest, /sw.js) to HTTPS.
+//! :8443  HTTPS  serves everything, including /m and wss.
+//! ```
+//!
+//! The TV never needs a secure context (no service worker, no install
+//! prompt, no camera), which is exactly why it can stay on plain HTTP and
+//! never has to trust a private CA — the finding that dissolved the v1
+//! kiosk/TLS conflict. The phone surface must be secure or it gets none of
+//! those things, hence the one-way upgrade.
+//!
+//! [`build_router`] is the shared router and answers `/m` with 200;
+//! [`build_http_router`] is that router behind the upgrade layer and is what
+//! the :8080 listener actually serves. Keeping them separate is what lets
+//! the same handler tree serve both origins.
 
+use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
 
-use axum::http::header;
-use axum::response::{IntoResponse, Redirect};
+use axum::extract::Request;
+use axum::http::{header, StatusCode, Uri};
+use axum::middleware::Next;
+use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::get;
 use axum::Router;
 use dioxus::prelude::*;
 use tower_http::services::ServeDir;
 
 use crate::client::app::App;
+use crate::client::components::qr::phone_join_url;
 use crate::server::api::realtime;
 use crate::server::config::FamilyHubConfig;
+use crate::server::pki::{CertProvider, CertSource, SelfSignedCa};
+use crate::server::tls::{install_crypto_provider, TlsListener};
+
+/// How often the renewal task re-checks the leaf. Six hours is far finer
+/// than the 30-day window it guards, and coarse enough to be invisible on a
+/// machine that runs for months.
+const RENEWAL_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(6 * 60 * 60);
 
 /// Build the production axum router for `config`. Pure and synchronous so
 /// tests can construct it directly against a throwaway [`FamilyHubConfig`]
 /// without booting a database pool or a listener.
+///
+/// This is the **shared** router: it serves both origins and answers every
+/// route, `/m` included, with real content. The HTTP-only upgrade rule
+/// lives in [`build_http_router`] instead, so that a route's behaviour on
+/// the HTTPS origin is never coupled to how the HTTP origin treats it.
 ///
 /// **`/mobile` vs `/m` (`docs/HANDOFF.md` H-2):** both routes exist and both
 /// render the routine-only phone view; `/m` is the canonical short URL of
@@ -42,11 +73,19 @@ use crate::server::config::FamilyHubConfig;
 /// leaves it exactly as it already behaves rather than force a choice that
 /// isn't its call to make; `Route::Mobile` in `client/app.rs` is unchanged.
 pub fn build_router(config: &FamilyHubConfig) -> Router {
+    let pki_dir = config.pki_dir();
+
     Router::new()
         .route("/", get(redirect_root_to_tv))
         .route("/manifest.webmanifest", get(manifest_stub))
         .route("/sw.js", get(service_worker_stub))
-        .route("/ca.crt", get(ca_cert_stub))
+        .route(
+            "/ca.crt",
+            get(move || {
+                let pki_dir = pki_dir.clone();
+                async move { ca_cert(pki_dir).await }
+            }),
+        )
         .route("/health", get(health_stub))
         .route("/ws", get(realtime::ws_handler))
         .nest_service("/uploads", ServeDir::new(config.upload_dir()))
@@ -55,6 +94,54 @@ pub fn build_router(config: &FamilyHubConfig) -> Router {
             ServeDir::new(config.screensaver_dir()),
         )
         .serve_dioxus_application(ServeConfig::new(), App)
+}
+
+/// [`build_router`] wrapped in the plain-HTTP origin's one rule: the phone
+/// surface is 308'd to the HTTPS origin (PLAN v2 D3′, PURPLE_TEAM.md §P5.5
+/// default 6 — "8080 serves the TV in full; it 308s only `/m*`,
+/// `/manifest.webmanifest` and `/sw.js`"). Everything else — `/tv`, `/ws`,
+/// `/assets`, `/uploads`, `/ca.crt`, `/health` — is served, not redirected,
+/// because the TV must keep working even if TLS is broken.
+pub fn build_http_router(config: &FamilyHubConfig) -> Router {
+    let tls_port = config.tls_addr.port();
+    build_router(config).layer(axum::middleware::from_fn(
+        move |request: Request, next: Next| async move {
+            match upgrade_target(request.uri(), request.headers(), tls_port) {
+                Some(location) => Redirect::permanent(&location).into_response(),
+                None => next.run(request).await,
+            }
+        },
+    ))
+}
+
+/// Does this request belong to the phone surface, and if so where does it
+/// go on the HTTPS origin?
+///
+/// The host is taken from the request's `Host` header, so a phone that
+/// typed the reserved IP is upgraded to that same IP and a phone that typed
+/// `familyhub.local` stays on the name — an absolute redirect to a
+/// hard-coded address would break one of the two.
+fn upgrade_target(uri: &Uri, headers: &header::HeaderMap, tls_port: u16) -> Option<String> {
+    let path = uri.path();
+    let is_phone_surface = path == "/m"
+        || path.starts_with("/m/")
+        || path == "/mobile"
+        || path.starts_with("/mobile/")
+        || path == "/manifest.webmanifest"
+        || path == "/sw.js";
+    if !is_phone_surface {
+        return None;
+    }
+
+    let host = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.split(':').next().unwrap_or(value))
+        .filter(|host| !host.is_empty())
+        .unwrap_or("localhost");
+
+    let query = uri.query().map(|q| format!("?{q}")).unwrap_or_default();
+    Some(format!("https://{host}:{tls_port}{path}{query}"))
 }
 
 /// `/` is not a page of its own (D3′): the TV kiosk lives at `/tv`, the phone
@@ -84,14 +171,36 @@ async fn service_worker_stub() -> impl IntoResponse {
     )
 }
 
-/// T0.6 stub. T1.3 replaces the body with the real `rcgen` self-signed CA
-/// certificate (PEM, valid X.509) but keeps this route and its
-/// `application/x-x509-ca-cert` content type.
-async fn ca_cert_stub() -> impl IntoResponse {
-    (
-        [(header::CONTENT_TYPE, "application/x-x509-ca-cert")],
-        "-- T0.6 stub; T1.3 issues the real self-signed CA certificate here. --\n",
-    )
+/// The local CA certificate the owner installs on each phone (PLAN v2 D3′,
+/// Appendix A A6). Served on **both** origins, and specifically on the
+/// plain-HTTP one: a phone that does not yet trust the CA cannot fetch the
+/// CA over a connection secured by it.
+///
+/// Only the CA *certificate* is ever served. The CA private key stays in
+/// `<data>\pki\ca.key` with a narrowed ACL and is excluded from backups
+/// (T1.6).
+async fn ca_cert(pki_dir: PathBuf) -> Response {
+    match pki_for(&pki_dir) {
+        Ok(pki) => (
+            [
+                (header::CONTENT_TYPE, "application/x-x509-ca-cert"),
+                (
+                    header::CONTENT_DISPOSITION,
+                    "attachment; filename=\"familyhub-ca.crt\"",
+                ),
+            ],
+            pki.ca_pem(),
+        )
+            .into_response(),
+        Err(err) => {
+            tracing::error!(%err, "could not load the local CA to serve /ca.crt");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "the local certificate authority is unavailable\n",
+            )
+                .into_response()
+        }
+    }
 }
 
 /// T0.6 stub. T1.7 replaces the body with the real health JSON (db
@@ -103,6 +212,31 @@ async fn health_stub() -> impl IntoResponse {
         [(header::CONTENT_TYPE, "application/json")],
         r#"{"status":"stub"}"#,
     )
+}
+
+/// Process-wide cache of opened PKI directories.
+///
+/// [`build_router`] takes a `&FamilyHubConfig`, not a certificate provider,
+/// because its signature is load-bearing for T0.3's and T0.6's protected
+/// acceptance tests. Keying the provider by directory keeps `/ca.crt`
+/// answering with the *same* CA the HTTPS listener is using (both resolve
+/// `config.pki_dir()`), while still letting each test binary point at its
+/// own throwaway directory.
+fn pki_for(dir: &std::path::Path) -> Result<Arc<SelfSignedCa>, crate::server::pki::PkiError> {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    use std::sync::OnceLock;
+
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, Arc<SelfSignedCa>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
+
+    if let Some(existing) = cache.get(dir) {
+        return Ok(existing.clone());
+    }
+    let pki = Arc::new(SelfSignedCa::open(dir)?);
+    cache.insert(dir.to_path_buf(), pki.clone());
+    Ok(pki)
 }
 
 /// `dioxus_server::ServeConfig::new()` — which [`build_router`] calls via
@@ -134,10 +268,18 @@ fn ensure_public_dir_exists() {
 }
 
 /// Resolve `config`, prepare its data directory, open the database pool,
-/// start the calendar poller, and serve [`build_router`] forever on
-/// `config.http_addr`. Extracted out of `main.rs` (T0.6) so `main.rs` stays
-/// under 25 lines and never defines a route itself.
+/// start the calendar poller, and serve the router on **both** origins
+/// forever (PLAN v2 D3′). Extracted out of `main.rs` (T0.6) so `main.rs`
+/// stays under 25 lines and never defines a route itself.
 pub async fn run(config: FamilyHubConfig) {
+    // First statement of the server's real entrypoint, before anything can
+    // touch rustls (`reqwest` also links it, so a second provider is on the
+    // table and `get_default()` would panic rather than choose).
+    // PURPLE_TEAM.md §P5.4 words this as "the first line of `main`";
+    // `main.rs` is frozen by §P4's ownership table, and `run` is the first
+    // thing it calls, so this is that line — see `docs/HANDOFF.md` H-7.
+    install_crypto_provider();
+
     // T0.5: every path this process touches (DB, uploads, screensaver, PKI,
     // logs) is resolved once here, absolutely, from `FamilyHubConfig` —
     // never relative to the current working directory (G23/R-14) — and
@@ -158,19 +300,84 @@ pub async fn run(config: FamilyHubConfig) {
         .expect("failed to open the database");
     crate::server::calendar::spawn_polling_task();
 
-    let router = build_router(&config);
+    // Certificate source. Only `SelfSignedCa` exists in this wave; an
+    // unrecognised `certs.mode` fails here, loudly, rather than at the
+    // first renewal months later.
+    let CertSource::SelfSignedCa = CertSource::from_mode(None).expect("supported certs.mode");
+    let pki = pki_for(&config.pki_dir()).expect("failed to open the local certificate authority");
+    match pki.renew_if_due() {
+        Ok(true) => tracing::info!("re-issued the server leaf certificate at startup"),
+        Ok(false) => {}
+        Err(err) => tracing::error!(%err, "could not renew the server leaf certificate"),
+    }
+
+    let http_router = build_http_router(&config);
+    let https_router = build_router(&config);
 
     // `dioxus_cli_config`'s bare-`IP`/`PORT` address helper is removed from
     // the release path per PLAN v2 T0.5 / PURPLE_TEAM.md finding 10 (D7′);
     // the bind address always comes from `FamilyHubConfig`
     // (`FAMILY_HUB_ADDR`, default `0.0.0.0:8080`).
-    let listener = tokio::net::TcpListener::bind(config.http_addr)
+    let http_listener = tokio::net::TcpListener::bind(config.http_addr)
         .await
-        .expect("failed to bind server address");
+        .expect("failed to bind the HTTP server address");
+    let http_addr = http_listener.local_addr().unwrap_or(config.http_addr);
 
-    axum::serve(listener, router.into_make_service())
+    let tls = TlsListener::bind(config.tls_addr, pki.as_ref())
         .await
-        .expect("server error");
+        .expect("failed to bind the HTTPS server address");
+    let tls_addr = tls.local_addr;
+    let resolver = tls.resolver();
+
+    // mDNS is a convenience layered on top of the IP the QR encodes, so it
+    // is registered after both listeners are actually bound and it never
+    // fails the boot.
+    crate::server::mdns::register_best_effort(http_addr.port(), tls_addr.port());
+    log_join_urls(http_addr, tls_addr);
+
+    // Renewal loop: re-issue at 30 days remaining (or when the host's
+    // addresses change) and push the new leaf into the live resolver, so a
+    // display that is never power-cycled never serves an expired
+    // certificate and never needs a restart to stop doing so.
+    tokio::spawn({
+        let pki = pki.clone();
+        async move {
+            loop {
+                tokio::time::sleep(RENEWAL_CHECK_INTERVAL).await;
+                match pki.renew_if_due() {
+                    Ok(true) => match resolver.replace(&pki.current()) {
+                        Ok(()) => tracing::info!("hot-reloaded a re-issued leaf certificate"),
+                        Err(err) => tracing::error!(%err, "re-issued leaf could not be loaded"),
+                    },
+                    Ok(false) => {}
+                    Err(err) => tracing::error!(%err, "certificate renewal check failed"),
+                }
+            }
+        }
+    });
+
+    tokio::select! {
+        result = axum::serve(http_listener, http_router.into_make_service()) => {
+            result.expect("http server error");
+        }
+        () = tls.serve(https_router) => {}
+    }
+}
+
+/// Log both surfaces' URLs at startup so the owner can read the kiosk URL
+/// and the phone URL straight out of the service log (D9's "all paths
+/// logged at startup", extended to the two origins).
+fn log_join_urls(http_addr: SocketAddr, tls_addr: SocketAddr) {
+    let host = crate::server::pki::primary_ipv4_address()
+        .map(|ip| ip.to_string())
+        .unwrap_or_else(|| "127.0.0.1".to_string());
+
+    tracing::info!(
+        kiosk_url = %format!("http://{host}:{}/tv", http_addr.port()),
+        phone_url = %phone_join_url(&host, tls_addr.port()),
+        ca_url = %format!("http://{host}:{}/ca.crt", http_addr.port()),
+        "hub is serving"
+    );
 }
 
 #[cfg(test)]
@@ -203,5 +410,61 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
         std::env::remove_var("DIOXUS_PUBLIC_PATH");
+    }
+
+    fn headers_with_host(host: &str) -> header::HeaderMap {
+        let mut headers = header::HeaderMap::new();
+        headers.insert(header::HOST, host.parse().expect("valid host header"));
+        headers
+    }
+
+    #[test]
+    fn only_the_phone_surface_is_upgraded_to_https() {
+        let headers = headers_with_host("10.0.0.42:8080");
+
+        for path in ["/m", "/m/settings", "/manifest.webmanifest", "/sw.js"] {
+            let uri: Uri = path.parse().expect("valid uri");
+            assert_eq!(
+                upgrade_target(&uri, &headers, 8443).as_deref(),
+                Some(format!("https://10.0.0.42:8443{path}").as_str()),
+                "{path} is phone surface and must be upgraded"
+            );
+        }
+
+        // Everything the TV needs stays on plain HTTP: the kiosk must keep
+        // working even when TLS is broken (that is the whole point of D3').
+        for path in ["/tv", "/ws", "/health", "/ca.crt", "/uploads/x.jpg", "/"] {
+            let uri: Uri = path.parse().expect("valid uri");
+            assert_eq!(
+                upgrade_target(&uri, &headers, 8443),
+                None,
+                "{path} must be served on the HTTP origin, not redirected"
+            );
+        }
+    }
+
+    #[test]
+    fn the_upgrade_keeps_the_requested_host_and_query() {
+        let uri: Uri = "/m?tab=calendar".parse().expect("valid uri");
+        assert_eq!(
+            upgrade_target(&uri, &headers_with_host("familyhub.local"), 8443).as_deref(),
+            Some("https://familyhub.local:8443/m?tab=calendar")
+        );
+    }
+
+    #[test]
+    fn pki_for_returns_the_same_authority_for_the_same_directory() {
+        let dir =
+            std::env::temp_dir().join(format!("familyhub-router-pki-cache-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let first = pki_for(&dir).expect("opens");
+        let second = pki_for(&dir).expect("opens");
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "/ca.crt and the HTTPS listener must share one CA per data directory"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

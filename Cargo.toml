@@ -12,6 +12,9 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 futures-util = "0.3"
 base64 = "0.22"
+# T1.3: the join-QR SVG is rendered by a client component that compiles for
+# both `web` (wasm32) and `server` (SSR), so `fast_qr` is not feature-gated.
+fast_qr = { version = "=0.13.1", default-features = false, features = ["svg"] }
 
 # Web-only dependencies, gated behind the `web` feature.
 gloo-timers = { version = "0.3", features = ["futures"], optional = true }
@@ -53,9 +56,58 @@ tracing = { version = "0.1", optional = true }
 uuid = { version = "1", features = ["v4"], optional = true }
 image = { version = "0.25", optional = true }
 
+# T1.3 — TLS + PKI + dual listener + mDNS (PLAN v2 D3′, PURPLE_TEAM.md §P5.4).
+# `ring`, never `aws-lc-rs`: aws-lc-rs needs CMake + NASM on Windows. Every
+# crate below therefore turns its default features off, because both
+# `tokio-rustls` and `rcgen` default to aws-lc-rs / a mixed provider set, and
+# rustls panics at runtime when two providers are compiled in without an
+# explicit `CryptoProvider::install_default`.
+rustls = { version = "=0.23.43", default-features = false, features = [
+    "ring",
+    "tls12",
+    "logging",
+    "std",
+], optional = true }
+tokio-rustls = { version = "=0.26.4", default-features = false, features = [
+    "ring",
+    "tls12",
+    "logging",
+], optional = true }
+# `hyper-util`'s auto (h1/h2) server — deliberately NOT `axum-server`
+# (PURPLE_TEAM.md §P5.4: 0.8.0 is ~9 months stale and its dev-deps are still
+# on axum 0.7).
+hyper-util = { version = "=0.1.20", features = [
+    "server",
+    "server-auto",
+    "http1",
+    "http2",
+    "tokio",
+    "service",
+], optional = true }
+hyper = { version = "=1.11.1", features = ["server", "http1", "http2"], optional = true }
+rcgen = { version = "=0.14.10", default-features = false, features = [
+    "ring",
+    "pem",
+    "x509-parser",
+], optional = true }
+x509-parser = { version = "=0.18.1", optional = true }
+time = { version = "0.3", default-features = false, features = [
+    "std",
+], optional = true }
+mdns-sd = { version = "=0.21.0", optional = true }
+# Host IPv4 enumeration for the leaf's SAN list and the mDNS A record.
+# `mdns-sd` already pulls this exact version in, so it adds no new subtree.
+if-addrs = { version = "=0.15.0", optional = true }
+
 [dev-dependencies]
 tokio-tungstenite = "0.28"
 image = "0.25"
+# T1.3 acceptance (g): the QR *SVG* is rasterised (`resvg`, which re-exports
+# the `tiny_skia` pixmap it renders into) and decoded back to its payload by
+# an independent reader (`rqrr`), so the assertion covers the real rendered
+# component output rather than the encoder's own matrix.
+resvg = "0.45"
+rqrr = "0.10"
 
 [features]
 default = []
@@ -79,6 +131,15 @@ server = [
     "dep:tracing",
     "dep:uuid",
     "dep:image",
+    "dep:rustls",
+    "dep:tokio-rustls",
+    "dep:hyper",
+    "dep:hyper-util",
+    "dep:rcgen",
+    "dep:x509-parser",
+    "dep:time",
+    "dep:mdns-sd",
+    "dep:if-addrs",
 ]
 
 [profile.release]
