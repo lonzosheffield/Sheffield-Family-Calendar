@@ -123,11 +123,21 @@ fn create_gradient_image(
     Ok(img)
 }
 
+/// Background colour of `monogram.svg` (Sheffield dark blue). The maskable
+/// variants are pre-filled with it so the 10 % safe-zone padding is solid
+/// background rather than transparent.
+const MONOGRAM_BACKGROUND: (u8, u8, u8) = (0x26, 0x72, 0xB3);
+
+/// Fraction of each edge reserved as safe-zone padding on maskable icons
+/// (W3C maskable icon spec: content must survive a mask that keeps only the
+/// inner 80 %, so inset the artwork by 10 % per side).
+const MASKABLE_PADDING: f32 = 0.10;
+
 fn render_svg_to_png(
     svg_content: &str,
     width: u32,
     height: u32,
-    _is_maskable: bool,
+    is_maskable: bool,
 ) -> Result<ImageBuffer<image::Rgba<u8>, Vec<u8>>> {
     // Parse SVG using usvg
     let fontdb = usvg::fontdb::Database::new();
@@ -137,7 +147,18 @@ fn render_svg_to_png(
         .ok_or_else(|| anyhow::anyhow!("Failed to create pixmap"))?;
 
     let scale = width as f32 / rtree.size().width();
-    let transform = tiny_skia::Transform::from_scale(scale, scale);
+    let transform = if is_maskable {
+        // Solid background everywhere, artwork inset by MASKABLE_PADDING on
+        // every side so the outer 10 % band is pure background.
+        let (r, g, b) = MONOGRAM_BACKGROUND;
+        pixmap.fill(tiny_skia::Color::from_rgba8(r, g, b, 255));
+        let content_scale = scale * (1.0 - 2.0 * MASKABLE_PADDING);
+        let pad_x = width as f32 * MASKABLE_PADDING;
+        let pad_y = height as f32 * MASKABLE_PADDING;
+        tiny_skia::Transform::from_scale(content_scale, content_scale).post_translate(pad_x, pad_y)
+    } else {
+        tiny_skia::Transform::from_scale(scale, scale)
+    };
 
     resvg::render(&rtree, transform, &mut pixmap.as_mut());
 

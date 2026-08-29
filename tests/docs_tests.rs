@@ -239,3 +239,50 @@ fn test_screensaver_assets_exist() {
         jpg_count
     );
 }
+
+/// T0.7 acceptance: the maskable icons must keep >= 10 % safe-zone padding
+/// on every side (W3C maskable spec: only the inner 80 % is guaranteed to
+/// survive the launcher mask). Asserts the outer 10 % band of each maskable
+/// PNG is solid monogram background, and — so the assertion cannot pass
+/// vacuously — that the matching non-maskable icon does paint artwork inside
+/// that same band.
+#[test]
+fn test_maskable_icons_have_ten_percent_safe_zone_padding() {
+    const BACKGROUND: [u8; 4] = [0x26, 0x72, 0xB3, 0xFF];
+
+    let icons_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/icons");
+    let band_pixels = |name: &str| -> (Vec<[u8; 4]>, u32) {
+        let data =
+            fs::read(icons_dir.join(name)).unwrap_or_else(|e| panic!("Failed to read {name}: {e}"));
+        let img = image::load_from_memory(&data)
+            .unwrap_or_else(|e| panic!("Failed to decode {name}: {e}"))
+            .to_rgba8();
+        let (w, h) = img.dimensions();
+        let pad = (w as f32 * 0.10).floor() as u32;
+        let band = img
+            .enumerate_pixels()
+            .filter(|(x, y, _)| *x < pad || *x >= w - pad || *y < pad || *y >= h - pad)
+            .map(|(_, _, p)| p.0)
+            .collect();
+        (band, pad)
+    };
+
+    for size in [192u32, 512] {
+        let (maskable, pad) = band_pixels(&format!("icon-{size}-maskable.png"));
+        assert!(
+            pad >= 19,
+            "safe-zone band for {size}px must be >= 10 %, got {pad}px"
+        );
+        let off = maskable.iter().filter(|p| **p != BACKGROUND).count();
+        assert_eq!(
+            off, 0,
+            "icon-{size}-maskable.png paints {off} non-background pixels inside its outer 10 % band"
+        );
+
+        let (regular, _) = band_pixels(&format!("icon-{size}.png"));
+        assert!(
+            regular.iter().any(|p| *p != BACKGROUND),
+            "icon-{size}.png should paint artwork within the outer 10 % band (otherwise the maskable assertion is vacuous)"
+        );
+    }
+}
