@@ -119,3 +119,32 @@ Redirecting or dropping `/mobile` would have broken that protected test on
 T0.6's own authority, which the autonomy policy (`PURPLE_TEAM.md` §P5.1.4)
 reserves for a Boss decision. If a future task wants `/mobile` gone, it
 should go through that channel rather than reopen this here.
+
+---
+
+## Boss — Wave 0-e close (T0.6, T0.7, T0.8 merged)
+
+- **T0.6:** merged as-is. H-1 and H-2 are closed as recorded above; no new
+  requests.
+- **T0.7 / `Cargo.toml`:** T0.7 does not own `Cargo.toml` (§P4) but its two-line
+  change (`[workspace] members = ["xtask"]`, `image` as a dev-dependency for
+  the decoder assertions) was inseparable from the task and no other wave 0-e
+  task touched the file. Accepted in the T0.7 squash as the serialized Boss
+  micro-change. `cargo fmt`/`clippy` now also cover the `xtask` member.
+- **T0.7 fix-up:** the squash rendered the maskable icons identical to the
+  regular ones and did not assert the ≥ 10 % safe zone the acceptance row
+  requires. Boss added the 10 % inset in `xtask` and
+  `tests/docs_tests.rs::test_maskable_icons_have_ten_percent_safe_zone_padding`
+  (commit `T0.7 (Boss fix-up)`). Regular icons regenerate byte-identically.
+- **T0.8 / `assets/tailwind.css`:** `assets/**` is T0.7-owned, so T0.8's
+  regenerated CSS was dropped from its squash and rebuilt by the Boss on the
+  merged tree instead (`chore(assets): Rebuild tailwind.css …`). Any later
+  task whose `src/` change adds a Tailwind token must rebuild the CSS in the
+  same branch or the CI fail-on-diff step will go red — treat
+  `assets/tailwind.css` as a build artifact that follows `src/`, not as a
+  T0.7-owned asset, from here on.
+- **T0.8 fix-up:** `tailwindcss.exe --version` exits 9 on the pinned
+  standalone binary; the CI install step now probes `--help` for the
+  `tailwindcss v3.4.17` banner instead (commit `T0.8 (Boss fix-up)`).
+- **H-6 (`toml` crate):** still open — no wave 0-e task needed it. Left for
+  T1.3/T1.8 to raise if the hand-rolled subset proves insufficient.
