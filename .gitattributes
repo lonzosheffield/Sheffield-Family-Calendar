@@ -1,0 +1,8 @@
+# `sqlx::migrate!` checksums the *bytes* of every file in `migrations/` and
+# stores that checksum in `_sqlx_migrations`. This repo is developed with
+# `core.autocrlf=true`, so without this rule a fresh checkout would hand the
+# migrator CRLF files whose checksums differ from the LF ones already recorded
+# in the owner's `family.db` — every boot would then fail with a migration
+# version mismatch. Pin them to LF everywhere. (T1.1, sole owner of
+# `migrations/`.)
+migrations/*.sql text eol=lf
