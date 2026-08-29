@@ -30,6 +30,10 @@ pub enum Route {
     /// Companion phone view: just the routine, full width.
     #[route("/mobile")]
     Mobile {},
+    /// Short phone URL used by the split-origin deployment (PLAN v2 D3′).
+    /// Renders exactly the same view as `/mobile`.
+    #[route("/m")]
+    MobileShort {},
 }
 
 #[component]
@@ -59,6 +63,13 @@ pub fn Home() -> Element {
             Dashboard {}
             Screensaver {}
         }
+    }
+}
+
+#[component]
+pub fn MobileShort() -> Element {
+    rsx! {
+        Mobile {}
     }
 }
 

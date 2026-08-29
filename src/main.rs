@@ -18,10 +18,15 @@ fn main() {
             db::pool().await.expect("failed to open family.db");
             calendar::spawn_polling_task();
 
+            // Dioxus 0.7 removed the 0.6 serve-config builder type;
+            // `ServeConfig::new()` picks up the `dx`-generated
+            // `public/index.html` next to the executable, and
+            // `serve_dioxus_application` now hands back a fully-stated
+            // `Router<()>` instead of `Self`.
             let router = axum::Router::new()
                 .route("/ws", get(realtime::ws_handler))
                 .nest_service("/uploads", ServeDir::new(db::UPLOAD_DIR))
-                .serve_dioxus_application(ServeConfigBuilder::default(), App);
+                .serve_dioxus_application(ServeConfig::new(), App);
 
             let address = dioxus_cli_config::fullstack_address_or_localhost();
             let listener = tokio::net::TcpListener::bind(address)

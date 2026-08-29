@@ -1,4 +1,5 @@
 use base64::Engine;
+use dioxus::html::FileData;
 use dioxus::prelude::*;
 
 use crate::client::app::use_app_state;
@@ -226,10 +227,8 @@ fn PhotoTaskDialog(on_close: EventHandler<()>, on_created: EventHandler<()>) -> 
                     accept: "image/*",
                     capture: "environment",
                     onchange: move |event| async move {
-                        let Some(engine) = event.files() else { return };
-                        let Some(name) = engine.files().first().cloned() else { return };
-                        if let Some(bytes) = engine.read_file(&name).await {
-                            photo.set(Some(base64::engine::general_purpose::STANDARD.encode(bytes)));
+                        if let Some(encoded) = encode_first_photo(event.files()).await {
+                            photo.set(Some(encoded));
                         }
                     },
                 }
@@ -262,4 +261,17 @@ fn PhotoTaskDialog(on_close: EventHandler<()>, on_created: EventHandler<()>) -> 
             }
         }
     }
+}
+
+/// Read the first file out of a file-input change event and base64 encode it
+/// for [`create_photo_task`].
+///
+/// Dioxus 0.7 changed `FormData::files()` from `Option<Arc<dyn FileEngine>>`
+/// to a plain `Vec<FileData>`, so this takes the 0.7 shape directly. Keeping
+/// it out of the `rsx!` closure is what makes the new signature unit testable
+/// without a browser.
+pub async fn encode_first_photo(files: Vec<FileData>) -> Option<String> {
+    let file = files.into_iter().next()?;
+    let bytes = file.read_bytes().await.ok()?;
+    Some(base64::engine::general_purpose::STANDARD.encode(bytes))
 }

@@ -3,7 +3,7 @@ use dioxus::prelude::*;
 use crate::shared::types::{CalendarEvent, CustomTaskView, RoutineItemView};
 
 /// Today's date in `YYYY-MM-DD`, as seen by the server.
-#[server]
+#[server(endpoint = "today")]
 pub async fn today() -> Result<String, ServerFnError> {
     #[cfg(feature = "server")]
     {
@@ -16,7 +16,7 @@ pub async fn today() -> Result<String, ServerFnError> {
 }
 
 /// The eight routine templates joined with `user_id`'s progress on `date`.
-#[server]
+#[server(endpoint = "get_daily_routine")]
 pub async fn get_daily_routine(
     user_id: u32,
     date: String,
@@ -36,7 +36,7 @@ pub async fn get_daily_routine(
 }
 
 /// Check or uncheck a routine item for today and notify every connected client.
-#[server]
+#[server(endpoint = "toggle_routine_task")]
 pub async fn toggle_routine_task(
     user_id: u32,
     template_id: u32,
@@ -61,7 +61,7 @@ pub async fn toggle_routine_task(
 }
 
 /// Create a custom task, optionally storing a photo captured on a phone.
-#[server]
+#[server(endpoint = "create_photo_task")]
 pub async fn create_photo_task(
     user_id: u32,
     title: String,
@@ -91,7 +91,7 @@ pub async fn create_photo_task(
 }
 
 /// Custom tasks belonging to `user_id`, newest first.
-#[server]
+#[server(endpoint = "get_custom_tasks")]
 pub async fn get_custom_tasks(user_id: u32) -> Result<Vec<CustomTaskView>, ServerFnError> {
     #[cfg(feature = "server")]
     {
@@ -107,7 +107,7 @@ pub async fn get_custom_tasks(user_id: u32) -> Result<Vec<CustomTaskView>, Serve
     }
 }
 
-#[server]
+#[server(endpoint = "toggle_custom_task")]
 pub async fn toggle_custom_task(task_id: u32, completed: bool) -> Result<(), ServerFnError> {
     #[cfg(feature = "server")]
     {
@@ -124,7 +124,7 @@ pub async fn toggle_custom_task(task_id: u32, completed: bool) -> Result<(), Ser
 }
 
 /// Today's cached Google Calendar events.
-#[server]
+#[server(endpoint = "get_today_events")]
 pub async fn get_today_events() -> Result<Vec<CalendarEvent>, ServerFnError> {
     #[cfg(feature = "server")]
     {
@@ -137,7 +137,7 @@ pub async fn get_today_events() -> Result<Vec<CalendarEvent>, ServerFnError> {
 }
 
 /// Web paths of the ambient screensaver photos, sorted by file name.
-#[server]
+#[server(endpoint = "list_screensaver_images")]
 pub async fn list_screensaver_images() -> Result<Vec<String>, ServerFnError> {
     #[cfg(feature = "server")]
     {
@@ -216,7 +216,7 @@ pub mod realtime {
 
         let mut outgoing = tokio::spawn(async move {
             while let Ok(payload) = receiver.recv().await {
-                if sink.send(Message::Text(payload)).await.is_err() {
+                if sink.send(Message::Text(payload.into())).await.is_err() {
                     break;
                 }
             }
@@ -227,8 +227,8 @@ pub mod realtime {
         let mut incoming = tokio::spawn(async move {
             while let Some(Ok(message)) = stream.next().await {
                 if let Message::Text(payload) = message {
-                    if serde_json::from_str::<WsMessage>(&payload).is_ok() {
-                        let _ = sender().send(payload);
+                    if serde_json::from_str::<WsMessage>(payload.as_str()).is_ok() {
+                        let _ = sender().send(payload.to_string());
                     }
                 }
             }
