@@ -89,3 +89,33 @@ pulling in `toml_edit`/`toml_parser`, both already resolved transitively in
 swap `TomlValues` for real deserialization at that point — `FamilyHubConfig`'s
 public API (`data_dir`, `http_addr`, `tls_addr`, the `*_dir()` helpers) does
 not need to change to make that swap.
+
+---
+
+## From T0.6 (`build_router()` / `main.rs`) — resolving H-1 and H-2
+
+### H-1 — resolved
+
+`src/server/router.rs::run` now calls a private `ensure_public_dir_exists()`
+before `build_router` (and therefore `ServeConfig::new()`/
+`serve_dioxus_application`) ever runs: it resolves the same path
+`dioxus_server::server::public_path()` would (`DIOXUS_PUBLIC_PATH` env var,
+else `<exe dir>/public`) and `create_dir_all`s it, logging a warning instead
+of panicking if that somehow fails. Covered by
+`router::tests::ensure_public_dir_exists_creates_the_directory`. A bare
+`cargo run --features server` (and, later, T3.1's service binary) can no
+longer die on a missing public directory.
+
+### H-2 — resolved (decision: keep `/mobile` as-is, do not redirect or drop)
+
+`build_router` does not add an axum-level route for `/mobile`; it keeps
+falling through to Dioxus's `Route::Mobile` exactly as before T0.6, still
+answering 200 with the routine-only view. Reasoning: H-2 itself flagged
+`tests/http_tests.rs::http_mobile_serves_routine_only_view` as a **protected
+T0.3 acceptance assertion** that must not be weakened without a Boss commit
+to `PLAN.md`, and nothing in PLAN v2 §3/D3′ actually calls for dropping or
+redirecting `/mobile` — only for `/tv` and `/m` to exist, which they now do.
+Redirecting or dropping `/mobile` would have broken that protected test on
+T0.6's own authority, which the autonomy policy (`PURPLE_TEAM.md` §P5.1.4)
+reserves for a Boss decision. If a future task wants `/mobile` gone, it
+should go through that channel rather than reopen this here.

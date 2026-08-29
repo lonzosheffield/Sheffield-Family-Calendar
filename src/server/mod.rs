@@ -6,3 +6,5 @@ pub mod calendar;
 pub mod config;
 #[cfg(feature = "server")]
 pub mod db;
+#[cfg(feature = "server")]
+pub mod router;

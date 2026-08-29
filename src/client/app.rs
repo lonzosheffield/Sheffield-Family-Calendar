@@ -24,9 +24,16 @@ pub fn use_app_state() -> AppState {
 
 #[derive(Routable, Clone, PartialEq)]
 pub enum Route {
-    /// Fire OS kiosk dashboard.
+    /// Fire OS kiosk dashboard. `GET /` itself is a 308 redirect to `/tv`
+    /// registered directly on the axum router (`server::router::build_router`,
+    /// PLAN v2 T0.6 / D3′) before it ever reaches this SPA router; `Home`
+    /// stays reachable for in-app client-side navigation.
     #[route("/")]
     Home {},
+    /// The TV kiosk's URL of record (PLAN v2 D3′): `http://<ip>:8080/tv`.
+    /// Renders exactly the same view as `Home`.
+    #[route("/tv")]
+    Tv {},
     /// Companion phone view: just the routine, full width.
     #[route("/mobile")]
     Mobile {},
@@ -58,6 +65,22 @@ pub fn App() -> Element {
 
 #[component]
 pub fn Home() -> Element {
+    rsx! {
+        KioskDashboard {}
+    }
+}
+
+/// The TV kiosk's URL of record (PLAN v2 D3′ / T0.6): `/tv`. Renders exactly
+/// the same view as [`Home`].
+#[component]
+pub fn Tv() -> Element {
+    rsx! {
+        KioskDashboard {}
+    }
+}
+
+#[component]
+fn KioskDashboard() -> Element {
     rsx! {
         div { class: "relative h-full w-full bg-sheffield-paper font-display text-slate-800",
             Dashboard {}

@@ -101,19 +101,32 @@ fn no_cwd_relative_data_path_literals_remain_in_src() {
 
 /// `fullstack_address_or_localhost()` (which reads the bare `IP`/`PORT` env
 /// vars) must be gone from the release path.
+///
+/// T0.6 moved the actual bind call out of `src/main.rs` and into
+/// `src/server/router.rs::run` (`main.rs` is now < 25 lines and defines no
+/// routes/binds itself — PLAN v2 T0.6 / `docs/reviews/PURPLE_TEAM.md` §P4),
+/// so this test now reads `router.rs` for the `config.http_addr` bind and
+/// asserts the removed helper is gone from **both** files.
 #[test]
 fn fullstack_address_or_localhost_is_removed_from_the_release_path() {
     let main_rs =
         std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/main.rs"))
             .expect("src/main.rs is readable");
+    let router_rs =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/server/router.rs"))
+            .expect("src/server/router.rs is readable");
 
     assert!(
         !main_rs.contains("fullstack_address_or_localhost"),
         "src/main.rs must not call fullstack_address_or_localhost() any more"
     );
     assert!(
-        main_rs.contains("config.http_addr"),
-        "src/main.rs should bind FamilyHubConfig::http_addr instead"
+        !router_rs.contains("fullstack_address_or_localhost"),
+        "src/server/router.rs must not call fullstack_address_or_localhost() any more"
+    );
+    assert!(
+        router_rs.contains("config.http_addr"),
+        "src/server/router.rs should bind FamilyHubConfig::http_addr instead"
     );
 }
 

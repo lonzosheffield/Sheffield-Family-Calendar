@@ -6,18 +6,19 @@
 //! `PATH` associated constant) was rewritten. The tests named `migration_*` are the
 //! new Gate-2 assertions from `docs/reviews/PURPLE_TEAM.md` §P2b.
 //!
-//! Boots the real production router (the exact routes `main.rs` registers:
-//! `/ws`, `/uploads`, and the Dioxus fullstack SSR + server-fn fallback) on an
-//! ephemeral port for every test, so this is a true in-process integration
-//! harness rather than a set of unit tests against handler functions.
+//! Boots the real production router (`server::router::build_router`, T0.6 —
+//! `/ws`, `/uploads`, `/assets/screensaver`, the root stub routes, and the
+//! Dioxus fullstack SSR + server-fn fallback) on an ephemeral port for every
+//! test, so this is a true in-process integration harness rather than a set
+//! of unit tests against handler functions. `/`'s own routing behaviour
+//! (redirect to `/tv`) is asserted in `tests/router_tests.rs`, T0.6's
+//! dedicated acceptance suite.
 
 #![cfg(feature = "server")]
 
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use dioxus::prelude::*;
-use family_calendar::client::app::App;
 use family_calendar::server::api::realtime;
 use family_calendar::server::db;
 use family_calendar::shared::types::{StrokePoint, StrokeSegment, WsMessage};
@@ -37,12 +38,14 @@ const TOGGLE_ROUTINE_ENDPOINT: &str = "/api/toggle_routine_task";
 /// `serve_static_assets` an existing (empty) public directory — 0.7 panics
 /// rather than skipping when `<exe dir>/public` is missing, which it always
 /// is under `cargo test`. Idempotent, and shared by every test in this
-/// binary, since `db::pool()` is a process-wide `OnceCell`.
-fn init_test_env() {
+/// binary, since `db::pool()` is a process-wide `OnceCell`. Returns the
+/// scratch data directory so callers can hand it to a [`FamilyHubConfig`]
+/// (T0.6: `build_router` needs one, e.g. for `upload_dir()`/
+/// `screensaver_dir()`).
+fn init_test_env() -> std::path::PathBuf {
     static ONCE: std::sync::Once = std::sync::Once::new();
+    let base = std::env::temp_dir().join(format!("familyhub-http-tests-{}", std::process::id()));
     ONCE.call_once(|| {
-        let base =
-            std::env::temp_dir().join(format!("familyhub-http-tests-{}", std::process::id()));
         std::fs::create_dir_all(&base).expect("test scratch directory is creatable");
 
         let db_path = base.join("family.db");
@@ -56,31 +59,31 @@ fn init_test_env() {
         std::fs::create_dir_all(&public).expect("test public directory is creatable");
         std::env::set_var("DIOXUS_PUBLIC_PATH", &public);
     });
+    base
 }
 
-/// Boot the same router `main.rs` serves, on an OS-assigned free port, and
-/// return its address. The listener (and the task serving it) is dropped
-/// when the per-test tokio runtime shuts down at the end of the test, so nothing
-/// leaks across runs.
+/// Boot the exact production router (`server::router::build_router`, T0.6)
+/// on an OS-assigned free port, and return its address. The listener (and
+/// the task serving it) is dropped when the per-test tokio runtime shuts
+/// down at the end of the test, so nothing leaks across runs.
 ///
 /// 0.7 note: `ServeConfigBuilder` is gone. `ServeConfig::new()` looks for a
 /// `dx`-generated `public/index.html` next to the test executable, finds none,
 /// and falls back to the built-in SSR-only shell — which is exactly what these
 /// server-side assertions need.
 async fn spawn_test_server() -> SocketAddr {
-    init_test_env();
+    let base = init_test_env();
     // Warm the pool up front so a background `use_resource` fetch triggered
-    // during SSR has somewhere to go, mirroring what `main.rs` does before it
-    // starts serving.
+    // during SSR has somewhere to go, mirroring what `main.rs`/`router::run`
+    // does before it starts serving.
     db::pool().await.expect("test sqlite pool opens");
 
-    let router = axum::Router::new()
-        .route("/ws", axum::routing::get(realtime::ws_handler))
-        .nest_service(
-            "/uploads",
-            tower_http::services::ServeDir::new(db::upload_dir()),
-        )
-        .serve_dioxus_application(ServeConfig::new(), App);
+    let config = family_calendar::server::config::FamilyHubConfig {
+        data_dir: base,
+        http_addr: "127.0.0.1:0".parse().expect("valid socket address"),
+        tls_addr: "127.0.0.1:0".parse().expect("valid socket address"),
+    };
+    let router = family_calendar::server::router::build_router(&config);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -125,16 +128,21 @@ async fn recv_matching(socket: &mut WsStream, marker: &str) -> String {
         .unwrap_or_else(|_| panic!("timed out waiting for a message containing {marker:?}"))
 }
 
+/// PLAN v2 D3′ / T0.6: the TV kiosk's URL of record moved from `/` to
+/// `/tv`; `/` is now a redirect (asserted below and, in full, by
+/// `tests/router_tests.rs::root_redirects_permanently_to_tv`). This test
+/// keeps the T0.3/T0.4 assertion that the kiosk dashboard actually renders,
+/// just at the route it lives at today.
 #[tokio::test]
-async fn http_root_serves_dashboard_with_panel_markers() {
+async fn http_tv_serves_dashboard_with_panel_markers() {
     let addr = spawn_test_server().await;
 
     let response = http_client()
-        .get(format!("http://{addr}/"))
+        .get(format!("http://{addr}/tv"))
         .header("accept", "text/html")
         .send()
         .await
-        .expect("GET / should respond");
+        .expect("GET /tv should respond");
 
     assert_eq!(response.status().as_u16(), 200);
     let content_type = response
@@ -156,6 +164,32 @@ async fn http_root_serves_dashboard_with_panel_markers() {
     assert!(
         body.contains("Whiteboard"),
         "the kiosk dashboard should render the whiteboard panel title"
+    );
+}
+
+#[tokio::test]
+async fn http_root_redirects_to_tv() {
+    let addr = spawn_test_server().await;
+
+    let response = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(15))
+        .build()
+        .expect("reqwest client builds")
+        .get(format!("http://{addr}/"))
+        .send()
+        .await
+        .expect("GET / should respond");
+
+    assert_eq!(response.status().as_u16(), 308, "expected a 308 redirect");
+    let location = response
+        .headers()
+        .get("location")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    assert_eq!(
+        location, "/tv",
+        "GET / must redirect to /tv, got {location:?}"
     );
 }
 
