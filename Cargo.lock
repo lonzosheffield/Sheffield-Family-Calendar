@@ -1608,7 +1608,6 @@ dependencies = [
  "base64",
  "chrono",
  "dioxus",
- "dioxus-cli-config",
  "futures-util",
  "gloo-net",
  "gloo-timers",

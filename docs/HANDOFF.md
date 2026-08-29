@@ -69,6 +69,10 @@ Boss may want to drop the `dioxus-cli-config = { ... }` line and its
 `dep:dioxus-cli-config` feature entry in a between-wave `Cargo.toml`
 micro-commit (T0.5 does not own `Cargo.toml` — PURPLE_TEAM.md §P4).
 
+**Applied by Boss (Wave 0-d close):** the `dioxus-cli-config` dependency and its
+`dep:dioxus-cli-config` feature entry were removed from `Cargo.toml`; the crate
+remains in `Cargo.lock` only as a transitive dependency of `dioxus-server`.
+
 ### H-6. `src/server/config.rs` ships a hand-rolled TOML subset, not the `toml` crate
 
 `familyhub.toml` only needed flat `key = "value"` pairs for T0.5's three
