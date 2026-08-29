@@ -1,0 +1,10 @@
+/target
+/dist
+node_modules
+family.db
+family.db-shm
+family.db-wal
+*.db-journal
+.DS_Store
+service-account.json
+.env
