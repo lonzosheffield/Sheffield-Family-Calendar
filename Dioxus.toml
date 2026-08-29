@@ -1,0 +1,11 @@
+[application]
+
+[web.app]
+title = "Sheffield Family Hub"
+
+[web.watcher]
+watch_path = ["src", "assets", "input.css"]
+
+[web.resource]
+style = []
+script = []

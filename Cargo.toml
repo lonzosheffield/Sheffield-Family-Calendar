@@ -1,0 +1,75 @@
+[package]
+name = "family-calendar"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+members = []
+
+[dependencies]
+dioxus = { version = "0.6.3", features = ["router", "fullstack"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+futures-util = "0.3"
+base64 = "0.22"
+
+# Web-only dependencies, gated behind the `web` feature.
+gloo-timers = { version = "0.3", features = ["futures"], optional = true }
+gloo-net = { version = "0.6", features = ["websocket"], default-features = false, optional = true }
+wasm-bindgen = { version = "0.2", optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
+web-sys = { version = "0.3", features = [
+    "Window",
+    "Document",
+    "Element",
+    "HtmlCanvasElement",
+    "CanvasRenderingContext2d",
+    "DomRect",
+    "Location",
+    "EventTarget",
+], optional = true }
+
+# Server-only dependencies, gated behind the `server` feature.
+tokio = { version = "1.42", features = ["full"], optional = true }
+sqlx = { version = "0.8", features = [
+    "sqlite",
+    "runtime-tokio",
+    "tls-native-tls",
+    "chrono",
+], optional = true }
+axum = { version = "0.7", features = ["ws"], optional = true }
+tower-http = { version = "0.6", features = ["fs", "trace"], optional = true }
+dioxus-cli-config = { version = "0.6.3", optional = true }
+chrono = { version = "0.4", optional = true }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false, optional = true }
+jsonwebtoken = { version = "9", optional = true }
+tracing = { version = "0.1", optional = true }
+
+[features]
+default = []
+web = [
+    "dioxus/web",
+    "dep:gloo-net",
+    "dep:gloo-timers",
+    "dep:wasm-bindgen",
+    "dep:wasm-bindgen-futures",
+    "dep:web-sys",
+]
+server = [
+    "dioxus/server",
+    "dep:tokio",
+    "dep:sqlx",
+    "dep:axum",
+    "dep:tower-http",
+    "dep:dioxus-cli-config",
+    "dep:chrono",
+    "dep:reqwest",
+    "dep:jsonwebtoken",
+    "dep:tracing",
+]
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
