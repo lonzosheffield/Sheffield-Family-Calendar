@@ -75,7 +75,7 @@ pub async fn create_photo_task(
             user_id,
             &title,
             photo_base64.as_deref(),
-            crate::server::db::UPLOAD_DIR,
+            crate::server::db::upload_dir(),
         )
         .await
         .map_err(to_server_error)?;
@@ -141,9 +141,15 @@ pub async fn get_today_events() -> Result<Vec<CalendarEvent>, ServerFnError> {
 pub async fn list_screensaver_images() -> Result<Vec<String>, ServerFnError> {
     #[cfg(feature = "server")]
     {
-        const DIR: &str = "assets/screensaver";
+        // The on-disk directory is resolved from `FamilyHubConfig`
+        // (T0.5: absolute, under `FAMILY_HUB_DATA_DIR`), independent of the
+        // URL route the screensaver is served under (`/assets/screensaver`,
+        // wired up by T0.6's `ServeDir`).
+        const URL_PREFIX: &str = "/assets/screensaver";
+
+        let dir = crate::server::config::FamilyHubConfig::load().screensaver_dir();
         let mut images = Vec::new();
-        let Ok(mut entries) = tokio::fs::read_dir(DIR).await else {
+        let Ok(mut entries) = tokio::fs::read_dir(&dir).await else {
             return Ok(images);
         };
 
@@ -158,7 +164,7 @@ pub async fn list_screensaver_images() -> Result<Vec<String>, ServerFnError> {
                 Some("jpg" | "jpeg" | "png" | "webp" | "avif")
             );
             if is_image {
-                images.push(format!("/{DIR}/{name}"));
+                images.push(format!("{URL_PREFIX}/{name}"));
             }
         }
 

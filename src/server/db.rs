@@ -6,25 +6,43 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 use tokio::sync::OnceCell;
 
+use crate::server::config::FamilyHubConfig;
 use crate::shared::types::{CustomTaskView, RoutineItemView};
-
-pub const DEFAULT_DATABASE_URL: &str = "sqlite://family.db";
-
-/// Directory that photo tasks are written to; served as a static asset.
-pub const UPLOAD_DIR: &str = "assets/uploads";
 
 static POOL: OnceCell<SqlitePool> = OnceCell::const_new();
 
+/// Absolute directory photo tasks are written to (T0.5: resolved from
+/// `FamilyHubConfig`, never a path relative to the process's CWD).
+pub fn upload_dir() -> PathBuf {
+    FamilyHubConfig::load().upload_dir()
+}
+
 /// The process wide connection pool, created (and migrated) on first use.
+///
+/// `DATABASE_URL`, when set, wins outright (integration tests use this to
+/// point every test process at its own throwaway sqlite file). Otherwise the
+/// URL is derived from [`FamilyHubConfig`], which resolves an **absolute**
+/// path under `FAMILY_HUB_DATA_DIR` (default `%ProgramData%\FamilyHub`) —
+/// never a bare `family.db` relative to the current working directory
+/// (G23/R-14: under a Windows service the CWD is `C:\Windows\System32`).
 pub async fn pool() -> Result<&'static SqlitePool, sqlx::Error> {
     POOL.get_or_try_init(|| async {
-        let url =
-            std::env::var("DATABASE_URL").unwrap_or_else(|_| DEFAULT_DATABASE_URL.to_string());
+        let url = resolve_database_url().map_err(sqlx::Error::Io)?;
         let pool = connect(&url).await?;
         migrate(&pool).await?;
         Ok(pool)
     })
     .await
+}
+
+fn resolve_database_url() -> std::io::Result<String> {
+    if let Ok(url) = std::env::var("DATABASE_URL") {
+        return Ok(url);
+    }
+
+    let config = FamilyHubConfig::load();
+    config.ensure_dirs_and_log()?;
+    Ok(config.database_url())
 }
 
 /// Open a pool against `url`, creating the SQLite file when missing.

@@ -78,7 +78,7 @@ async fn spawn_test_server() -> SocketAddr {
         .route("/ws", axum::routing::get(realtime::ws_handler))
         .nest_service(
             "/uploads",
-            tower_http::services::ServeDir::new(db::UPLOAD_DIR),
+            tower_http::services::ServeDir::new(db::upload_dir()),
         )
         .serve_dioxus_application(ServeConfig::new(), App);
 

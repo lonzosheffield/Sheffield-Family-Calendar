@@ -1,0 +1,398 @@
+//! `FamilyHubConfig`: the single source of truth for every absolute path and
+//! bind address the server uses (PLAN v2 D9, task T0.5).
+//!
+//! Resolution order, env always wins over the file:
+//!   1. `FAMILY_HUB_DATA_DIR` / `FAMILY_HUB_ADDR` / `FAMILY_HUB_TLS_ADDR`
+//!      environment variables.
+//!   2. The matching key in `familyhub.toml`, looked up next to the running
+//!      executable and then in the current directory.
+//!   3. Hard-coded defaults: `%ProgramData%\FamilyHub`, `0.0.0.0:8080`,
+//!      `0.0.0.0:8443`.
+//!
+//! Every other module asks this type for a path (`db_path`, `upload_dir`,
+//! `screensaver_dir`, `pki_dir`, `log_dir`) instead of hard-coding one, so
+//! nothing is ever resolved relative to the process's current working
+//! directory (G23 / R-14) — important once T3.1 runs this as a Windows
+//! service, whose CWD is `C:\Windows\System32`.
+//!
+//! `familyhub.toml` only needs a handful of flat keys today. Rather than pull
+//! in a full TOML dependency ahead of when one is actually needed (Cargo.toml
+//! is owned by T0.2/T0.4; see `docs/reviews/PURPLE_TEAM.md` §P4), this module
+//! ships a minimal parser for `key = "value"` / `key = value` lines with `#`
+//! comments and `[section]` headers (sections are namespaced as
+//! `section.key` for T1.3's future `[certs]` / T1.8's `[acme]` blocks, but
+//! T0.5 itself only reads top-level keys). If a later task needs real nested
+//! tables, request the `toml` crate via `docs/HANDOFF.md`.
+
+use std::collections::BTreeMap;
+use std::net::SocketAddr;
+use std::path::PathBuf;
+
+/// Default HTTP bind address for the TV-facing kiosk origin (PLAN v2 D3′).
+pub const DEFAULT_HTTP_ADDR: &str = "0.0.0.0:8080";
+/// Default HTTPS bind address for the phone-facing PWA origin (PLAN v2 D3′).
+pub const DEFAULT_TLS_ADDR: &str = "0.0.0.0:8443";
+
+const ENV_DATA_DIR: &str = "FAMILY_HUB_DATA_DIR";
+const ENV_HTTP_ADDR: &str = "FAMILY_HUB_ADDR";
+const ENV_TLS_ADDR: &str = "FAMILY_HUB_TLS_ADDR";
+
+const CONFIG_FILE_NAME: &str = "familyhub.toml";
+
+/// Fully resolved server configuration. Every path handed out by this type
+/// is absolute, rooted at [`FamilyHubConfig::data_dir`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FamilyHubConfig {
+    pub data_dir: PathBuf,
+    pub http_addr: SocketAddr,
+    pub tls_addr: SocketAddr,
+}
+
+impl FamilyHubConfig {
+    /// Resolve configuration from `familyhub.toml` (if one is found) and the
+    /// process environment, environment variables taking precedence.
+    pub fn load() -> Self {
+        let file = TomlValues::load_nearby(CONFIG_FILE_NAME);
+        Self::from_sources(&file, &ProcessEnv)
+    }
+
+    fn from_sources(file: &TomlValues, env: &impl EnvLookup) -> Self {
+        let data_dir = env
+            .var(ENV_DATA_DIR)
+            .or_else(|| file.get("data_dir"))
+            .map(PathBuf::from)
+            .unwrap_or_else(default_data_dir);
+
+        let http_addr = resolve_addr(env, file, ENV_HTTP_ADDR, "http_addr", DEFAULT_HTTP_ADDR);
+        let tls_addr = resolve_addr(env, file, ENV_TLS_ADDR, "tls_addr", DEFAULT_TLS_ADDR);
+
+        Self {
+            data_dir,
+            http_addr,
+            tls_addr,
+        }
+    }
+
+    /// Absolute path to the SQLite database file.
+    pub fn db_path(&self) -> PathBuf {
+        self.data_dir.join("family.db")
+    }
+
+    /// `sqlx` connection URL for [`Self::db_path`].
+    pub fn database_url(&self) -> String {
+        // sqlx's sqlite URL parser wants forward slashes even on Windows.
+        let path = self.db_path().display().to_string().replace('\\', "/");
+        format!("sqlite://{path}")
+    }
+
+    /// Absolute directory photo-task uploads are written to.
+    pub fn upload_dir(&self) -> PathBuf {
+        self.data_dir.join("uploads")
+    }
+
+    /// Absolute directory the ambient screensaver reads images from.
+    pub fn screensaver_dir(&self) -> PathBuf {
+        self.data_dir.join("screensaver")
+    }
+
+    /// Absolute directory the local CA and leaf certificate live in (T1.3).
+    pub fn pki_dir(&self) -> PathBuf {
+        self.data_dir.join("pki")
+    }
+
+    /// Absolute directory rotated log files are written to (T3.1).
+    pub fn log_dir(&self) -> PathBuf {
+        self.data_dir.join("logs")
+    }
+
+    /// Create every directory this config resolves to (idempotent) and log
+    /// each absolute path once, exactly as D9 requires ("all paths ...
+    /// logged at startup").
+    pub fn ensure_dirs_and_log(&self) -> std::io::Result<()> {
+        for dir in [
+            &self.data_dir,
+            &self.upload_dir(),
+            &self.screensaver_dir(),
+            &self.pki_dir(),
+            &self.log_dir(),
+        ] {
+            std::fs::create_dir_all(dir)?;
+        }
+
+        tracing::info!(data_dir = %self.data_dir.display(), "resolved data directory");
+        tracing::info!(db_path = %self.db_path().display(), "resolved database path");
+        tracing::info!(upload_dir = %self.upload_dir().display(), "resolved upload directory");
+        tracing::info!(screensaver_dir = %self.screensaver_dir().display(), "resolved screensaver directory");
+        tracing::info!(pki_dir = %self.pki_dir().display(), "resolved PKI directory");
+        tracing::info!(log_dir = %self.log_dir().display(), "resolved log directory");
+        tracing::info!(http_addr = %self.http_addr, "resolved HTTP bind address");
+        tracing::info!(tls_addr = %self.tls_addr, "resolved HTTPS bind address");
+
+        Ok(())
+    }
+}
+
+fn resolve_addr(
+    env: &impl EnvLookup,
+    file: &TomlValues,
+    env_key: &str,
+    file_key: &str,
+    default: &str,
+) -> SocketAddr {
+    let raw = env
+        .var(env_key)
+        .or_else(|| file.get(file_key))
+        .unwrap_or_else(|| default.to_string());
+
+    raw.parse().unwrap_or_else(|err| {
+        panic!("{env_key} / familyhub.toml [{file_key}] is not a valid host:port address ({raw:?}): {err}")
+    })
+}
+
+/// `%ProgramData%\FamilyHub` on Windows (falling back to `C:\ProgramData` if
+/// the environment variable itself is somehow unset — Windows always sets
+/// it, but a test harness or a stripped-down service account might not),
+/// `/var/lib/familyhub` everywhere else so the crate still builds and has a
+/// sane default off Windows (e.g. for `cargo check` in CI containers).
+fn default_data_dir() -> PathBuf {
+    #[cfg(windows)]
+    {
+        let program_data =
+            std::env::var("ProgramData").unwrap_or_else(|_| r"C:\ProgramData".to_string());
+        PathBuf::from(program_data).join("FamilyHub")
+    }
+    #[cfg(not(windows))]
+    {
+        PathBuf::from("/var/lib/familyhub")
+    }
+}
+
+/// Indirection over `std::env::var` so the precedence logic above can be unit
+/// tested without mutating real process-wide environment variables.
+trait EnvLookup {
+    fn var(&self, key: &str) -> Option<String>;
+}
+
+struct ProcessEnv;
+
+impl EnvLookup for ProcessEnv {
+    fn var(&self, key: &str) -> Option<String> {
+        std::env::var(key).ok()
+    }
+}
+
+/// A minimal flat/sectioned `key = value` store parsed out of
+/// `familyhub.toml`. See the module doc comment for the supported subset.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct TomlValues(BTreeMap<String, String>);
+
+impl TomlValues {
+    fn get(&self, key: &str) -> Option<String> {
+        self.0.get(key).cloned()
+    }
+
+    /// Look for `file_name` next to the running executable, then in the
+    /// current directory. Missing or unreadable is not an error: the file is
+    /// entirely optional and every key falls back to env/defaults.
+    fn load_nearby(file_name: &str) -> Self {
+        let mut candidates = Vec::new();
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                candidates.push(dir.join(file_name));
+            }
+        }
+        candidates.push(PathBuf::from(file_name));
+
+        for candidate in candidates {
+            if let Ok(contents) = std::fs::read_to_string(&candidate) {
+                return Self::parse(&contents);
+            }
+        }
+
+        Self::default()
+    }
+
+    fn parse(source: &str) -> Self {
+        let mut values = BTreeMap::new();
+        let mut section = String::new();
+
+        for raw_line in source.lines() {
+            let line = raw_line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+
+            if let Some(name) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+                section = name.trim().to_string();
+                continue;
+            }
+
+            let Some((key, value)) = line.split_once('=') else {
+                continue;
+            };
+            let key = key.trim();
+            let value = value.trim().trim_matches('"').trim_matches('\'');
+
+            let qualified = if section.is_empty() {
+                key.to_string()
+            } else {
+                format!("{section}.{key}")
+            };
+            values.insert(qualified, value.to_string());
+        }
+
+        Self(values)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    struct FakeEnv(BTreeMap<&'static str, &'static str>);
+
+    impl EnvLookup for FakeEnv {
+        fn var(&self, key: &str) -> Option<String> {
+            self.0.get(key).map(|value| value.to_string())
+        }
+    }
+
+    fn empty_env() -> FakeEnv {
+        FakeEnv(BTreeMap::new())
+    }
+
+    #[test]
+    fn default_http_addr_is_zero_zero_zero_zero_eight_zero_eight_zero() {
+        let config = FamilyHubConfig::from_sources(&TomlValues::default(), &empty_env());
+        assert_eq!(config.http_addr, "0.0.0.0:8080".parse().unwrap());
+        assert_eq!(config.tls_addr, "0.0.0.0:8443".parse().unwrap());
+    }
+
+    #[test]
+    fn env_data_dir_overrides_file_and_default() {
+        let file = TomlValues::parse("data_dir = \"C:/from-file\"\n");
+        let env = FakeEnv(BTreeMap::from([(ENV_DATA_DIR, "C:/from-env")]));
+
+        let config = FamilyHubConfig::from_sources(&file, &env);
+        assert_eq!(config.data_dir, PathBuf::from("C:/from-env"));
+    }
+
+    #[test]
+    fn file_data_dir_is_used_when_env_is_unset() {
+        let file = TomlValues::parse("data_dir = \"C:/from-file\"\n");
+        let config = FamilyHubConfig::from_sources(&file, &empty_env());
+        assert_eq!(config.data_dir, PathBuf::from("C:/from-file"));
+    }
+
+    #[test]
+    fn env_addr_overrides_default() {
+        let env = FakeEnv(BTreeMap::from([
+            (ENV_HTTP_ADDR, "127.0.0.1:9000"),
+            (ENV_TLS_ADDR, "127.0.0.1:9443"),
+        ]));
+        let config = FamilyHubConfig::from_sources(&TomlValues::default(), &env);
+        assert_eq!(config.http_addr, "127.0.0.1:9000".parse().unwrap());
+        assert_eq!(config.tls_addr, "127.0.0.1:9443".parse().unwrap());
+    }
+
+    #[test]
+    fn every_path_is_absolute_under_data_dir() {
+        let data_dir = PathBuf::from("C:/temp/familyhub-unit-test");
+        let config = FamilyHubConfig {
+            data_dir: data_dir.clone(),
+            http_addr: DEFAULT_HTTP_ADDR.parse().unwrap(),
+            tls_addr: DEFAULT_TLS_ADDR.parse().unwrap(),
+        };
+
+        assert_eq!(config.db_path(), data_dir.join("family.db"));
+        assert_eq!(config.upload_dir(), data_dir.join("uploads"));
+        assert_eq!(config.screensaver_dir(), data_dir.join("screensaver"));
+        assert_eq!(config.pki_dir(), data_dir.join("pki"));
+        assert_eq!(config.log_dir(), data_dir.join("logs"));
+        assert!(config.database_url().starts_with("sqlite://"));
+        assert!(
+            config.database_url().contains("family.db"),
+            "database_url should embed the resolved absolute db path: {}",
+            config.database_url()
+        );
+    }
+
+    #[test]
+    fn toml_parser_reads_flat_and_sectioned_keys() {
+        let file = TomlValues::parse(
+            r#"
+            # a comment
+            data_dir = "C:/ProgramData/FamilyHub"
+            http_addr = "0.0.0.0:8080"
+
+            [certs]
+            mode = "self_signed"
+            "#,
+        );
+
+        assert_eq!(
+            file.get("data_dir"),
+            Some("C:/ProgramData/FamilyHub".to_string())
+        );
+        assert_eq!(file.get("http_addr"), Some("0.0.0.0:8080".to_string()));
+        assert_eq!(file.get("certs.mode"), Some("self_signed".to_string()));
+        assert_eq!(file.get("missing"), None);
+    }
+
+    /// A hand-rolled `tracing::Subscriber` that only counts emitted events,
+    /// avoiding a dependency on `tracing-subscriber` (not in `Cargo.toml`,
+    /// which T0.5 does not own) just to prove startup logging really fires.
+    struct CountingSubscriber(Arc<AtomicUsize>);
+
+    impl tracing::Subscriber for CountingSubscriber {
+        fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+        fn event(&self, _event: &tracing::Event<'_>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+        fn enter(&self, _span: &tracing::span::Id) {}
+        fn exit(&self, _span: &tracing::span::Id) {}
+    }
+
+    #[test]
+    fn ensure_dirs_and_log_creates_every_directory_and_logs_each_path() {
+        let data_dir =
+            std::env::temp_dir().join(format!("familyhub-config-log-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&data_dir);
+
+        let config = FamilyHubConfig {
+            data_dir: data_dir.clone(),
+            http_addr: DEFAULT_HTTP_ADDR.parse().unwrap(),
+            tls_addr: DEFAULT_TLS_ADDR.parse().unwrap(),
+        };
+
+        let counter = Arc::new(AtomicUsize::new(0));
+        let subscriber = CountingSubscriber(counter.clone());
+        tracing::subscriber::with_default(subscriber, || {
+            config
+                .ensure_dirs_and_log()
+                .expect("directories under a fresh temp dir are creatable");
+        });
+
+        assert!(data_dir.is_dir());
+        assert!(config.upload_dir().is_dir());
+        assert!(config.screensaver_dir().is_dir());
+        assert!(config.pki_dir().is_dir());
+        assert!(config.log_dir().is_dir());
+        assert!(
+            counter.load(Ordering::SeqCst) >= 8,
+            "expected one log line per resolved path/address, got {}",
+            counter.load(Ordering::SeqCst)
+        );
+
+        let _ = std::fs::remove_dir_all(&data_dir);
+    }
+}

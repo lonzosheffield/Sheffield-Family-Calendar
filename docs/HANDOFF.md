@@ -53,3 +53,35 @@ the `/api/` prefix. Any server fn added later should keep the convention.
 `dx` 0.7.10 rejects `[web.resource]` without a `dev` field
 (`missing field 'dev'`). The block was empty, so T0.4 deleted it. If styles or
 scripts ever need declaring there, the 0.7 schema requires `dev = []` too.
+
+---
+
+## From T0.5 (`FamilyHubConfig`) → Boss (`Cargo.toml` micro-commit)
+
+### H-5. `dioxus-cli-config` is now an unused dependency
+
+T0.5 removed `main.rs`'s only call to
+`dioxus_cli_config::fullstack_address_or_localhost()` (replaced by
+`FamilyHubConfig::http_addr`, per PLAN v2 T0.5 / PURPLE_TEAM.md finding 10).
+Nothing in `src/` references the `dioxus-cli-config` crate any more. It's
+harmless to leave (an unused *optional* dependency doesn't trip clippy), but
+Boss may want to drop the `dioxus-cli-config = { ... }` line and its
+`dep:dioxus-cli-config` feature entry in a between-wave `Cargo.toml`
+micro-commit (T0.5 does not own `Cargo.toml` — PURPLE_TEAM.md §P4).
+
+### H-6. `src/server/config.rs` ships a hand-rolled TOML subset, not the `toml` crate
+
+`familyhub.toml` only needed flat `key = "value"` pairs for T0.5's three
+settings, and `Cargo.toml` (owned by T0.2/T0.4) was not available to add a
+dependency to. `FamilyHubConfig` therefore parses a minimal subset itself
+(`TomlValues` in `src/server/config.rs`): comments, blank lines, `[section]`
+headers namespaced as `section.key`, and `key = "value"` / `key = value`
+lines — no arrays, no multiline strings, no nested inline tables. This is
+almost certainly *not* enough for T1.3's `[certs]` block or T1.8's `[acme]`
+block if either needs richer structure (e.g. a list of SANs, or nested
+provider config). If so, request the `toml` crate (`toml = "0.9"` or similar,
+pulling in `toml_edit`/`toml_parser`, both already resolved transitively in
+`Cargo.lock` via other dependencies) via a `Cargo.toml` micro-commit, and
+swap `TomlValues` for real deserialization at that point — `FamilyHubConfig`'s
+public API (`data_dir`, `http_addr`, `tls_addr`, the `*_dir()` helpers) does
+not need to change to make that swap.
