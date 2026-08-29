@@ -560,6 +560,12 @@ pub fn spawn_midnight_tick() {
             let today = Local::now().date_naive().format("%Y-%m-%d").to_string();
             tracing::info!("day rolled to {today}");
             run_day_rolled(today).await;
+            // D4 / T1.1 H-7: fold the WAL back into the main file once a day
+            // so `family.db-wal` cannot grow without bound on a box that is
+            // never rebooted.
+            if let Err(err) = crate::server::db::on_midnight_tick().await {
+                tracing::warn!(%err, "midnight WAL checkpoint failed");
+            }
         }
     });
 }

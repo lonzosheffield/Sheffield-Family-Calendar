@@ -473,3 +473,40 @@ uses. `router::pki_for(&config.pki_dir())` hands back the *same*
 served (T1.7's assertion "expiry matches leaf"). `/health` itself is still
 T0.6's stub — T1.7 owns `src/server/health.rs` and replaces
 `router::health_stub` when it lands.
+
+---
+
+## Boss — wave 1-a close (T1.1, T1.2, T1.3 squash-merged to `main`)
+
+All three tasks passed review (no acceptance test weakened, no undeclared
+non-Rust component, no secrets committed) and each merge ran the full
+baseline green. Decisions on the requests above:
+
+- **T1.1 H-7 / T1.2 (applied):** `spawn_midnight_tick` in
+  `src/server/api/realtime.rs` now calls `db::on_midnight_tick()` after
+  `run_day_rolled`, so the D4 `wal_checkpoint(TRUNCATE)` runs once a day.
+- **T1.2 H-7 (applied):** `router::run` calls
+  `realtime::ensure_background_tasks()` right after `spawn_polling_task()`;
+  the tick no longer waits for the first WebSocket upgrade.
+- **T1.3 H-7 (applied):** `family_calendar::server::tls::install_crypto_provider()`
+  is now literally the first statement of the server `main()` (`src/main.rs`
+  is 20 lines; Boss-only edit to the frozen file). The call in `router::run`
+  stays — it is idempotent and keeps the tests' direct `run` path safe.
+- **T1.3 H-8 (ratified):** the `Cargo.toml` crate additions are accepted as
+  the serialized wave 1-a micro-change; all pins are §P5.4-exact.
+- **T1.3 H-12 (decided):** an OS built-in invoked at runtime counts as a
+  declared exception. `docs/NON_RUST.md` gains an `icacls.exe` row; T3.1 adds
+  `netsh.exe` / `sc.exe` rows on the same basis.
+- **T1.1 H-13 (ratified):** `.gitattributes` pinning `migrations/*.sql` to LF.
+- **T1.1 H-11:** migration numbers past `0003` are assigned by Boss on
+  request; none assigned yet.
+- **T1.2 H-8 (deferred to T2.1):** `View::Screensaver` is added by T2.1 when
+  it rebuilds the kiosk views (two exhaustive matches in `dashboard.rs`).
+- **T1.2 optional `chrono-tz` dev-dep:** not taken; the hand-written zone
+  model in `tests/realtime_tests.rs` passes and adds no dependency.
+- **T1.1 H-9 (left to T1.5/T2.4/T1.7):** read-only server fns move to
+  `db::read_pool()` in their owners' waves.
+- **`assets/tailwind.css`** rebuilt once more on the merged tree (T1.2's and
+  T1.3's tokens together), per the wave 0-e rule.
+
+Wave 1-b (T1.4, T1.5, T1.6, T1.7) may start from this `main`.

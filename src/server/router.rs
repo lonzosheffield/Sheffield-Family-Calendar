@@ -299,6 +299,9 @@ pub async fn run(config: FamilyHubConfig) {
         .await
         .expect("failed to open the database");
     crate::server::calendar::spawn_polling_task();
+    // T1.2 H-7: start the DST-safe midnight tick at boot rather than waiting
+    // for the first WebSocket upgrade to self-start it.
+    crate::server::api::realtime::ensure_background_tasks();
 
     // Certificate source. Only `SelfSignedCa` exists in this wave; an
     // unrecognised `certs.mode` fails here, loudly, rather than at the
