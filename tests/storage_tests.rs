@@ -107,10 +107,11 @@ async fn fresh_database_runs_every_embedded_migration() {
         "0002_core must add custom_tasks.due_date"
     );
 
-    // Both migrations recorded, and the eight routine templates seeded.
+    // Every migration recorded, and the eight routine templates seeded.
+    // (T1.4 added `0003_profiles`; this was `Some(2)` before that landed.)
     assert_eq!(
         db::migration_version(&pools.read).await.expect("version"),
-        Some(2)
+        Some(3)
     );
     assert_eq!(count(&pools.read, "routine_templates").await, 8);
 
@@ -180,12 +181,12 @@ async fn v1_database_is_baselined_and_every_log_row_survives() {
             .expect("_sqlx_migrations");
     assert_eq!(
         applied.iter().map(|(v, _)| *v).collect::<Vec<_>>(),
-        vec![1, 2],
-        "expected 0001 baselined and 0002 applied, got {applied:?}"
+        vec![1, 2, 3],
+        "expected 0001 baselined and 0002/0003 applied, got {applied:?}"
     );
     assert_eq!(
         db::migration_version(&pools.read).await.expect("version"),
-        Some(2)
+        Some(3)
     );
 
     // Every single routine log row survived, byte for byte.
@@ -287,7 +288,7 @@ async fn vacuum_into_backup_restores_to_identical_row_counts() {
         db::migration_version(&restored.read)
             .await
             .expect("version"),
-        Some(2)
+        Some(3)
     );
 
     restored.close().await;

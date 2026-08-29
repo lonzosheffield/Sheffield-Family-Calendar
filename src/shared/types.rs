@@ -24,6 +24,32 @@ pub fn profile_name(user_id: u32) -> &'static str {
         .unwrap_or("Family")
 }
 
+/// One family profile stored in `profiles` (T1.4, `migrations/0003_profiles.sql`).
+///
+/// Unlike [`FAMILY_PROFILES`] this is the real, mutable roster: it can hold
+/// more than four rows (a 5th/6th profile is a T1.4 acceptance requirement),
+/// each with its own display color and optional avatar image, and it is what
+/// [`ServerMessage::ProfilesUpdated`] tells a client to refetch.
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub struct Profile {
+    pub id: i64,
+    pub name: String,
+    pub color: String,
+    pub avatar: Option<String>,
+    pub is_parent: bool,
+    pub sort_order: i64,
+}
+
+/// Whether the parent PIN has been set yet (T1.4 first-run gate).
+///
+/// Asking this is also what causes the server to generate the first-run
+/// setup code the first time anyone needs it: see
+/// `crate::server::auth::ensure_setup_code`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub struct SetupStatus {
+    pub pin_set: bool,
+}
+
 /// A routine template joined with today's completion state for one profile.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct RoutineItemView {

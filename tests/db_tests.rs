@@ -145,13 +145,50 @@ async fn custom_task_without_photo_has_no_path() {
     assert!(tasks[0].photo_path.is_none());
 }
 
+/// T1.4 / W5: `migrations/0003_profiles.sql` replaces the old
+/// `CHECK (user_id BETWEEN 1 AND 4)` constraints on `daily_routine_logs` and
+/// `custom_tasks` with real foreign keys to a new `profiles` table. This
+/// replaces the CHECK-era test above: `user_id` 9999 must now fail because no
+/// such profile exists — **not** because it falls outside a hardcoded 1..4
+/// range — and, unlike the old CHECK, a profile created *beyond* the original
+/// four (a 5th here) must be accepted.
 #[tokio::test]
-async fn user_ids_are_constrained_to_the_four_profiles() {
+async fn set_routine_completion_violates_foreign_key_for_an_unknown_profile() {
     let pool = memory_pool().await;
 
-    let result = db::set_routine_completion(&pool, 9, 1, true, "2025-01-01").await;
+    let result = db::set_routine_completion(&pool, 9999, 1, true, "2025-01-01").await;
+    let err = result.expect_err("user_id 9999 has no matching profiles row");
+    let message = err.to_string().to_lowercase();
     assert!(
-        result.is_err(),
-        "user_id 9 must violate the CHECK constraint"
+        message.contains("foreign key"),
+        "expected a foreign key violation, got: {message}"
+    );
+
+    // A 5th profile — impossible under the old CHECK — satisfies the FK and
+    // the insert succeeds, proving the constraint is "must reference
+    // profiles", not "must be 1..=4".
+    sqlx::query("INSERT INTO profiles (id, name) VALUES (5, 'Guest')")
+        .execute(&pool)
+        .await
+        .expect("insert a 5th profile");
+    db::set_routine_completion(&pool, 5, 1, true, "2025-01-01")
+        .await
+        .expect("profile 5 exists, so this must succeed");
+}
+
+/// The same replacement, for `custom_tasks.user_id` — the *other* CHECK
+/// `0003_profiles.sql` drops (task description: "drop BOTH CHECK ...
+/// constraints").
+#[tokio::test]
+async fn insert_custom_task_violates_foreign_key_for_an_unknown_profile() {
+    let pool = memory_pool().await;
+    let dir =
+        std::env::temp_dir().join(format!("sheffield-uploads-fk-test-{}", std::process::id()));
+
+    let result = db::insert_custom_task(&pool, 9999, "Feed the dog", None, &dir).await;
+    let err = result.expect_err("user_id 9999 has no matching profiles row");
+    assert!(
+        err.to_string().to_lowercase().contains("foreign key"),
+        "expected a foreign key violation, got: {err}"
     );
 }

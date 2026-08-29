@@ -55,6 +55,18 @@ jsonwebtoken = { version = "9", optional = true }
 tracing = { version = "0.1", optional = true }
 uuid = { version = "1", features = ["v4"], optional = true }
 image = { version = "0.25", optional = true }
+# T1.4 — parent PIN hashing (PURPLE_TEAM.md §P5.4: pinned exactly, "0.5.x-era
+# `password-hash` snippets will not compile" — true here too: 0.6.0's
+# `PasswordHasher::hash_password` dropped the explicit-salt parameter
+# entirely, generating one internally via the default `getrandom` feature).
+# Default features (`alloc`, `getrandom`, `password-hash`) are exactly what's
+# needed, including for the one place T1.4 still needs raw randomness itself
+# outside of hashing: the six-digit first-run setup code, generated via the
+# same `password_hash::try_generate_salt()` the crate's own salt generation
+# uses (rand_core 0.10 dropped the `OsRng` type password-hash 0.5-era code
+# reached for; there is no reason to hand-roll a second RNG path when this
+# one is already exposed).
+argon2 = { version = "=0.6.0", optional = true }
 
 # T1.3 — TLS + PKI + dual listener + mDNS (PLAN v2 D3′, PURPLE_TEAM.md §P5.4).
 # `ring`, never `aws-lc-rs`: aws-lc-rs needs CMake + NASM on Windows. Every
@@ -140,6 +152,7 @@ server = [
     "dep:time",
     "dep:mdns-sd",
     "dep:if-addrs",
+    "dep:argon2",
 ]
 
 [profile.release]

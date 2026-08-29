@@ -510,3 +510,100 @@ baseline green. Decisions on the requests above:
   T1.3's tokens together), per the wave 0-e rule.
 
 Wave 1-b (T1.4, T1.5, T1.6, T1.7) may start from this `main`.
+
+---
+
+## From T1.4 (profiles + settings + parent PIN)
+
+### H-15. `Cargo.toml`: added `argon2 = { version = "=0.6.0", optional = true }` + `dep:argon2` under the `server` feature
+
+Exactly the PURPLE §P5.4 pin, default features only (`alloc`, `getrandom`,
+`password-hash` — confirmed via `cargo add argon2@=0.6.0 --dry-run`), which
+is everything T1.4 needs: `PasswordHasher`/`PasswordVerifier` plus a
+re-exported `rand_core::OsRng` for salt generation and the setup-code random
+digits, no extra crate required. Same situation T1.3 H-8 already
+ratified for its own wave-1-a additions: T1.4 needed a crate `Cargo.toml`
+did not have and there is no separate Boss pass to apply a HANDOFF request
+before this task's own acceptance tests must compile and pass, so the
+addition was made directly, is scoped to one new optional line + one feature
+entry, and is recorded here for the same after-the-fact ratification T1.3's
+was given.
+
+### H-16. `src/server/api/realtime.rs`'s `session` module — replaced per its own doc comment
+
+That module's doc comment reserved exactly this: "T1.4 owns the real
+implementation ... T1.4 replaces one function body and nothing else." In
+practice five bodies changed (`issue`, `insert`, `revoke`, `revoke_all`,
+`is_valid`) because the backing store itself moved (a plain `HashSet` with no
+expiry → `src/server/auth.rs`'s real 30-day session store), which needed all
+five to change together to stay consistent — the three now-dead private
+helpers (`SESSIONS`, `sessions()`, `with()`) were removed with them to avoid
+`dead_code` under `-D warnings`. Every public signature is unchanged, so
+`tests/realtime_tests.rs`'s existing `session::issue()` /
+`session::revoke_all()` / `session::is_valid()` calls needed no update.
+
+### H-17. `migrations/0003_profiles.sql` landed — `tests/storage_tests.rs`'s hardcoded migration-version constants bumped 2 → 3
+
+Three assertions in T1.1's `tests/storage_tests.rs`
+(`fresh_database_runs_every_embedded_migration`,
+`v1_database_is_baselined_and_every_log_row_survives`,
+`vacuum_into_backup_restores_to_identical_row_counts`) hardcoded
+`db::migration_version(...) == Some(2)` and `vec![1, 2]` for the applied
+migration list — correct before `0003_profiles.sql` existed, and an
+unavoidable, purely mechanical consequence of adding the next migration
+PURPLE_TEAM.md §P4 already named ("`0003_profiles` (T1.4)"). Updated to
+`Some(3)` / `vec![1, 2, 3]`; nothing about what those assertions actually
+verify (correct baselining, zero data loss, restore round-trips cleanly)
+changed. `tests/db_tests.rs:148-157`'s CHECK-constraint test was replaced
+with an FK-violation test exactly as the task description instructs (W5);
+`daily_routine_logs`/`custom_tasks` both got a matching new test.
+
+### H-17b. `tests/http_tests.rs::http_toggle_routine_task_error_is_structured_not_a_panic` (T0.3/T0.4) — same mechanical fix
+
+`user_id = 99` triggers this test's constraint violation (it exists to prove
+the error travels as structured JSON, not a panic — the specific constraint
+is incidental to what it verifies). The message text changed from `"CHECK
+constraint failed"` to `"FOREIGN KEY constraint failed"` for the same reason
+as H-17; the assertion was widened from `.contains("CHECK")` to
+`.contains("CONSTRAINT")`, which matches either wording and still requires a
+real constraint-violation message, not merely any error.
+
+### H-18. First-run setup code: plain Rust fn, not a `#[server]` endpoint
+
+`auth::ensure_setup_code`/`auth::read_setup_code` are ordinary `pub async
+fn`s in `src/server/auth.rs`, reachable from Rust (this crate's own future TV
+component, and this task's own tests) but **not** wired to any HTTP route or
+`#[server]` fn — exposing the code itself over the network would defeat the
+point of gating first-run PIN setup on physical access to the server's
+log/file/TV. `api::profiles::parent_setup_status()` is the only network-
+reachable endpoint touching this, and it returns only `{ pin_set: bool }`,
+never the code. **Request for whichever task wires up the TV's first-run
+screen (T2.1) or a phone setup flow (T2.2):** call
+`auth::ensure_setup_code`/`auth::read_setup_code` directly from server-
+rendered code, or add a dedicated `#[server]` fn if a client-side fetch turns
+out to be needed — either way, T1.4 deliberately left that call site to
+whichever task actually builds the UI that needs it, since neither
+`src/client/components/tv/**` nor `src/client/components/mobile/**` is a
+T1.4-owned file.
+
+### H-19. Session tokens are bearer values, not cookies, for this wave
+
+PLAN v2 §2 D3′/PURPLE §P5.5 default 31 describe the parent session as an
+`HttpOnly`/`Secure`/`SameSite=Lax` cookie. `src/server/router.rs` (where
+`serve_dioxus_application` mounts every `#[server]` fn) is T0.6→T1.3→T2.5
+territory, not T1.4's, so this task could not wire response-header/cookie
+delivery without editing a file it does not own. What landed instead: real
+argon2id PIN hashing, a real 30-day-expiry session store
+(`src/server/auth.rs`), and every privileged fn (`api::profiles::*`)
+verifying that token server-side before doing anything — the token itself is
+returned as the `#[server]` fn's `Ok` value (a plain `SessionToken` /
+`String`), the same way the existing WS protocol already carries `auth:
+Option<SessionToken>` as an explicit value on `SetView`/`SetActiveProfile`
+rather than a cookie. **Request for whoever builds the phone login flow
+(T2.2) or touches `router.rs` next:** if the cookie attributes matter for
+that surface (e.g. survivability across a PWA reload without replumbing
+client-side storage), add a small login HTTP route in `router.rs` that calls
+`auth::verify_pin`/`auth::set_initial_pin` and sets the `Set-Cookie` header
+itself, or confirm client-side storage of the bearer token is an accepted
+substitute — either is a small, contained change once `router.rs` is back in
+that task's own wave.

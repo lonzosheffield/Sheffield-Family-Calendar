@@ -321,7 +321,10 @@ async fn http_toggle_routine_task_round_trip_mutates_db() {
 
 /// Gate-2 assertion 8 (error path): the 0.7 non-generic `ServerFnError` must
 /// come back as a **structured error body**, not a panic. `user_id = 99`
-/// violates `daily_routine_logs`' `CHECK (user_id BETWEEN 1 AND 4)`.
+/// violates `daily_routine_logs`' foreign key to `profiles` — a `CHECK
+/// (user_id BETWEEN 1 AND 4)` before `migrations/0003_profiles.sql` (T1.4),
+/// a `FOREIGN KEY` after; either way it is the same "constraint violation
+/// surfaces as structured JSON, not a panic" behavior this test verifies.
 #[tokio::test]
 async fn http_toggle_routine_task_error_is_structured_not_a_panic() {
     let addr = spawn_test_server().await;
@@ -360,8 +363,8 @@ async fn http_toggle_routine_task_error_is_structured_not_a_panic() {
         .as_str()
         .unwrap_or_else(|| panic!("error payload has no message: {payload}"));
     assert!(
-        message.to_ascii_uppercase().contains("CHECK"),
-        "the CHECK-constraint failure should reach the client: {message:?}"
+        message.to_ascii_uppercase().contains("CONSTRAINT"),
+        "the constraint-violation failure should reach the client: {message:?}"
     );
 }
 

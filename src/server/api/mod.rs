@@ -26,6 +26,10 @@ pub mod routine;
 pub mod screensaver;
 
 pub use calendar::get_today_events;
+pub use profiles::{
+    change_parent_pin, create_profile, delete_profile, list_profiles, parent_setup_status,
+    rename_profile, set_initial_parent_pin, set_profile_color, verify_parent_pin,
+};
 pub use routine::{
     create_photo_task, get_custom_tasks, get_daily_routine, today, toggle_custom_task,
     toggle_routine_task,

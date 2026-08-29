@@ -418,50 +418,35 @@ pub fn reset_board() {
 
 /// Parent-session validation seam.
 ///
-/// T1.4 owns the real implementation (argon2id PIN → 30-day session token in
-/// `src/server/auth.rs`). Until it lands, this is the single place the realtime
-/// hub asks "is this token a live parent session?", so T1.4 replaces one
-/// function body and nothing else (`docs/PROTOCOL.md` §Authorisation).
+/// **T1.4 owns the real implementation** (argon2id PIN → 30-day session
+/// token in `src/server/auth.rs`); this module's doc comment reserved
+/// exactly this seam for it. Every function here is now a thin delegate to
+/// `crate::server::auth`, which holds the actual token store (with real
+/// 30-day expiry, replacing the plain `HashSet` this module started with) —
+/// signatures are unchanged, so every existing caller (the WS authorisation
+/// checks below, `tests/realtime_tests.rs`) needs no update
+/// (`docs/PROTOCOL.md` §Authorisation).
 pub mod session {
-    use std::collections::HashSet;
-    use std::sync::{Mutex, OnceLock};
-
-    static SESSIONS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
-
-    fn sessions() -> &'static Mutex<HashSet<String>> {
-        SESSIONS.get_or_init(|| Mutex::new(HashSet::new()))
-    }
-
-    fn with<R>(f: impl FnOnce(&mut HashSet<String>) -> R) -> R {
-        let mut guard = match sessions().lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        f(&mut guard)
-    }
-
     /// Mint and register a parent session token.
     pub fn issue() -> String {
-        let token = uuid::Uuid::new_v4().to_string();
-        with(|s| s.insert(token.clone()));
-        token
+        crate::server::auth::issue_session()
     }
 
     pub fn insert(token: &str) {
-        with(|s| s.insert(token.to_string()));
+        crate::server::auth::insert_session(token);
     }
 
     pub fn revoke(token: &str) {
-        with(|s| s.remove(token));
+        crate::server::auth::revoke_session(token);
     }
 
     pub fn revoke_all() {
-        with(HashSet::clear);
+        crate::server::auth::revoke_all_sessions();
     }
 
-    /// The one predicate the realtime hub calls. T1.4 replaces this body.
+    /// The one predicate the realtime hub calls.
     pub fn is_valid(token: &str) -> bool {
-        !token.is_empty() && with(|s| s.contains(token))
+        crate::server::auth::is_valid_session(token)
     }
 }
 
