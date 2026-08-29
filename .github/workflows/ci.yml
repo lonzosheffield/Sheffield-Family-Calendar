@@ -1,0 +1,86 @@
+name: CI
+
+# T0.8 (docs/PLAN.md §3, docs/reviews/PURPLE_TEAM.md §P3): Windows-x64 only.
+# No aarch64 job — cut per R-25/R-26/E6 (see PURPLE_TEAM.md §P1).
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  # Never the real data dir — matches the mandatory agent-shell preamble
+  # (PURPLE_TEAM.md §P5.3): tests only.
+  FAMILY_HUB_DATA_DIR: ${{ github.workspace }}\.familyhub-ci-data
+
+jobs:
+  windows-x64:
+    name: Windows x64
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@main
+
+      - name: Install dx (dioxus-cli 0.7.10) and Tailwind standalone 3.4.17
+        shell: pwsh
+        run: |
+          cargo binstall dioxus-cli@0.7.10 --no-confirm --locked
+          $dest = "$env:USERPROFILE\.cargo\bin\tailwindcss.exe"
+          Invoke-WebRequest -Uri "https://github.com/tailwindlabs/tailwindcss/releases/download/v3.4.17/tailwindcss-windows-x64.exe" -OutFile $dest
+          & $dest --version
+
+      - name: cargo fmt --check
+        run: cargo fmt --check
+
+      - name: cargo clippy (server + web, -D warnings)
+        shell: pwsh
+        run: |
+          cargo clippy --features server --all-targets -- -D warnings
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo clippy --features web --target wasm32-unknown-unknown -- -D warnings
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: cargo test --features server
+        run: cargo test --features server
+
+      - name: dx build --platform web --release
+        run: dx build --platform web --release
+
+      - name: Tailwind rebuild (fail on diff)
+        shell: pwsh
+        run: |
+          $before = Get-FileHash assets/tailwind.css -Algorithm SHA256
+          & "$env:USERPROFILE\.cargo\bin\tailwindcss.exe" -i input.css -o assets/tailwind.css --minify
+          $after = Get-FileHash assets/tailwind.css -Algorithm SHA256
+          if ($before.Hash -ne $after.Hash) {
+            Write-Error "assets/tailwind.css is stale relative to input.css/tailwind.config.js — rebuild it locally with tailwindcss-windows-x64 v3.4.17 and commit the diff"
+            git diff -- assets/tailwind.css
+            exit 1
+          }
+          Write-Host "assets/tailwind.css matches a clean rebuild"
+
+      - name: cargo tree -d duplicate check
+        shell: pwsh
+        run: |
+          $dups = cargo tree -d --features server | Select-String -Pattern '^(axum|tower-http|hyper) v'
+          if ($dups) {
+            Write-Error "duplicate axum/tower-http/hyper major versions found in the dependency tree (W8):"
+            $dups | ForEach-Object { Write-Host $_.Line }
+            exit 1
+          }
+          Write-Host "no duplicate axum/tower-http/hyper versions in the dependency tree"
+
+      - name: Windows-x64 release build
+        run: cargo build --features server --release
