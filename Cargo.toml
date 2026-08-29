@@ -27,14 +27,21 @@ web-sys = { version = "0.3", features = [
     "DomRect",
     "Location",
     "EventTarget",
+    "Navigator",
+    "ServiceWorkerContainer",
+    "ServiceWorker",
+    "ResizeObserver",
+    "File",
+    "Blob",
+    "FormData",
+    "Performance",
 ], optional = true }
 
 # Server-only dependencies, gated behind the `server` feature.
 tokio = { version = "1.42", features = ["full"], optional = true }
-sqlx = { version = "0.8", features = [
+sqlx = { version = "=0.8.6", features = [
     "sqlite",
     "runtime-tokio",
-    "tls-native-tls",
     "chrono",
 ], optional = true }
 axum = { version = "0.7", features = ["ws"], optional = true }
@@ -44,6 +51,11 @@ chrono = { version = "0.4", optional = true }
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false, optional = true }
 jsonwebtoken = { version = "9", optional = true }
 tracing = { version = "0.1", optional = true }
+uuid = { version = "1", features = ["v4"], optional = true }
+image = { version = "0.25", optional = true }
+
+[dev-dependencies]
+tokio-tungstenite = "0.28"
 
 [features]
 default = []
@@ -66,6 +78,8 @@ server = [
     "dep:reqwest",
     "dep:jsonwebtoken",
     "dep:tracing",
+    "dep:uuid",
+    "dep:image",
 ]
 
 [profile.release]
