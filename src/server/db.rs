@@ -22,7 +22,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use base64::Engine;
-use chrono::{DateTime, NaiveDateTime, TimeZone};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeZone};
 use sqlx::migrate::Migrator;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::{Row, SqlitePool};
@@ -535,6 +535,91 @@ pub async fn set_custom_task_completion(
         .execute(pool)
         .await?;
     Ok(())
+}
+
+/// The `user_id` that owns `task_id`, or `None` when the task does not exist.
+///
+/// **T1.5 (R-23/W1)**: `toggle_custom_task` calls this before touching a row
+/// so one profile can never flip a sibling's task — the ownership check the
+/// v1 endpoint never made.
+pub async fn custom_task_owner(
+    pool: &SqlitePool,
+    task_id: u32,
+) -> Result<Option<u32>, sqlx::Error> {
+    let row: Option<(i64,)> = sqlx::query_as("SELECT user_id FROM custom_tasks WHERE id = ?1")
+        .bind(task_id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.map(|(user_id,)| user_id as u32))
+}
+
+// ---------------------------------------------------------------------------
+// Date correctness and idempotency (T1.5, R-24/R-15/W1)
+// ---------------------------------------------------------------------------
+
+/// How far a client-declared mutation date may drift from the server's own
+/// notion of today (PLAN v2 T1.5, PURPLE §P3: "validated within ±1 day
+/// server-side"). One day either way covers a legitimate late-night/early-
+/// morning boundary crossing (a child finishing yesterday's routine at
+/// 00:03, or a queued offline mutation replaying just after midnight)
+/// without opening the door to backdating or postdating a log by any
+/// meaningful amount.
+pub const MUTATION_DATE_WINDOW_DAYS: i64 = 1;
+
+/// `true` when `date` (a client-supplied `YYYY-MM-DD`) is within
+/// [`MUTATION_DATE_WINDOW_DAYS`] of `today` (the server's own `YYYY-MM-DD`).
+///
+/// A date that fails to parse is never "close enough" — it is rejected the
+/// same as one three days away. Pure and synchronous so every mutating
+/// server fn can validate a date before it ever opens a database connection,
+/// and so the boundary itself is unit-testable without a pool (R-24: no
+/// mutation may trust a bare `unwrap_or_default()`; this is the explicit
+/// check that replaces it).
+pub fn date_within_window(date: &str, today: &str) -> bool {
+    let (Ok(date), Ok(today)) = (
+        NaiveDate::parse_from_str(date, "%Y-%m-%d"),
+        NaiveDate::parse_from_str(today, "%Y-%m-%d"),
+    ) else {
+        return false;
+    };
+    (date - today).num_days().abs() <= MUTATION_DATE_WINDOW_DAYS
+}
+
+/// Atomically claim `idempotency_key` in the `mutation_log` ledger.
+///
+/// Returns `true` the **first** time a key is seen — the caller should apply
+/// the mutation. Returns `false` on every replay of the same key — the
+/// caller must skip the write, so a client's offline queue (or a flaky
+/// network causing a retried request) produces exactly one effect no matter
+/// how many times it is sent (PLAN v2 T1.5 / R-15).
+///
+/// This has to be a single statement, not a `SELECT` followed by an
+/// `INSERT`: the write pool serialises callers onto one connection but each
+/// `.execute()` still acquires and releases it, so two overlapping calls
+/// could otherwise both observe "not yet claimed" between their own select
+/// and insert. `INSERT OR IGNORE` makes the claim atomic — `rows_affected()`
+/// is `1` only for whichever caller's row actually landed.
+pub async fn claim_mutation(
+    pool: &SqlitePool,
+    idempotency_key: &str,
+    kind: &str,
+    user_id: u32,
+    payload: &str,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        r#"
+        INSERT OR IGNORE INTO mutation_log (idempotency_key, kind, user_id, payload)
+        VALUES (?1, ?2, ?3, ?4)
+        "#,
+    )
+    .bind(idempotency_key)
+    .bind(kind)
+    .bind(user_id)
+    .bind(payload)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected() == 1)
 }
 
 /// Decode a (possibly data-URI prefixed) base64 image and store it on disk,

@@ -607,3 +607,44 @@ client-side storage), add a small login HTTP route in `router.rs` that calls
 itself, or confirm client-side storage of the bearer token is an accepted
 substitute — either is a small, contained change once `router.rs` is back in
 that task's own wave.
+
+## From T1.5 (date correctness + authz + missing broadcasts) → T2.5
+
+`toggle_routine_task` and `toggle_custom_task` (`src/server/api/routine.rs`)
+now take two new **required** parameters, `date: String` (`YYYY-MM-DD`,
+validated within ±1 day of the server's clock — `db::date_within_window`)
+and `idempotency_key: String` (claimed via `db::claim_mutation`, so a
+replayed call is a no-op the second time). `toggle_custom_task` also gained
+`user_id: u32` up front — it must equal the task's owner
+(`db::custom_task_owner`) or the call errors and writes nothing.
+
+New signatures:
+
+```rust
+toggle_routine_task(user_id: u32, template_id: u32, completed: bool, date: String, idempotency_key: String)
+toggle_custom_task(user_id: u32, task_id: u32, completed: bool, date: String, idempotency_key: String)
+```
+
+`toggle_custom_task` now publishes `ServerMessage::TasksUpdated { user_id,
+date }` on a real change (G22/W1 — the v1 endpoint never did). `db.rs` grew
+`date_within_window`, `claim_mutation` and `custom_task_owner`; `get_daily_routine`
+and `get_custom_tasks` now read through `db::read_pool()` per H-9.
+
+`src/client/components/routine.rs`'s `Routine` component (T1.5 landed the
+date/authz call-site changes here first, per §P4) now resolves "today" via a
+`RoutineDateState` state machine (`Loading`/`Ready(date)`/`Error`) instead of
+`today().await.unwrap_or_default()` — see `RoutineDateState::resolve` and
+`new_idempotency_key()`, both `pub`. When `RoutineDateState::Error`, `Routine`
+renders an explicit "can't reach the hub" panel instead of the routine list —
+**T2.5, when you touch this file's UI, please keep the `Error` branch and the
+`mutation_date` plumbing rather than reverting to a bare fetch-and-unwrap.**
+`CustomTaskRow`'s `on_toggle` now passes `task.user_id` as the owning
+`user_id` T1.5's ownership check requires — the client already has it from
+`get_custom_tasks`'s `CustomTaskView`.
+
+`tests/http_tests.rs`'s two `toggle_routine_task` wire tests
+(`http_toggle_routine_task_round_trip_mutates_db`,
+`http_toggle_routine_task_error_is_structured_not_a_panic`) were updated in
+this branch to include `date`/`idempotency_key` in their JSON bodies — they
+predate T1.5 and would otherwise fail to deserialize. T1.5's own acceptance
+suite is `tests/routine_tests.rs`.

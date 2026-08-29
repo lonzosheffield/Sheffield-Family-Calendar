@@ -270,6 +270,10 @@ async fn http_today_server_fn_round_trip() {
 
 /// Gate-2 assertion 8 (ok path): a **mutating** server function round trip
 /// over JSON that changes a database row.
+///
+/// T1.5 added `date` and `idempotency_key` as required fields on the wire
+/// (explicit dates + idempotency, PLAN v2 T1.5 / PURPLE §P3): this test's
+/// JSON body carries both, the way a real client now must.
 #[tokio::test]
 async fn http_toggle_routine_task_round_trip_mutates_db() {
     let addr = spawn_test_server().await;
@@ -293,7 +297,7 @@ async fn http_toggle_routine_task_round_trip_mutates_db() {
         .post(format!("http://{addr}{TOGGLE_ROUTINE_ENDPOINT}"))
         .header("content-type", "application/json")
         .body(format!(
-            r#"{{"user_id":{USER_ID},"template_id":{template_id},"completed":true}}"#
+            r#"{{"user_id":{USER_ID},"template_id":{template_id},"completed":true,"date":"{date}","idempotency_key":"http-test-toggle-routine-roundtrip"}}"#
         ))
         .send()
         .await
@@ -325,14 +329,21 @@ async fn http_toggle_routine_task_round_trip_mutates_db() {
 /// (user_id BETWEEN 1 AND 4)` before `migrations/0003_profiles.sql` (T1.4),
 /// a `FOREIGN KEY` after; either way it is the same "constraint violation
 /// surfaces as structured JSON, not a panic" behavior this test verifies.
+///
+/// `date` is today's date (so T1.5's ±1 day window accepts it and the
+/// request reaches the database, where the foreign-key constraint is what
+/// actually fails) and `idempotency_key` is unique to this test.
 #[tokio::test]
 async fn http_toggle_routine_task_error_is_structured_not_a_panic() {
     let addr = spawn_test_server().await;
+    let date = chrono::Local::now().format("%Y-%m-%d").to_string();
 
     let response = http_client()
         .post(format!("http://{addr}{TOGGLE_ROUTINE_ENDPOINT}"))
         .header("content-type", "application/json")
-        .body(r#"{"user_id":99,"template_id":1,"completed":true}"#)
+        .body(format!(
+            r#"{{"user_id":99,"template_id":1,"completed":true,"date":"{date}","idempotency_key":"http-test-toggle-routine-error"}}"#
+        ))
         .send()
         .await
         .expect("the toggle_routine_task endpoint should respond");

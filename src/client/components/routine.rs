@@ -12,18 +12,99 @@ use crate::shared::types::{
     profile_name, routine_progress, CustomTaskView, RoutineItemView, FAMILY_PROFILE_COUNT,
 };
 
+// ---------------------------------------------------------------------------
+// Date state machine (T1.5 / R-24a)
+// ---------------------------------------------------------------------------
+
+/// What the panel knows about "today" for the purpose of dating a mutation.
+///
+/// Replaces the v1 pattern of `today().await.unwrap_or_default()`, which
+/// silently turned a failed fetch into `""` and let the kiosk render "nothing
+/// done today" as if that were the truth rather than a missing answer
+/// (R-24a). [`Self::resolve`] is the pure decision the component renders
+/// from, so the transition into [`RoutineDateState::Error`] is unit-testable
+/// without a browser or a live server.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum RoutineDateState {
+    /// No answer yet — from either the realtime bus or a direct fetch.
+    Loading,
+    /// A trustworthy `YYYY-MM-DD`, safe to send back to a mutation.
+    Ready(String),
+    /// The fetch failed and the bus has not pushed one either. The panel must
+    /// show this explicitly rather than guess.
+    Error,
+}
+
+impl RoutineDateState {
+    /// Resolve the date state from the realtime bus's server-pushed value
+    /// (set from `Hello`/`DayRolled`, PLAN v2 D5) and, only while that is
+    /// still unset, the outcome of a direct `today()` fetch.
+    ///
+    /// The bus wins whenever it has an answer: it is kept current by the
+    /// server pushing `DayRolled` at midnight, whereas a one-shot `today()`
+    /// fetch is a snapshot from whenever the component first mounted. Once
+    /// the bus knows, a live socket makes a stale local fetch irrelevant.
+    pub fn resolve(
+        bus_today: Option<String>,
+        fetch_outcome: Option<Result<String, String>>,
+    ) -> Self {
+        if let Some(date) = bus_today {
+            return RoutineDateState::Ready(date);
+        }
+        match fetch_outcome {
+            None => RoutineDateState::Loading,
+            Some(Ok(date)) => RoutineDateState::Ready(date),
+            Some(Err(_)) => RoutineDateState::Error,
+        }
+    }
+
+    /// The date to stamp on a mutation, if one is known yet.
+    pub fn date(&self) -> Option<&str> {
+        match self {
+            RoutineDateState::Ready(date) => Some(date.as_str()),
+            _ => None,
+        }
+    }
+}
+
+/// A fresh idempotency key for one mutation (PLAN v2 T1.5 / R-15).
+///
+/// No client-side UUID crate is pulled in for this: `web-sys`'s `Performance`
+/// clock plus a per-process monotonic counter already gives every call on
+/// this client a value no other call on this client will ever repeat, and a
+/// key only has to be unique among the retries of *one* mutation, not
+/// globally — the server dedupes by the key's bytes, not by trusting it as an
+/// identity. Mirrors [`crate::client::realtime::entropy_seed`]'s reasoning
+/// for staying dependency-free on wasm.
+pub fn new_idempotency_key() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("{}-{n}", crate::client::realtime::now_millis())
+}
+
 #[component]
 pub fn Routine(compact: bool) -> Element {
     let state = use_app_state();
     let (bus, _sender) = use_realtime();
     let mut show_dialog = use_signal(|| false);
 
+    let mut today_fetch =
+        use_resource(move || async move { today().await.map_err(|err| err.to_string()) });
+
+    let date_state =
+        RoutineDateState::resolve((bus.today)(), (*today_fetch.read_unchecked()).clone());
+
     let mut routine = use_resource(move || async move {
         // Re-runs whenever another client toggles something.
         let _version = (bus.routine_version)();
         let user_id = (state.active_user_id)();
-        let date = today().await.unwrap_or_default();
-        get_daily_routine(user_id, date).await
+        let date =
+            RoutineDateState::resolve((bus.today)(), (*today_fetch.read_unchecked()).clone());
+        match date {
+            RoutineDateState::Ready(date) => get_daily_routine(user_id, date).await.map(Some),
+            _ => Ok(None),
+        }
     });
 
     let mut tasks = use_resource(move || async move {
@@ -32,7 +113,7 @@ pub fn Routine(compact: bool) -> Element {
     });
 
     let items: Vec<RoutineItemView> = match &*routine.read_unchecked() {
-        Some(Ok(items)) => items.clone(),
+        Some(Ok(Some(items))) => items.clone(),
         _ => Vec::new(),
     };
     let custom: Vec<CustomTaskView> = match &*tasks.read_unchecked() {
@@ -40,6 +121,27 @@ pub fn Routine(compact: bool) -> Element {
         _ => Vec::new(),
     };
     let progress = routine_progress(&items);
+    // Computed once, outside the per-row closures below: `RoutineDateState`
+    // is not `Copy` and each closure only needs the resolved date, not the
+    // whole state machine.
+    let mutation_date: Option<String> = date_state.date().map(str::to_string);
+
+    if date_state == RoutineDateState::Error {
+        return rsx! {
+            div { class: "flex h-full flex-col items-center justify-center gap-3 text-center",
+                ProfileSelector {}
+                div { class: "rounded-2xl bg-red-50 p-4 text-red-700 ring-1 ring-red-200",
+                    p { class: "font-bold", "Can't reach the hub" }
+                    p { class: "text-sm", "Today's routine can't be shown right now. Check the connection and try again." }
+                    button {
+                        class: "mt-3 rounded-xl bg-red-600 px-4 py-2 font-semibold text-white",
+                        onclick: move |_| { today_fetch.restart(); },
+                        "Retry"
+                    }
+                }
+            }
+        };
+    }
 
     rsx! {
         div { class: "flex h-full flex-col gap-4",
@@ -62,15 +164,25 @@ pub fn Routine(compact: bool) -> Element {
             }
 
             ul { class: if compact { "space-y-3" } else { "space-y-3 overflow-auto" },
-                for item in items.iter().cloned() {
+                for (item, date_for_row) in items.iter().cloned().map(|item| {
+                    // Cloned fresh per item, then *moved* into the `move`
+                    // closure below — capturing `mutation_date` itself
+                    // there would try to move the one outer
+                    // `Option<String>` again on every iteration.
+                    let date = mutation_date.clone();
+                    (item, date)
+                }) {
                     li { key: "{item.template_id}",
                         RoutineRow {
                             item: item.clone(),
                             on_toggle: move |completed: bool| {
                                 let template_id = item.template_id;
                                 let user_id = (state.active_user_id)();
+                                let date = date_for_row.clone();
                                 async move {
-                                    let _ = toggle_routine_task(user_id, template_id, completed).await;
+                                    let Some(date) = date else { return };
+                                    let key = new_idempotency_key();
+                                    let _ = toggle_routine_task(user_id, template_id, completed, date, key).await;
                                     routine.restart();
                                 }
                             },
@@ -83,14 +195,24 @@ pub fn Routine(compact: bool) -> Element {
                 div { class: "space-y-2",
                     h3 { class: "text-lg font-bold text-sheffield-dark", "Extra tasks" }
                     ul { class: "space-y-2",
-                        for task in custom.iter().cloned() {
+                        for (task, date_for_task) in custom.iter().cloned().map(|task| {
+                            // Same reasoning as `date_for_row` above: a fresh
+                            // per-item clone, moved into this item's `move`
+                            // closure.
+                            let date = mutation_date.clone();
+                            (task, date)
+                        }) {
                             li { key: "{task.id}",
                                 CustomTaskRow {
                                     task: task.clone(),
                                     on_toggle: move |completed: bool| {
                                         let id = task.id;
+                                        let owner = task.user_id;
+                                        let date = date_for_task.clone();
                                         async move {
-                                            let _ = toggle_custom_task(id, completed).await;
+                                            let Some(date) = date else { return };
+                                            let key = new_idempotency_key();
+                                            let _ = toggle_custom_task(owner, id, completed, date, key).await;
                                             tasks.restart();
                                         }
                                     },
@@ -274,4 +396,69 @@ pub async fn encode_first_photo(files: Vec<FileData>) -> Option<String> {
     let file = files.into_iter().next()?;
     let bytes = file.read_bytes().await.ok()?;
     Some(base64::engine::general_purpose::STANDARD.encode(bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -----------------------------------------------------------------
+    // RoutineDateState (T1.5 / R-24a)
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn bus_today_wins_even_over_a_successful_fetch() {
+        let state = RoutineDateState::resolve(
+            Some("2026-08-29".to_string()),
+            Some(Ok("2026-08-28".to_string())),
+        );
+        assert_eq!(state, RoutineDateState::Ready("2026-08-29".to_string()));
+    }
+
+    #[test]
+    fn no_bus_value_falls_back_to_the_fetch_outcome() {
+        assert_eq!(
+            RoutineDateState::resolve(None, Some(Ok("2026-08-29".to_string()))),
+            RoutineDateState::Ready("2026-08-29".to_string())
+        );
+    }
+
+    #[test]
+    fn a_failed_fetch_with_no_bus_value_is_an_explicit_error_not_a_default() {
+        // R-24a: the v1 code's `today().await.unwrap_or_default()` turned
+        // this exact situation into an empty string that silently rendered
+        // as "nothing done today". The panel must be able to tell the
+        // difference between "it is midnight" and "the fetch failed".
+        let state = RoutineDateState::resolve(None, Some(Err("network error".to_string())));
+        assert_eq!(state, RoutineDateState::Error);
+        assert_eq!(state.date(), None);
+    }
+
+    #[test]
+    fn nothing_has_answered_yet_is_loading_not_error() {
+        let state = RoutineDateState::resolve(None, None);
+        assert_eq!(state, RoutineDateState::Loading);
+        assert_eq!(state.date(), None);
+    }
+
+    #[test]
+    fn ready_state_exposes_its_date_for_a_mutation() {
+        let state = RoutineDateState::resolve(Some("2026-08-29".to_string()), None);
+        assert_eq!(state.date(), Some("2026-08-29"));
+    }
+
+    // -----------------------------------------------------------------
+    // Idempotency keys
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn idempotency_keys_are_never_repeated_on_this_client() {
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..500 {
+            assert!(
+                seen.insert(new_idempotency_key()),
+                "new_idempotency_key produced a duplicate"
+            );
+        }
+    }
 }
