@@ -21,7 +21,9 @@ use std::time::Duration;
 
 use family_calendar::server::api::realtime;
 use family_calendar::server::db;
-use family_calendar::shared::types::{StrokePoint, StrokeSegment, WsMessage};
+use family_calendar::shared::types::{
+    ClientId, ClientMessage, ServerMessage, Stroke, StrokePoint, DEFAULT_BOARD_ID,
+};
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message as WsClientMessage;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
@@ -400,16 +402,25 @@ async fn ws_stroke_from_one_client_fans_out_to_second_client() {
         .await
         .expect("client B upgrades to a websocket");
 
-    let segment = StrokeSegment {
-        from: StrokePoint { x: 0.1, y: 0.2 },
-        to: StrokePoint { x: 0.3, y: 0.4 },
+    // T1.2 ported this from protocol v1's `WsMessage::Draw { segment }` to
+    // protocol v2's `ClientMessage::Draw`/`ServerMessage::Draw` split
+    // (`docs/PROTOCOL.md`). The T0.3 assertion — a stroke sent by one client
+    // reaches a second client over `/ws` — is unchanged and, since v2 also
+    // proves the server stamped the originating `ClientId`, strengthened.
+    let stroke = Stroke {
+        points: vec![
+            StrokePoint { x: 0.1, y: 0.2 },
+            StrokePoint { x: 0.3, y: 0.4 },
+        ],
         color: "ws-fanout-test-marker".to_string(),
         width: 2.5,
     };
-    let payload = serde_json::to_string(&WsMessage::Draw {
-        segment: segment.clone(),
+    let client_a_id = expect_hello(&mut client_a).await;
+    let payload = serde_json::to_string(&ClientMessage::Draw {
+        board_id: DEFAULT_BOARD_ID,
+        stroke: stroke.clone(),
     })
-    .expect("WsMessage serializes");
+    .expect("ClientMessage serializes");
 
     client_a
         .send(WsClientMessage::text(payload))
@@ -417,10 +428,32 @@ async fn ws_stroke_from_one_client_fans_out_to_second_client() {
         .expect("client A sends a stroke over the socket");
 
     let received = recv_matching(&mut client_b, "ws-fanout-test-marker").await;
-    let parsed: WsMessage = serde_json::from_str(&received).expect("valid WsMessage JSON");
+    let parsed: ServerMessage = serde_json::from_str(&received).expect("valid ServerMessage JSON");
     match parsed {
-        WsMessage::Draw { segment: got } => assert_eq!(got, segment),
+        ServerMessage::Draw {
+            board_id,
+            origin,
+            stroke: got,
+            ..
+        } => {
+            assert_eq!(got, stroke);
+            assert_eq!(board_id, DEFAULT_BOARD_ID);
+            assert_eq!(
+                origin, client_a_id,
+                "the server stamps the sending client's id on the fan-out"
+            );
+        }
         other => panic!("expected client B to receive a Draw message, got {other:?}"),
+    }
+}
+
+/// Protocol v2: the server sends `Hello` (with the id it minted) as the first
+/// frame on every connection.
+async fn expect_hello(socket: &mut WsStream) -> ClientId {
+    let text = recv_matching(socket, "\"hello\"").await;
+    match serde_json::from_str::<ServerMessage>(&text).expect("valid ServerMessage JSON") {
+        ServerMessage::Hello { client_id, .. } => client_id,
+        other => panic!("expected Hello, got {other:?}"),
     }
 }
 
@@ -433,11 +466,22 @@ async fn ws_server_publish_reaches_connected_client() {
         .await
         .expect("client upgrades to a websocket");
 
-    realtime::publish(&WsMessage::RoutineUpdated { user_id: 987_654 });
+    // Ported to protocol v2 by T1.2: `RoutineUpdated` now also carries the
+    // date, so a client refetches only the profile/day that changed (W7).
+    realtime::publish(&ServerMessage::RoutineUpdated {
+        user_id: 987_654,
+        date: "2026-08-29".to_string(),
+    });
 
     let received = recv_matching(&mut client, "987654").await;
-    let parsed: WsMessage = serde_json::from_str(&received).expect("valid WsMessage JSON");
-    assert_eq!(parsed, WsMessage::RoutineUpdated { user_id: 987_654 });
+    let parsed: ServerMessage = serde_json::from_str(&received).expect("valid ServerMessage JSON");
+    assert_eq!(
+        parsed,
+        ServerMessage::RoutineUpdated {
+            user_id: 987_654,
+            date: "2026-08-29".to_string(),
+        }
+    );
 }
 
 // ---------------------------------------------------------------------------

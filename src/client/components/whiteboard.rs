@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 
-use crate::client::realtime::use_realtime;
-use crate::shared::types::{StrokePoint, StrokeSegment, WsMessage};
+use crate::client::realtime::{now_millis, use_realtime, StrokeBatcher};
+use crate::shared::types::{ClientMessage, Stroke, StrokePoint, StrokeSegment, DEFAULT_BOARD_ID};
 
 pub const CANVAS_ID: &str = "sheffield-whiteboard";
 
@@ -15,19 +15,31 @@ const PALETTE: [(&str, &str); 5] = [
 
 #[component]
 pub fn Whiteboard() -> Element {
-    let (bus, sender) = use_realtime();
+    let (mut bus, sender) = use_realtime();
     let mut color = use_signal(|| PALETTE[0].1.to_string());
     let mut width = use_signal(|| 4.0_f64);
-    let mut last = use_signal(|| None::<StrokePoint>);
+    let mut batcher = use_signal(StrokeBatcher::new);
 
     // Keep the backing store in sync with the device pixel ratio so strokes
     // stay crisp on the Fire tablet and on retina phones.
     use_effect(canvas::sync_device_pixel_ratio);
 
-    // Paint strokes coming from the other clients.
+    // Protocol v2 (T1.2): drain every stroke that arrived since the last
+    // render — the single-slot v1 signal silently dropped the rest (R-22a).
+    // T2.3 owns the persistence/repaint half of this.
     use_effect(move || {
-        if let Some(segment) = (bus.inbound_stroke)() {
-            canvas::draw_segment(&segment);
+        for stroke in bus.drain_inbound_strokes() {
+            canvas::draw_stroke(&stroke);
+        }
+    });
+
+    // A `Snapshot` replaces the whole canvas: clear, then replay in seq order.
+    use_effect(move || {
+        if let Some(strokes) = (bus.snapshot)() {
+            canvas::clear();
+            for stroke in &strokes {
+                canvas::draw_stroke(stroke);
+            }
         }
     });
 
@@ -36,9 +48,15 @@ pub fn Whiteboard() -> Element {
         canvas::clear();
     });
 
-    let draw_local = move |segment: StrokeSegment| {
-        canvas::draw_segment(&segment);
-        sender.send(WsMessage::Draw { segment });
+    // Protocol v2: `pointermove` paints locally and appends to the open
+    // stroke; the batcher emits at most one `Draw` per 34 ms frame (R-06).
+    let flush = move |stroke: Option<Stroke>| {
+        if let Some(stroke) = stroke {
+            sender.send(ClientMessage::Draw {
+                board_id: DEFAULT_BOARD_ID,
+                stroke,
+            });
+        }
     };
 
     rsx! {
@@ -75,7 +93,7 @@ pub fn Whiteboard() -> Element {
                     class: "ml-auto rounded-xl bg-sheffield-accent px-4 py-2 font-bold text-white",
                     onclick: move |_| {
                         canvas::clear();
-                        sender.send(WsMessage::ClearCanvas);
+                        sender.send(ClientMessage::ClearBoard { board_id: DEFAULT_BOARD_ID });
                     },
                     "Clear Canvas"
                 }
@@ -85,22 +103,40 @@ pub fn Whiteboard() -> Element {
                 id: CANVAS_ID,
                 class: "h-full min-h-[16rem] w-full flex-1 touch-none rounded-2xl bg-white ring-1 ring-slate-200",
                 onpointerdown: move |event| {
-                    last.set(normalize(&event));
+                    let Some(point) = normalize(&event) else { return };
+                    batcher.write().begin(color(), width(), point);
                 },
                 onpointermove: move |event| {
-                    let Some(to) = normalize(&event) else { return };
-                    if let Some(from) = last() {
-                        draw_local(StrokeSegment {
-                            from,
-                            to,
-                            color: color(),
-                            width: width(),
-                        });
+                    if !batcher.peek().is_open() {
+                        return;
                     }
-                    last.set(Some(to));
+                    let Some(to) = normalize(&event) else { return };
+                    let (accepted, previous) = {
+                        let mut open = batcher.write();
+                        let previous = open.last_point();
+                        (open.push(to), previous)
+                    };
+                    if accepted {
+                        if let Some(from) = previous {
+                            canvas::draw_segment(&StrokeSegment {
+                                from,
+                                to,
+                                color: color(),
+                                width: width(),
+                            });
+                        }
+                    }
+                    let due = batcher.write().flush_if_due(now_millis());
+                    flush(due);
                 },
-                onpointerup: move |_| last.set(None),
-                onpointerleave: move |_| last.set(None),
+                onpointerup: move |_| {
+                    let final_stroke = batcher.write().end();
+                    flush(final_stroke);
+                },
+                onpointerleave: move |_| {
+                    let final_stroke = batcher.write().end();
+                    flush(final_stroke);
+                },
             }
         }
     }
@@ -122,7 +158,7 @@ fn normalize(event: &Event<PointerData>) -> Option<StrokePoint> {
 #[cfg(all(feature = "web", target_arch = "wasm32"))]
 mod canvas {
     use super::CANVAS_ID;
-    use crate::shared::types::StrokeSegment;
+    use crate::shared::types::{Stroke, StrokeSegment};
     use wasm_bindgen::JsCast;
 
     fn element() -> Option<web_sys::HtmlCanvasElement> {
@@ -180,6 +216,24 @@ mod canvas {
         context.stroke();
     }
 
+    /// Paint one batched stroke (protocol v2: one message, many points).
+    pub fn draw_stroke(stroke: &Stroke) {
+        let Some(context) = context() else { return };
+        let Some((width, height)) = css_size() else {
+            return;
+        };
+        let mut points = stroke.points.iter();
+        let Some(first) = points.next() else { return };
+        context.set_stroke_style_str(&stroke.color);
+        context.set_line_width(stroke.width);
+        context.begin_path();
+        context.move_to(first.x * width, first.y * height);
+        for point in points {
+            context.line_to(point.x * width, point.y * height);
+        }
+        context.stroke();
+    }
+
     pub fn clear() {
         let Some(context) = context() else { return };
         let Some((width, height)) = css_size() else {
@@ -191,12 +245,13 @@ mod canvas {
 
 #[cfg(not(all(feature = "web", target_arch = "wasm32")))]
 mod canvas {
-    use crate::shared::types::StrokeSegment;
+    use crate::shared::types::{Stroke, StrokeSegment};
 
     pub fn css_size() -> Option<(f64, f64)> {
         None
     }
     pub fn sync_device_pixel_ratio() {}
     pub fn draw_segment(_segment: &StrokeSegment) {}
+    pub fn draw_stroke(_stroke: &Stroke) {}
     pub fn clear() {}
 }

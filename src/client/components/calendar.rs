@@ -8,18 +8,19 @@ use crate::shared::types::CalendarEvent;
 pub fn CalendarPanel() -> Element {
     let (bus, _sender) = use_realtime();
 
-    // Initial payload comes from the server; later updates arrive over the
-    // WebSocket and land in `bus.calendar_events`.
-    let initial = use_resource(move || async move { get_today_events().await });
+    // Protocol v2 (T1.2): `CalendarUpdated` carries only the affected date, so
+    // the panel refetches instead of trusting a pushed payload. Reading
+    // `calendar_version` makes the broadcast a reactive dependency of the
+    // resource. T2.4 replaces this with the `Loading`/`Empty`/`Error` state
+    // machine (W3).
+    let events_resource = use_resource(move || async move {
+        let _version = (bus.calendar_version)();
+        get_today_events().await
+    });
 
-    let pushed = (bus.calendar_events)();
-    let events: Vec<CalendarEvent> = if pushed.is_empty() {
-        match &*initial.read_unchecked() {
-            Some(Ok(events)) => events.clone(),
-            _ => Vec::new(),
-        }
-    } else {
-        pushed
+    let events: Vec<CalendarEvent> = match &*events_resource.read_unchecked() {
+        Some(Ok(events)) => events.clone(),
+        _ => Vec::new(),
     };
 
     rsx! {

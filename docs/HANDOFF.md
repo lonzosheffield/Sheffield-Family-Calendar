@@ -250,3 +250,87 @@ would fail with a migration version mismatch. T1.1 therefore added a root
 `migrations/`'s `.sql` files. No task owned that file; flagging it here as the
 Boss micro-change it effectively is. Later migrations inherit the rule
 automatically.
+
+## T1.2 — Realtime protocol v2 (`docs/PROTOCOL.md`)
+
+### Requests for files T1.2 does not own
+
+- **H-7 · `src/server/router.rs` (T0.6 → T1.3 → T2.5): start the midnight tick
+  explicitly.** The DST-safe tick lives in
+  `server::api::realtime::spawn_midnight_tick()` and is started, once per
+  process, by `ensure_background_tasks()` from the `/ws` handler — so it does
+  run, but only from the first WebSocket upgrade. Its proper home is one line
+  at the top of `router::run`, next to `calendar::spawn_polling_task()`:
+
+  ```rust
+  crate::server::api::realtime::ensure_background_tasks();
+  ```
+
+  T1.2 did not add it because `router.rs` is T0.6-owned and T1.3 is editing it
+  in the same wave. Boss to apply between waves, or T1.3 to fold in.
+
+- **H-8 · `MaximizedView` needs a `Screensaver` variant for T2.7.** PLAN §3
+  T2.7 calls for a scheduled `SetView(Screensaver)`, but `MaximizedView`
+  (`shared/types.rs`, aliased as `View` by the protocol) has only
+  `None`/`Routine`/`Calendar`/`Whiteboard`, and adding a variant forces a new
+  arm in two exhaustive matches in `src/client/components/dashboard.rs`, which
+  is T2.1's file. T1.2 left the enum alone rather than edit a file it does not
+  own; T2.1 should add the variant when it rebuilds the kiosk views.
+
+### Files outside T1.2's ownership that had to change to keep the tree building
+
+The v1 `WsMessage` enum is gone (§P2c splits it into `ClientMessage` /
+`ServerMessage`), so every call site had to move with it. These are mechanical
+call-site ports, not feature work, and none is in another wave-1-a task's file
+set:
+
+| File | Owner | Change |
+| --- | --- | --- |
+| `src/server/calendar.rs` | T2.4 | `publish(WsMessage::CalendarUpdated { events })` → `publish(ServerMessage::CalendarUpdated { date })`. v2 does not push the payload; clients refetch. |
+| `src/client/components/calendar.rs` | T2.4 | Reads `bus.calendar_version` and refetches through `get_today_events()` instead of rendering a pushed payload. The `Loading`/`Empty`/`Error` state machine (W3) is still T2.4's. |
+| `src/client/components/whiteboard.rs` | T2.3 | Sends `ClientMessage::Draw`/`ClearBoard`, uses `StrokeBatcher` for the ≤ 30 msg/s cap, drains `bus.inbound_strokes`, replays `Snapshot`. Persistence, `cleared_at`, undo-own-last and `ResizeObserver` remain T2.3's. |
+| `tests/http_tests.rs` | T0.3 | The two `ws_*` tests were **ported, not weakened**, exactly as T0.4 ported them to Dioxus 0.7: the same assertions (a stroke from client A reaches client B; a server `publish` reaches a client) over the v2 envelope, plus a new `origin` check. |
+
+### Deviations from §P2c, and why
+
+1. **`ClientId` is `ClientId(String)`, not `ClientId(Uuid)`.** `uuid` is a
+   server-only optional dependency and `shared/types.rs` also compiles to
+   wasm. The server still mints a v4 UUID; only the Rust type differs, the
+   wire bytes do not. Enabling `uuid` for the web feature means editing
+   `Cargo.toml`, which §P4 reserves for a serialized Boss micro-commit — and
+   T1.3 is editing it in the same wave.
+2. **Dates and timestamps on the wire are `String`, not `NaiveDate` /
+   `DateTime<Local>`,** for the same reason (`chrono` is server-only). The
+   serialised form is identical (`YYYY-MM-DD`, RFC 3339).
+3. **The stroke flush interval is 34 ms, not 33 ms.** §P2c says "33 ms" and
+   "hard cap ≤ 30 messages/second" in the same paragraph, but 1000/33 = 30.3/s
+   breaks the cap it is meant to enforce. 34 ms gives 29.4/s. Recorded in
+   `docs/PROTOCOL.md` §6.
+4. **The DST test models `America/New_York` and `Europe/London` with a
+   hand-written `chrono::TimeZone`** instead of adding `chrono-tz`
+   (`Cargo.toml` again). It derives ambiguity and gaps from the UTC rule, so
+   `next_midnight`'s `.earliest()` is exercised against real
+   `MappedLocalTime::{None, Ambiguous}` values rather than a lookup table. If
+   Boss would rather add `chrono-tz 0.10` as a dev-dependency, the test's
+   `dst` module can be deleted and the two constants swapped for `Tz` values.
+
+### Seams left for later tasks
+
+- **T1.4:** `server::api::realtime::session::is_valid` is the *only* place the
+  hub validates a parent session — replace that one body with the argon2id /
+  30-day session store and `SetView` + `SetActiveProfile` are done. A new
+  `src/server/api/profiles.rs` is waiting, with `publish_profiles_updated()`
+  already wired to `ServerMessage::ProfilesUpdated`.
+- **T1.5:** `src/server/api/routine.rs` is yours. `toggle_custom_task` still
+  does **not** publish `TasksUpdated` — G22 is explicitly T1.5's row, and the
+  broadcast needs the owning `user_id`, which the current signature does not
+  carry. The message and its `{user_id, date}` scoping already exist.
+- **T2.3:** `record_stroke` / `clear_board` / `snapshot` in
+  `server::api::realtime` are an in-memory store with the exact signatures and
+  `seq` contract `docs/PROTOCOL.md` §5 freezes. Swap the bodies for
+  `whiteboard_strokes` rows.
+- **T1.6 / T2.4:** register work on the midnight tick with
+  `realtime::on_day_rolled(hook)` rather than editing the loop.
+- **T1.7:** `realtime::connected_clients()` returns the live WebSocket count
+  for `/health`; `ServerMessage::Health { stale, last_update }` is the badge
+  message and `RealtimeBus::{connected, stale}` the client-side signals.

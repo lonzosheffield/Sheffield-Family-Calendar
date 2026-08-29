@@ -8,7 +8,7 @@ use serde::Deserialize;
 use tokio::sync::RwLock;
 
 use crate::server::api::realtime;
-use crate::shared::types::{CalendarEvent, WsMessage};
+use crate::shared::types::{CalendarEvent, ServerMessage};
 
 pub const POLL_INTERVAL: Duration = Duration::from_secs(15 * 60);
 
@@ -28,9 +28,15 @@ pub async fn cached_events() -> Vec<CalendarEvent> {
 async fn store_events(events: Vec<CalendarEvent>) {
     let mut guard = cache().write().await;
     if *guard != events {
-        *guard = events.clone();
+        *guard = events;
         drop(guard);
-        realtime::publish(&WsMessage::CalendarUpdated { events });
+        // Protocol v2 (T1.2): the broadcast carries only the affected date;
+        // clients refetch through `api::calendar::get_today_events`. Pushing
+        // the payload itself is what made `CalendarUpdated` spoofable in v1
+        // (G13), and it kept large frames on the broadcast channel.
+        realtime::publish(&ServerMessage::CalendarUpdated {
+            date: chrono::Local::now().format("%Y-%m-%d").to_string(),
+        });
     }
 }
 

@@ -73,18 +73,191 @@ pub struct StrokeSegment {
     pub width: f64,
 }
 
-/// Messages exchanged over the `/ws` broadcast channel.
+/// A whole pen stroke: every point captured between `pointerdown` and
+/// `pointerup`, carried in **one** message (`docs/PROTOCOL.md`). Protocol v2
+/// replaced v1's "one message per `pointermove`" segment with this batched
+/// form — the change that stops a scribbling child from flooding the
+/// broadcast channel and bricking the TV (G20 / R-06).
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+pub struct Stroke {
+    pub points: Vec<StrokePoint>,
+    pub color: String,
+    pub width: f64,
+}
+
+impl Stroke {
+    pub fn new(color: String, width: f64) -> Self {
+        Self {
+            points: Vec::new(),
+            color,
+            width,
+        }
+    }
+
+    /// The stroke expanded into the pairwise segments a canvas draws.
+    pub fn segments(&self) -> Vec<StrokeSegment> {
+        self.points
+            .windows(2)
+            .map(|pair| StrokeSegment {
+                from: pair[0],
+                to: pair[1],
+                color: self.color.clone(),
+                width: self.width,
+            })
+            .collect()
+    }
+}
+
+/// Protocol version carried by [`ClientMessage::Hello`] and
+/// [`ServerMessage::Hello`]. Raised to 2 by T1.2.
+pub const PROTOCOL_VERSION: u8 = 2;
+
+/// The single whiteboard (PURPLE §P5.5 default 15: one board; named boards cut).
+pub const DEFAULT_BOARD_ID: i64 = 1;
+
+/// Identity of one WebSocket connection.
+///
+/// **Minted by the server** at upgrade (a v4 UUID rendered as text) and handed
+/// to the client in [`ServerMessage::Hello`]; the server stamps it onto every
+/// `Draw`/`BoardCleared` it fans out. Clients drop messages whose `origin`
+/// equals their own id, which is how self-echo is suppressed *without* a
+/// client being able to claim another client's identity (W2 / R-13).
+///
+/// Held as a `String` rather than a `uuid::Uuid` because `uuid` is a
+/// server-only optional dependency while this module also compiles to wasm;
+/// the wire representation is identical either way (`docs/PROTOCOL.md`).
+#[derive(Clone, PartialEq, Eq, Hash, Debug, Default, Serialize, Deserialize)]
+pub struct ClientId(pub String);
+
+impl ClientId {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for ClientId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// Opaque parent session token; issued and verified by T1.4's `auth.rs`.
+pub type SessionToken = String;
+
+/// Panel the kiosk should show. Aliased because `docs/PROTOCOL.md` and
+/// PURPLE §P2c name this field's type `View`.
+pub type View = MaximizedView;
+
+/// Why the server asked a client to resynchronise.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResyncReason {
+    /// The client fell behind the broadcast channel or its outbound queue.
+    Lagged,
+    /// The connection was (re-)established after a server restart.
+    ServerRestart,
+    /// The client asked for a resync itself.
+    ClientRequested,
+}
+
+/// Everything a browser may send to the server over `/ws`.
+///
+/// The server **never** rebroadcasts one of these verbatim (G13): each is
+/// parsed, rate-limited, authorised and translated into a [`ServerMessage`]
+/// the server itself mints. Anything that does not parse as a `ClientMessage`
+/// is dropped with a warning and reaches no other client.
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum WsMessage {
-    /// A routine task was toggled for `user_id`; clients should refetch.
-    RoutineUpdated { user_id: u32 },
-    /// A whiteboard stroke segment was drawn by another client.
-    Draw { segment: StrokeSegment },
-    /// The whiteboard was cleared.
-    ClearCanvas,
-    /// Freshly polled calendar events for today.
-    CalendarUpdated { events: Vec<CalendarEvent> },
+pub enum ClientMessage {
+    Hello {
+        protocol: u8,
+    },
+    Ping {
+        nonce: u64,
+    },
+    Draw {
+        board_id: i64,
+        stroke: Stroke,
+    },
+    ClearBoard {
+        board_id: i64,
+    },
+    SetView {
+        view: View,
+        auth: Option<SessionToken>,
+    },
+    SetActiveProfile {
+        user_id: i64,
+        auth: Option<SessionToken>,
+    },
+    RequestSnapshot {
+        board_id: i64,
+        since_seq: i64,
+    },
+}
+
+/// Everything the server may send to a browser over `/ws`.
+///
+/// `server_time`, `today`, `date` and `last_update` are carried as strings
+/// (RFC3339 and `YYYY-MM-DD` respectively) because `chrono` is a server-only
+/// optional dependency; the bytes on the wire are identical to what
+/// `DateTime<Local>` / `NaiveDate` would produce (`docs/PROTOCOL.md`).
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ServerMessage {
+    Hello {
+        client_id: ClientId,
+        protocol: u8,
+        server_time: String,
+        today: String,
+    },
+    Pong {
+        nonce: u64,
+    },
+    Resync {
+        reason: ResyncReason,
+    },
+    Draw {
+        board_id: i64,
+        seq: i64,
+        origin: ClientId,
+        stroke: Stroke,
+    },
+    BoardCleared {
+        board_id: i64,
+        seq: i64,
+        origin: ClientId,
+    },
+    Snapshot {
+        board_id: i64,
+        seq: i64,
+        strokes: Vec<Stroke>,
+    },
+    RoutineUpdated {
+        user_id: i64,
+        date: String,
+    },
+    TasksUpdated {
+        user_id: i64,
+        date: String,
+    },
+    ProfilesUpdated,
+    CalendarUpdated {
+        date: String,
+    },
+    DayRolled {
+        date: String,
+    },
+    SetView {
+        view: View,
+    },
+    SetActiveProfile {
+        user_id: i64,
+    },
+    Health {
+        stale: bool,
+        last_update: String,
+    },
 }
 
 /// Percentage of the daily routine completed by a single item.
