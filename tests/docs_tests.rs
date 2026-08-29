@@ -55,3 +55,78 @@ fn owner_checklist_has_a_device_row() {
         "docs/OWNER_CHECKLIST.md must contain a row identifying the `Device`"
     );
 }
+
+// ---------------------------------------------------------------------------
+// T0.1 acceptance tests — docs/NON_RUST.md, docs/DEV_WINDOWS.md, tailwind.config.js
+// (`docs/reviews/PURPLE_TEAM.md` §P3, row T0.1).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_non_rust_md_exists_with_required_content() {
+    let content = read_doc("docs/NON_RUST.md");
+
+    // Count only data rows (skip header and separator)
+    let data_rows = content
+        .lines()
+        .filter(|line| {
+            let trimmed = line.trim();
+            trimmed.starts_with('|')
+                && !trimmed.contains("---")
+                && !trimmed.starts_with("| Component")
+        })
+        .count();
+
+    assert!(
+        data_rows >= 9,
+        "docs/NON_RUST.md must have at least 9 data rows; found {data_rows}"
+    );
+
+    // Check for required strings
+    let required_strings = ["sw.js", "tailwindcss-windows-x64", "Fully Kiosk", "adb"];
+    for required in &required_strings {
+        assert!(
+            content.contains(required),
+            "docs/NON_RUST.md must contain the string '{required}'"
+        );
+    }
+}
+
+#[test]
+fn test_tailwind_config_no_index_html() {
+    let content = read_doc("tailwind.config.js");
+
+    assert!(
+        !content.contains("./index.html"),
+        "tailwind.config.js must not contain the dead './index.html' glob"
+    );
+
+    // Also verify the content field still exists and has the main glob
+    assert!(
+        content.contains("./src/**/*.{rs,html,css}"),
+        "tailwind.config.js must contain the main src glob pattern"
+    );
+}
+
+#[test]
+fn test_dev_windows_md_exists_with_path_prefix() {
+    let content = read_doc("docs/DEV_WINDOWS.md");
+
+    // Verify it's the first step
+    assert!(
+        content.contains("### Step 1: Update `$env:PATH`")
+            || content.contains("### Step 1: Update $env:PATH"),
+        "docs/DEV_WINDOWS.md step 1 must be the PATH prefix setup"
+    );
+
+    // Verify it contains the Windows PATH setup instructions
+    assert!(
+        content.contains("$env:PATH") && content.contains(".cargo") && content.contains("scoop"),
+        "docs/DEV_WINDOWS.md step 1 must describe the PATH prefix with .cargo/bin and scoop"
+    );
+
+    // Verify Tailwind v3.4.17 is mentioned
+    assert!(
+        content.contains("3.4.17") || content.contains("tailwindcss-windows-x64"),
+        "docs/DEV_WINDOWS.md must mention Tailwind v3.4.17"
+    );
+}
