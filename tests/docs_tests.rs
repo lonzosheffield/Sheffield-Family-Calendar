@@ -3,6 +3,7 @@
 //! Pure file assertions; no server/db features needed, so this runs under any
 //! `cargo test` invocation (including `--features server`).
 
+use image::ImageDecoder;
 use std::fs;
 use std::path::Path;
 
@@ -128,5 +129,113 @@ fn test_dev_windows_md_exists_with_path_prefix() {
     assert!(
         content.contains("3.4.17") || content.contains("tailwindcss-windows-x64"),
         "docs/DEV_WINDOWS.md must mention Tailwind v3.4.17"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// T0.7 acceptance tests — PWA icons and asset fixtures
+// (`docs/reviews/PURPLE_TEAM.md` §P3, row T0.7).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_pwa_icons_are_generated_with_correct_dimensions() {
+    use std::fs;
+    use std::path::Path;
+
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let icons_dir = manifest_dir.join("assets/icons");
+
+    // Check that all required icon files exist
+    let required_icons = vec![
+        ("icon-192.png", 192, 192),
+        ("icon-192-maskable.png", 192, 192),
+        ("icon-512.png", 512, 512),
+        ("icon-512-maskable.png", 512, 512),
+    ];
+
+    for (filename, expected_width, expected_height) in required_icons {
+        let path = icons_dir.join(filename);
+        assert!(
+            path.exists(),
+            "Expected icon file not found: {}",
+            path.display()
+        );
+
+        // Verify the dimensions by reading the PNG
+        let data = fs::read(&path).unwrap_or_else(|e| panic!("Failed to read {}: {}", filename, e));
+        let decoder = image::codecs::png::PngDecoder::new(std::io::Cursor::new(&data))
+            .expect("Failed to create PNG decoder");
+        let (width, height) = decoder.dimensions();
+        assert_eq!(
+            width, expected_width,
+            "{} width mismatch: expected {}, got {}",
+            filename, expected_width, width
+        );
+        assert_eq!(
+            height, expected_height,
+            "{} height mismatch: expected {}, got {}",
+            filename, expected_height, height
+        );
+    }
+}
+
+#[test]
+fn test_photo_fixture_has_sufficient_resolution() {
+    use std::fs;
+    use std::path::Path;
+
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures/photo_12mp.jpg");
+
+    assert!(
+        fixture_path.exists(),
+        "Expected photo fixture not found: {}",
+        fixture_path.display()
+    );
+
+    // Verify the dimensions
+    let data = fs::read(&fixture_path).expect("Failed to read photo_12mp.jpg");
+    let decoder = image::codecs::jpeg::JpegDecoder::new(std::io::Cursor::new(&data))
+        .expect("Failed to create JPEG decoder");
+    let (width, height) = decoder.dimensions();
+
+    assert!(
+        width >= 4000 && height >= 3000,
+        "Photo fixture dimensions must be at least 4000x3000, got {}x{}",
+        width,
+        height
+    );
+}
+
+#[test]
+fn test_screensaver_assets_exist() {
+    use std::fs;
+    use std::path::Path;
+
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let screensaver_dir = manifest_dir.join("assets/screensaver");
+
+    assert!(
+        screensaver_dir.exists(),
+        "Screensaver directory not found: {}",
+        screensaver_dir.display()
+    );
+
+    // Check for at least 3 screensaver JPEGs
+    let entries = fs::read_dir(&screensaver_dir).expect("Failed to read screensaver directory");
+    let jpg_count = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.path()
+                .extension()
+                .map(|ext| ext.eq_ignore_ascii_case("jpg"))
+                .unwrap_or(false)
+        })
+        .count();
+
+    assert!(
+        jpg_count >= 3,
+        "Expected at least 3 screensaver JPEGs, found {}",
+        jpg_count
     );
 }

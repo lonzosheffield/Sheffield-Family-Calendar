@@ -1,0 +1,11 @@
+[package]
+name = "xtask"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+resvg = "0.41"
+usvg = "0.41"
+tiny-skia = "0.11"
+image = "0.25"
+anyhow = "1.0"

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <!-- Background -->
+  <rect width="256" height="256" fill="#2672B3"/>
+  <!-- Outer ring in Sheffield sun color -->
+  <circle cx="128" cy="128" r="120" fill="none" stroke="#F4D03F" stroke-width="8"/>
+  <!-- Inner circle in light blue -->
+  <circle cx="128" cy="128" r="100" fill="#8BB5DA"/>
+  <!-- Accent circle in accent red -->
+  <circle cx="128" cy="128" r="80" fill="#E86A58"/>
+  <!-- Inner light circle for contrast -->
+  <circle cx="128" cy="128" r="60" fill="#8BB5DA"/>
+  <!-- Center white dot -->
+  <circle cx="128" cy="128" r="30" fill="#FDFDFD"/>
+</svg>

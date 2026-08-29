@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [workspace]
-members = []
+members = ["xtask"]
 
 [dependencies]
 dioxus = { version = "=0.7.10", features = ["router", "fullstack"] }
@@ -55,6 +55,7 @@ image = { version = "0.25", optional = true }
 
 [dev-dependencies]
 tokio-tungstenite = "0.28"
+image = "0.25"
 
 [features]
 default = []
