@@ -70,6 +70,15 @@ pub struct CustomTaskView {
     pub photo_path: Option<String>,
     pub is_completed: bool,
     pub created_at: String,
+    /// `YYYY-MM-DD`, or `None` for a task that never expires. **T2.5**: a
+    /// task whose `due_date` is strictly before the server's today is
+    /// filtered out of [`crate::server::db::custom_tasks`] before it ever
+    /// reaches a client — the "daily auto-hide" PLAN v2 T2.5 asks for.
+    /// Additive field (`docs/HANDOFF.md` "T2.5 → shared/types.rs"); every
+    /// existing construction site got a mechanical `due_date: None` the same
+    /// way T1.1's migration-count bumps were mechanical.
+    #[serde(default)]
+    pub due_date: Option<String>,
 }
 
 /// A single calendar entry pulled from Google Calendar.

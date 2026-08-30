@@ -75,6 +75,9 @@ pub fn canonical_model() -> TvModel {
             photo_path: None,
             is_completed: false,
             created_at: "2026-08-29T07:00:00".to_string(),
+            // T2.5 added `due_date` to `CustomTaskView`; mechanical `None`
+            // here, same as every other pre-existing construction site.
+            due_date: None,
         },
         CustomTaskView {
             id: 42,
@@ -83,6 +86,7 @@ pub fn canonical_model() -> TvModel {
             photo_path: Some("/uploads/dog.jpg".to_string()),
             is_completed: true,
             created_at: "2026-08-29T07:05:00".to_string(),
+            due_date: None,
         },
     ];
 

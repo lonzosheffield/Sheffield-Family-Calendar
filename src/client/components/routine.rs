@@ -1,11 +1,11 @@
-use base64::Engine;
 use dioxus::html::FileData;
 use dioxus::prelude::*;
 
 use crate::client::app::use_app_state;
+use crate::client::components::mobile::queue::{self, QueuedMutation};
 use crate::client::realtime::use_realtime;
 use crate::server::api::{
-    create_photo_task, get_custom_tasks, get_daily_routine, today, toggle_custom_task,
+    delete_custom_task, get_custom_tasks, get_daily_routine, today, toggle_custom_task,
     toggle_routine_task,
 };
 use crate::shared::types::{
@@ -182,7 +182,19 @@ pub fn Routine(compact: bool) -> Element {
                                 async move {
                                     let Some(date) = date else { return };
                                     let key = new_idempotency_key();
-                                    let _ = toggle_routine_task(user_id, template_id, completed, date, key).await;
+                                    // T2.2 H-23: a failed tick is queued (dated + keyed,
+                                    // never regenerated) rather than silently lost — the
+                                    // producer T2.2 built the offline queue for but left
+                                    // to this file's owner to wire in.
+                                    if toggle_routine_task(user_id, template_id, completed, date.clone(), key)
+                                        .await
+                                        .is_err()
+                                    {
+                                        queue::record_offline_failure(
+                                            QueuedMutation::ToggleRoutineTask { user_id, template_id, completed },
+                                            date,
+                                        );
+                                    }
                                     routine.restart();
                                 }
                             },
@@ -212,7 +224,24 @@ pub fn Routine(compact: bool) -> Element {
                                         async move {
                                             let Some(date) = date else { return };
                                             let key = new_idempotency_key();
-                                            let _ = toggle_custom_task(owner, id, completed, date, key).await;
+                                            // T2.2 H-23, same reasoning as the routine toggle above.
+                                            if toggle_custom_task(owner, id, completed, date.clone(), key)
+                                                .await
+                                                .is_err()
+                                            {
+                                                queue::record_offline_failure(
+                                                    QueuedMutation::ToggleCustomTask { user_id: owner, task_id: id, completed },
+                                                    date,
+                                                );
+                                            }
+                                            tasks.restart();
+                                        }
+                                    },
+                                    on_delete: move |_| {
+                                        let id = task.id;
+                                        let owner = task.user_id;
+                                        async move {
+                                            let _ = delete_custom_task(owner, id).await;
                                             tasks.restart();
                                         }
                                     },
@@ -304,30 +333,63 @@ fn RoutineRow(item: RoutineItemView, on_toggle: EventHandler<bool>) -> Element {
     }
 }
 
+/// **T2.5**: `on_delete` is the UI half of "delete task + file" — the
+/// server half (`api::delete_custom_task`, reusing T1.6's
+/// `backup::delete_custom_task` verbatim) removes the row and, when it had
+/// one, its photo file on disk.
 #[component]
-fn CustomTaskRow(task: CustomTaskView, on_toggle: EventHandler<bool>) -> Element {
+fn CustomTaskRow(
+    task: CustomTaskView,
+    on_toggle: EventHandler<bool>,
+    on_delete: EventHandler<()>,
+) -> Element {
     let completed = task.is_completed;
 
     rsx! {
-        button {
-            class: "flex w-full items-center gap-3 rounded-2xl bg-white p-3 text-left shadow-sm ring-1 ring-slate-100",
-            onclick: move |_| on_toggle.call(!completed),
-            if let Some(path) = task.photo_path.clone() {
-                img { class: "h-12 w-12 rounded-lg object-cover", src: "{path}", alt: "{task.title}" }
+        div { class: "flex w-full items-center gap-3 rounded-2xl bg-white p-3 shadow-sm ring-1 ring-slate-100",
+            button {
+                class: "flex flex-1 items-center gap-3 text-left",
+                onclick: move |_| on_toggle.call(!completed),
+                if let Some(path) = task.photo_path.clone() {
+                    img { class: "h-12 w-12 rounded-lg object-cover", src: "{path}", alt: "{task.title}" }
+                }
+                span {
+                    class: if completed { "font-semibold text-slate-400 line-through" } else { "font-semibold" },
+                    "{task.title}"
+                }
+                if let Some(due) = task.due_date.clone() {
+                    span { class: "ml-auto text-xs uppercase tracking-wide text-slate-400", "due {due}" }
+                }
             }
-            span {
-                class: if completed { "font-semibold text-slate-400 line-through" } else { "font-semibold" },
-                "{task.title}"
+            button {
+                class: "shrink-0 rounded-lg px-2 py-1 text-sm font-semibold text-red-500 hover:bg-red-50",
+                aria_label: "Delete {task.title}",
+                onclick: move |event| {
+                    event.stop_propagation();
+                    on_delete.call(());
+                },
+                "Delete"
             }
         }
     }
 }
 
+/// **T2.5**: the photo dialog now posts through the multipart route
+/// ([`upload::submit`]) instead of the base64-through-a-`#[server]`-fn path
+/// (G14 — axum's default 2 MB body limit 413'd every modern phone photo
+/// before it ever reached the database). The file is downscaled to fit
+/// within 1600×1600 and re-encoded to JPEG **client-side**, in the browser,
+/// before it ever leaves the phone — see [`upload`]'s module doc for why that
+/// happens in a small inline JS snippet rather than a dozen new `web-sys`
+/// features. The server (`api::photos::upload_photo_handler`) re-encodes
+/// again regardless, so a direct API call that skips this dialog is never
+/// trusted to have downscaled anything.
 #[component]
 fn PhotoTaskDialog(on_close: EventHandler<()>, on_created: EventHandler<()>) -> Element {
     let state = use_app_state();
     let mut title = use_signal(String::new);
-    let mut photo = use_signal(|| None::<String>);
+    let mut due_date = use_signal(String::new);
+    let mut photo = use_signal(|| None::<(String, Vec<u8>)>);
     let mut saving = use_signal(|| false);
 
     rsx! {
@@ -343,14 +405,24 @@ fn PhotoTaskDialog(on_close: EventHandler<()>, on_created: EventHandler<()>) -> 
                     oninput: move |event| title.set(event.value()),
                 }
 
+                label { class: "block text-sm font-semibold text-slate-500",
+                    "Due date (optional)"
+                    input {
+                        class: "mt-1 w-full rounded-xl border border-slate-200 p-3 text-lg",
+                        r#type: "date",
+                        value: "{due_date}",
+                        oninput: move |event| due_date.set(event.value()),
+                    }
+                }
+
                 input {
                     class: "w-full text-sm",
                     r#type: "file",
                     accept: "image/*",
                     capture: "environment",
                     onchange: move |event| async move {
-                        if let Some(encoded) = encode_first_photo(event.files()).await {
-                            photo.set(Some(encoded));
+                        if let Some(read) = read_first_photo(event.files()).await {
+                            photo.set(Some(read));
                         }
                     },
                 }
@@ -371,9 +443,12 @@ fn PhotoTaskDialog(on_close: EventHandler<()>, on_created: EventHandler<()>) -> 
                         onclick: move |_| async move {
                             saving.set(true);
                             let user_id = (state.active_user_id)();
-                            let result = create_photo_task(user_id, title().trim().to_string(), photo()).await;
+                            let (mime, bytes) = photo().unwrap_or_else(|| (String::new(), Vec::new()));
+                            let due = due_date();
+                            let due = if due.trim().is_empty() { None } else { Some(due) };
+                            let ok = upload::submit(bytes, mime, title().trim().to_string(), user_id, due).await;
                             saving.set(false);
-                            if result.is_ok() {
+                            if ok {
                                 on_created.call(());
                             }
                         },
@@ -385,17 +460,142 @@ fn PhotoTaskDialog(on_close: EventHandler<()>, on_created: EventHandler<()>) -> 
     }
 }
 
-/// Read the first file out of a file-input change event and base64 encode it
-/// for [`create_photo_task`].
+/// Read the first file out of a file-input change event, returning its MIME
+/// type (as reported by the browser's `File.type`, falling back to
+/// `image/jpeg` — the format [`upload`]'s downscale step always re-encodes
+/// to anyway) alongside its raw bytes.
 ///
 /// Dioxus 0.7 changed `FormData::files()` from `Option<Arc<dyn FileEngine>>`
 /// to a plain `Vec<FileData>`, so this takes the 0.7 shape directly. Keeping
 /// it out of the `rsx!` closure is what makes the new signature unit testable
 /// without a browser.
-pub async fn encode_first_photo(files: Vec<FileData>) -> Option<String> {
+pub async fn read_first_photo(files: Vec<FileData>) -> Option<(String, Vec<u8>)> {
     let file = files.into_iter().next()?;
+    let mime = file
+        .content_type()
+        .filter(|mime| !mime.is_empty())
+        .unwrap_or_else(|| "image/jpeg".to_string());
     let bytes = file.read_bytes().await.ok()?;
-    Some(base64::engine::general_purpose::STANDARD.encode(bytes))
+    Some((mime, bytes.to_vec()))
+}
+
+/// Client-side downscale + upload to `POST /api/upload_photo`
+/// ([`crate::server::api::photos::upload_photo_handler`]).
+///
+/// **Why a hand-written `wasm_bindgen(inline_js)` snippet instead of
+/// `web-sys` (`HtmlImageElement`, `createImageBitmap`, canvas `toBlob`,
+/// `fetch`)**: reaching that whole pipeline through `web-sys` needs upwards
+/// of half a dozen additional feature flags, and `Cargo.toml` is not a
+/// T2.5-owned file (`docs/reviews/PURPLE_TEAM.md` §P4 — a feature addition is
+/// a Boss micro-commit between waves, the same reasoning T2.2's `storage.rs`
+/// documents for its own hand-written `localStorage` bindings). The JS here
+/// does exactly three browser-native things Rust cannot do any more cheaply
+/// through `wasm-bindgen`'s already-declared glue exception
+/// (`docs/NON_RUST.md`): decode the file into a `createImageBitmap`, draw it
+/// downscaled onto a `<canvas>` (`drawImage` + `toBlob('image/jpeg', 0.85)`
+/// — the client-side half of PLAN v2 T2.5's "downscale ≤ 1600 px JPEG"), and
+/// `fetch` a `multipart/form-data` body to the route above. `Vec<u8>` and
+/// `Option<String>` cross the FFI boundary using `wasm-bindgen`'s built-in
+/// `Uint8Array`/nullable-string support — no `js_sys` needed either.
+///
+/// The server re-encodes and downscales again regardless
+/// (`api::photos::upload_photo_handler`), so this step is a bandwidth/latency
+/// optimisation for the phone's own upload, never something the server
+/// trusts blindly.
+mod upload {
+    /// Downscale (if a photo was attached) and upload. Returns whether the
+    /// server accepted the task — `false` covers both "the network is down"
+    /// and "the server rejected it", the same coarse signal
+    /// [`super::PhotoTaskDialog`] already showed for the old base64 path.
+    pub async fn submit(
+        bytes: Vec<u8>,
+        mime: String,
+        title: String,
+        user_id: u32,
+        due_date: Option<String>,
+    ) -> bool {
+        imp::submit(bytes, mime, title, user_id, due_date).await
+    }
+
+    #[cfg(all(feature = "web", target_arch = "wasm32"))]
+    mod imp {
+        use wasm_bindgen::prelude::*;
+
+        #[wasm_bindgen(inline_js = r#"
+export async function family_hub_submit_task(bytes, mime, title, userId, dueDate) {
+    try {
+        const form = new FormData();
+        form.append('title', title);
+        form.append('user_id', String(userId));
+        if (dueDate) {
+            form.append('due_date', dueDate);
+        }
+        if (bytes && bytes.length > 0) {
+            const srcBlob = new Blob([bytes], { type: mime || 'image/jpeg' });
+            const bitmap = await createImageBitmap(srcBlob);
+            const maxDim = 1600;
+            let width = bitmap.width;
+            let height = bitmap.height;
+            if (width > maxDim || height > maxDim) {
+                const scale = Math.min(maxDim / width, maxDim / height);
+                width = Math.max(1, Math.round(width * scale));
+                height = Math.max(1, Math.round(height * scale));
+            }
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(bitmap, 0, 0, width, height);
+            const outBlob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.85));
+            if (outBlob) {
+                form.append('photo', outBlob, 'photo.jpg');
+            }
+        }
+        const response = await fetch('/api/upload_photo', { method: 'POST', body: form });
+        return response.ok;
+    } catch (err) {
+        console.error('family hub photo upload failed', err);
+        return false;
+    }
+}
+"#)]
+        extern "C" {
+            async fn family_hub_submit_task(
+                bytes: Vec<u8>,
+                mime: String,
+                title: String,
+                user_id: u32,
+                due_date: Option<String>,
+            ) -> bool;
+        }
+
+        pub async fn submit(
+            bytes: Vec<u8>,
+            mime: String,
+            title: String,
+            user_id: u32,
+            due_date: Option<String>,
+        ) -> bool {
+            family_hub_submit_task(bytes, mime, title, user_id, due_date).await
+        }
+    }
+
+    /// Server-side rendering and every non-wasm build (including `cargo
+    /// test`) never run a click handler, but the component still has to
+    /// compile for those targets — same shape as `mobile::storage`'s `imp`
+    /// split.
+    #[cfg(not(all(feature = "web", target_arch = "wasm32")))]
+    mod imp {
+        pub async fn submit(
+            _bytes: Vec<u8>,
+            _mime: String,
+            _title: String,
+            _user_id: u32,
+            _due_date: Option<String>,
+        ) -> bool {
+            false
+        }
+    }
 }
 
 #[cfg(test)]

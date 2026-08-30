@@ -170,3 +170,26 @@ opt-level = "z"
 lto = true
 codegen-units = 1
 strip = true
+
+# T2.5: `cargo test`'s default (unoptimized) build makes the `image` crate's
+# pure-Rust JPEG/PNG codecs (`zune-jpeg`, `png`) roughly an order of magnitude
+# slower than a release build — PURPLE §P3 T2.5(a)'s "< 3 s for a 12 MP
+# photo" budget is unreachable at `opt-level = 0` on this box, not because
+# `api::photos::upload_photo_handler`'s own decode/resize/encode is slow, but
+# because those two dependencies are. `[profile.dev.package.*]` overrides let
+# only the pixel-crunching dependencies build optimized while the crate's own
+# code (including this one) keeps fast incremental compiles and full debug
+# info — the standard idiom for exactly this class of problem, not a change
+# to the shipped release binary (already `opt-level = "z"`). `cargo test`'s
+# `test` profile inherits `dev`'s package overrides, so this applies there
+# too without a separate `[profile.test]` section.
+[profile.dev.package.image]
+opt-level = 3
+[profile.dev.package.zune-jpeg]
+opt-level = 3
+[profile.dev.package.zune-core]
+opt-level = 3
+[profile.dev.package.png]
+opt-level = 3
+[profile.dev.package.image-webp]
+opt-level = 3

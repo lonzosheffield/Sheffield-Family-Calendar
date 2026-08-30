@@ -1437,3 +1437,99 @@ The first is a two-line change and removes the class of bug; the second keeps
 the throughput and needs a query change. Either way the assertion stands
 unchanged: it is describing correct behaviour, and it is the code that is
 wrong.
+## From T2.5 (photo tasks v2)
+
+---
+
+T2.5 owns `src/server/router.rs` this wave (§P4) and `src/client/components/routine.rs`,
+plus new files it created (`src/server/api/photos.rs`, `tests/photo_tests.rs`).
+Everything below is an edit to a file this task does not own, each narrowly
+scoped and made only because the acceptance test (PURPLE §P3 T2.5 (a)-(f))
+cannot pass without it — the same "the file wasn't available and the seam
+was pre-authorised or unavoidable" reasoning T1.3/T1.4/T2.2/T2.3 record above.
+
+### H-26. `src/server/db.rs` — `custom_tasks()` gained the auto-hide filter; one new additive function
+
+T1.1's `0002_core.sql` comment named `custom_tasks.due_date` as "T1.5 /
+T2.5", and this task's brief is explicit: "due_date on custom tasks (column
+exists from 0002_core) with daily auto-hide" is a T2.5 deliverable, not a
+request to file elsewhere. `db.rs` is T1.1-owned with T1.5/T1.6 as later
+editors (§P4); no row lists T2.5, so this is recorded here for the same
+after-the-fact ratification T1.3 H-8/T1.4 H-15 were given, not applied
+unprompted as if it were uncontroversial.
+
+Two changes, both additive to the schema/behaviour, neither touching an
+existing call site's signature:
+
+* `custom_tasks(pool, user_id)` now also selects `due_date` and filters
+  `WHERE due_date IS NULL OR due_date >= today` (today computed server-side
+  from `chrono::Local::now()`, never a caller's clock — PURPLE §P5.5 default
+  14). Every existing call site (`api::routine::get_custom_tasks`,
+  `tests/backup_tests.rs`, `tests/db_tests.rs`, `tests/routine_tests.rs`)
+  only ever inserted tasks with `due_date = NULL`, so the filter is a no-op
+  for every pre-existing test — confirmed by the full suite still being
+  green on those files.
+* New `insert_custom_task_with_due_date(pool, user_id, title, photo_path,
+  due_date)` — used only by `api::photos::upload_photo_handler`, which
+  writes its own already-re-encoded `photo_path` rather than decoding base64
+  like `insert_custom_task` does. `insert_custom_task` itself (the base64
+  path's function) is untouched.
+
+### H-27. `src/shared/types.rs` — `CustomTaskView` gained `due_date: Option<String>`
+
+Owned by T1.2, later edited by T1.4; no T2.5 row. Additive field (`#[serde(default)]`
+for forward/back compatibility), needed so a client can ever see a task's
+due date at all. The two pre-existing construction sites this broke
+(`src/client/components/tv/fixture.rs`'s golden-render fixture, T2.1-owned)
+got a mechanical `due_date: None` — the same class of change H-17 made to
+migration-version constants, not a behavioural edit.
+
+### H-28. `tests/http_tests.rs` — one T0.3 test updated for a renamed function, substance preserved
+
+`Gate-2 assertion 10` (`migration_file_input_handler_takes_vec_file_data`)
+called `client::components::routine::encode_first_photo`, which returned a
+base64 `String` for the retired base64-through-a-`#[server]`-fn upload path
+(G14 — exactly what this task replaces). It is renamed
+`read_first_photo` and now returns `(mime, Vec<u8>)` — what the multipart
+route's client-side downscale needs instead of a base64 blob. The test was
+updated to call the new name and assert the tuple; what it actually proves
+(`Vec<FileData>` compiles and reads back through the 0.7 shape) is
+unchanged, same mechanical-update precedent as H-17b.
+
+### H-29. `Cargo.toml` — `[profile.dev.package.*]` opt-level overrides for the image codecs
+
+PURPLE §P3 T2.5(a) requires the 12 MP fixture upload to complete in < 3 s.
+Under `cargo test`'s default unoptimized build, `image`'s pure-Rust decoders
+(`zune-jpeg`, `png`) took **5+ seconds** just for decode+resize+encode on
+this box — confirmed by profiling before adding the override (`upload took
+5.0828851s`). This is not `api::photos::upload_photo_handler`'s own code
+being slow; it is `opt-level = 0` on two pixel-crunching dependencies.
+
+Added an idiomatic fix that touches no release behaviour (`[profile.release]`
+already builds `opt-level = "z"`): per-package opt-level overrides for
+`image`, `zune-jpeg`, `zune-core`, `png`, `image-webp` under
+`[profile.dev.package.*]`, which `cargo test`'s `test` profile inherits.
+With this, the whole T2.5 suite (including the 12 MP fixture) runs in well
+under a second. `Cargo.toml` is T0.2/T0.4-owned with later additions routed
+through a Boss micro-commit (§P4) — same basis T1.3 H-8/T1.4 H-15 record for
+their own needed-now additions; requesting ratification here.
+
+### Residual, not caused by this task: `tests/whiteboard_tests.rs::t2_3_a_five_hundred_strokes_persist_and_replay_in_seq_order` is flaky on this machine
+
+Discovered while running the full baseline for this task's own DONE check.
+**Verified against the unmodified `main` tip (`41eb990`, this task's own
+changes fully `git stash`ed) that the same test fails the same way** — `cargo
+test --features server --test whiteboard_tests` on a clean checkout:
+`left: 24, right: 500` ("every stroke must be persisted, not merely
+broadcast"). It passes when run alone and filtered
+(`--test whiteboard_tests t2_3_a_five_hundred -- --test-threads=1`), so this
+looks like shared process state between the three tests in that binary (all
+share one `db::pool()`/`realtime::sender()`), not a T2.5 regression — `git
+diff` for this task touches none of `src/server/api/realtime.rs`,
+`src/server/db.rs`'s stroke functions, or `src/client/components/whiteboard.rs`.
+Consistent with the residual the wave 2-a Boss note already flagged under
+T2.3 H-21 ("the detached inserts can commit out of `seq` order... T2.6's
+cross-surface test should include a draw-then-immediate-snapshot case").
+Flagging for whoever next owns `tests/whiteboard_tests.rs` / T2.3's
+write-behind insert — not fixed here (out of this task's file ownership and
+out of scope for photo tasks).

@@ -494,19 +494,31 @@ pub async fn insert_custom_task(
     Ok(id as u32)
 }
 
+/// Custom tasks belonging to `user_id`, newest first — **minus** any whose
+/// `due_date` has already passed (T2.5's "daily auto-hide", PLAN v2 T2.5 /
+/// PURPLE §P3 T2.5(f)): "a task with `due_date = yesterday` is absent from
+/// today's list". A task with no `due_date` at all never expires, matching
+/// the v1 behaviour (G12) for anything created without one.
+///
+/// `today` is computed here, server-side, from `chrono::Local::now()` —
+/// never the caller's clock (PURPLE §P5.5 default 14: server-local time
+/// everywhere) — so the filter cannot be fooled by a device with a wrong
+/// clock the way a client-side filter could.
 pub async fn custom_tasks(
     pool: &SqlitePool,
     user_id: u32,
 ) -> Result<Vec<CustomTaskView>, sqlx::Error> {
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let rows = sqlx::query(
         r#"
-        SELECT id, user_id, title, photo_path, is_completed, created_at
+        SELECT id, user_id, title, photo_path, due_date, is_completed, created_at
         FROM custom_tasks
-        WHERE user_id = ?1
+        WHERE user_id = ?1 AND (due_date IS NULL OR due_date >= ?2)
         ORDER BY created_at DESC, id DESC
         "#,
     )
     .bind(user_id)
+    .bind(&today)
     .fetch_all(pool)
     .await?;
 
@@ -517,11 +529,44 @@ pub async fn custom_tasks(
                 user_id: row.try_get::<i64, _>("user_id")? as u32,
                 title: row.try_get("title")?,
                 photo_path: row.try_get("photo_path")?,
+                due_date: row.try_get("due_date")?,
                 is_completed: row.try_get::<i64, _>("is_completed")? != 0,
                 created_at: row.try_get("created_at")?,
             })
         })
         .collect()
+}
+
+/// Insert a custom task whose photo (if any) has **already been re-encoded
+/// and written to disk** at `photo_path` — used by the multipart upload route
+/// (T2.5, `server::api::photos::upload_photo_handler`), which decodes,
+/// downscales and re-encodes the image itself before this is called, unlike
+/// [`insert_custom_task`]'s base64 decode-and-write. Purely additive: the
+/// existing function and its one call site
+/// (`api::routine::create_photo_task`, T1.5-owned) are untouched.
+pub async fn insert_custom_task_with_due_date(
+    pool: &SqlitePool,
+    user_id: u32,
+    title: &str,
+    photo_path: Option<&str>,
+    due_date: Option<&str>,
+) -> Result<u32, sqlx::Error> {
+    let id = sqlx::query(
+        r#"
+        INSERT INTO custom_tasks (user_id, title, photo_path, due_date, is_completed, created_at)
+        VALUES (?1, ?2, ?3, ?4, 0, CURRENT_TIMESTAMP)
+        RETURNING id
+        "#,
+    )
+    .bind(user_id)
+    .bind(title)
+    .bind(photo_path)
+    .bind(due_date)
+    .fetch_one(pool)
+    .await?
+    .try_get::<i64, _>("id")?;
+
+    Ok(id as u32)
 }
 
 pub async fn set_custom_task_completion(

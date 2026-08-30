@@ -510,7 +510,7 @@ async fn migration_file_input_handler_takes_vec_file_data() {
     use dioxus::html::{FileData, NativeFileData};
     use dioxus::server::Bytes;
     use dioxus::CapturedError;
-    use family_calendar::client::components::routine::encode_first_photo;
+    use family_calendar::client::components::routine::read_first_photo;
     use std::any::Any;
     use std::path::PathBuf;
     use std::pin::Pin;
@@ -572,13 +572,20 @@ async fn migration_file_input_handler_takes_vec_file_data() {
     assert_eq!(files.len(), 1);
     assert_eq!(files[0].name(), "snap.jpg");
 
-    let encoded = encode_first_photo(files)
+    // T2.5 renamed `encode_first_photo` (which returned a base64 string for
+    // the retired base64-through-a-server-fn upload path, G14) to
+    // `read_first_photo` (mime + raw bytes, for the multipart route's
+    // client-side downscale). The substance of this Gate-2 assertion —
+    // `Vec<FileData>` compiles and reads back through the 0.7 shape — is
+    // unchanged.
+    let (mime, bytes) = read_first_photo(files)
         .await
         .expect("the handler reads the first file");
-    assert_eq!(encoded, "c2hlZmZpZWxk");
+    assert_eq!(mime, "image/jpeg");
+    assert_eq!(bytes, b"sheffield");
 
     assert!(
-        encode_first_photo(Vec::new()).await.is_none(),
+        read_first_photo(Vec::new()).await.is_none(),
         "an empty Vec<FileData> is the 0.7 way of saying no file was picked"
     );
 }

@@ -16,11 +16,13 @@
 //! | [`screensaver`] | T2.7 (screensaver completion) |
 //! | [`whiteboard`] | T2.3 (whiteboard v2 — new module, undo-own-last-stroke) |
 //! | [`tv`] | T2.1 (kiosk clock; moved here from `client::components::tv::clock` by Boss at the 2-a close) |
+//! | [`photos`] | T2.5 (photo tasks v2 — multipart upload route, delete-with-file) |
 //!
 //! Every server function is re-exported here, so call sites keep using
 //! `crate::server::api::<name>` exactly as before the split.
 
 pub mod calendar;
+pub mod photos;
 pub mod profiles;
 #[cfg(feature = "server")]
 pub mod realtime;
@@ -33,6 +35,7 @@ pub use calendar::{
     create_local_event, delete_local_event, get_calendar_week, get_events_for_day,
     get_today_events, update_local_event,
 };
+pub use photos::delete_custom_task;
 pub use profiles::{
     change_parent_pin, create_profile, delete_profile, list_profiles, parent_setup_status,
     rename_profile, set_initial_parent_pin, set_profile_color, verify_parent_pin,

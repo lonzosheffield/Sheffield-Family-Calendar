@@ -4,9 +4,11 @@
 //! registered. `src/main.rs` is reduced to booting the tokio runtime and
 //! delegating to [`run`] so it stays under 25 lines and is **frozen**
 //! thereafter (`docs/reviews/PURPLE_TEAM.md` §P4). Later tasks extend this
-//! router in their own waves rather than duplicating it: T1.3 (this wave)
-//! adds the HTTPS listener and a real `/ca.crt`, T2.5 adds the multipart
-//! photo-upload route.
+//! router in their own waves rather than duplicating it: T1.3 added the
+//! HTTPS listener and a real `/ca.crt`; **T2.5 (this wave)** adds the
+//! multipart photo-upload route (`POST /api/upload_photo`, its own raised
+//! `DefaultBodyLimit` — R-08) and the `nosniff`/`attachment` headers on
+//! `/uploads` (R-23c).
 //!
 //! **Split origins (PLAN v2 D3′).** There is one router and two listeners:
 //!
@@ -32,11 +34,11 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use axum::extract::Request;
-use axum::http::{header, StatusCode, Uri};
+use axum::extract::{DefaultBodyLimit, Request};
+use axum::http::{header, HeaderValue, StatusCode, Uri};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Redirect, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::Router;
 use dioxus::prelude::*;
 use tower_http::services::ServeDir;
@@ -53,6 +55,14 @@ use crate::server::tls::{install_crypto_provider, TlsListener};
 /// than the 30-day window it guards, and coarse enough to be invisible on a
 /// machine that runs for months.
 const RENEWAL_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(6 * 60 * 60);
+
+/// The raised body limit for `POST /api/upload_photo` (T2.5, PURPLE §P3
+/// T2.5 / R-08). Applied to **that route only**, via [`axum::routing::MethodRouter::layer`]
+/// — every other route (including the JSON `#[server]` fn endpoints Dioxus
+/// mounts under `/api`) keeps axum's global 2 MB default, which is exactly
+/// what PURPLE §P3 T2.5(b) proves by demonstrating a 413 on an unraised
+/// route with the same handler.
+const UPLOAD_PHOTO_BODY_LIMIT_BYTES: usize = 25 * 1024 * 1024;
 
 /// Build the production axum router for `config`. Pure and synchronous so
 /// tests can construct it directly against a throwaway [`FamilyHubConfig`]
@@ -106,12 +116,65 @@ pub fn build_router(config: &FamilyHubConfig) -> Router {
             }),
         )
         .route("/ws", get(realtime::ws_handler))
-        .nest_service("/uploads", ServeDir::new(config.upload_dir()))
+        .route(
+            "/api/upload_photo",
+            post(crate::server::api::photos::upload_photo_handler)
+                .layer(DefaultBodyLimit::max(UPLOAD_PHOTO_BODY_LIMIT_BYTES)),
+        )
+        .nest_service("/uploads", uploads_router(config))
         .nest_service(
             "/assets/screensaver",
             ServeDir::new(config.screensaver_dir()),
         )
         .serve_dioxus_application(ServeConfig::new(), App)
+}
+
+/// `/uploads` as its own tiny `Router<()>`, so [`uploads_security_headers`]
+/// wraps **only** this service rather than the whole tree.
+///
+/// `nest_service` takes anything implementing `tower::Service<Request>` — a
+/// fully-built `Router<()>` qualifies directly (that is how axum routers
+/// nest at all) — so passing one here, instead of `.merge`ing it into
+/// [`build_router`]'s own router, never touches that outer router's state
+/// type. That distinction matters: `serve_dioxus_application` is only
+/// implemented for `Router<FullstackState>` (`dioxus_server::server`), and
+/// Rust infers the whole `build_router` chain's state as `FullstackState`
+/// *backward* from that one terminal call, since nothing earlier in the
+/// chain fixes it to anything else. A `.merge()` of a concretely-typed
+/// `Router<()>` would fix the merged router's state to `()` too and break
+/// that inference — `nest_service` does not have this problem because a
+/// nested service's own type is independent of its parent's state.
+fn uploads_router(config: &FamilyHubConfig) -> Router {
+    // `fallback_service`, not `.nest_service("/uploads", ...)` — this router
+    // is itself mounted at `/uploads` by `build_router`'s own
+    // `.nest_service("/uploads", uploads_router(config))`, so nesting the
+    // same prefix again here would require `/uploads/uploads/<file>`.
+    Router::new()
+        .fallback_service(ServeDir::new(config.upload_dir()))
+        .layer(axum::middleware::from_fn(uploads_security_headers))
+}
+
+/// `X-Content-Type-Options: nosniff` + `Content-Disposition: attachment` on
+/// every `/uploads` response (PURPLE §P3 T2.5(e), R-23c). `upload_photo_handler`
+/// already re-encodes every stored image through the `image` crate, which
+/// strips anything that isn't valid JPEG/PNG/WebP pixel data — these two
+/// headers are the belt to that re-encode's braces: even if a byte sequence
+/// somehow survived re-encoding *and* got served with a browser-guessed
+/// `Content-Type`, `nosniff` stops the browser from sniffing its own MIME
+/// type and `attachment` refuses to render it inline (R-23: "MIME→stored
+/// XSS").
+async fn uploads_security_headers(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        header::CONTENT_DISPOSITION,
+        HeaderValue::from_static("attachment"),
+    );
+    response
 }
 
 /// [`build_router`] wrapped in the plain-HTTP origin's one rule: the phone
