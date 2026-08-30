@@ -134,7 +134,9 @@ pub fn Whiteboard() -> Element {
                     "Undo"
                 }
                 button {
-                    class: "rounded-xl bg-sheffield-accent px-4 py-2 font-bold text-white",
+                    // QA round 1 (Q1-15): white on `bg-sheffield-accent` is
+                    // 3.17:1 at this size; the primary blue is 4.99:1.
+                    class: "rounded-xl bg-sheffield-dark px-4 py-2 font-bold text-white",
                     onclick: move |_| {
                         canvas::clear();
                         stroke_log.write().clear();

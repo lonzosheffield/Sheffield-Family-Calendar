@@ -180,7 +180,12 @@ pub fn Routine(compact: bool) -> Element {
                     span { class: "text-sm font-semibold text-sheffield-dark",
                         "{profile_name((state.active_user_id)())}'s progress"
                     }
-                    span { class: "text-sm font-bold text-sheffield-accent", "{progress:.0}%" }
+                    // QA round 1 (Q1-15): `text-sheffield-accent` on paper is
+                    // 3.11:1. The hue is kept as a *ground* under dark ink —
+                    // the chip reads at 4.62:1.
+                    span { class: "rounded-full bg-sheffield-accent px-2 text-sm font-bold text-slate-800",
+                        "{progress:.0}%"
+                    }
                 }
                 div { class: "h-4 w-full overflow-hidden rounded-full bg-sheffield-light/30",
                     div {
@@ -285,7 +290,10 @@ pub fn Routine(compact: bool) -> Element {
             }
 
             button {
-                class: "mt-auto rounded-2xl bg-sheffield-accent px-4 py-3 text-lg font-bold text-white shadow hover:brightness-110",
+                // QA round 1 (Q1-15): white on `bg-sheffield-accent` is 3.17:1
+                // and 18 px bold is not WCAG "large"; the primary blue is
+                // 4.99:1.
+                class: "mt-auto rounded-2xl bg-sheffield-dark px-4 py-3 text-lg font-bold text-white shadow hover:brightness-110",
                 onclick: move |_| show_dialog.set(true),
                 "Add photo task"
             }
@@ -316,7 +324,9 @@ fn ProfileSelector() -> Element {
                     class: if user_id == active {
                         "flex h-16 w-16 items-center justify-center rounded-full bg-sheffield-dark text-xl font-bold text-white ring-4 ring-sheffield-sun"
                     } else {
-                        "flex h-16 w-16 items-center justify-center rounded-full bg-sheffield-light text-xl font-bold text-white opacity-70 hover:opacity-100"
+                        // QA round 1 (Q1-15): white on the light blue is
+                        // 2.16:1; dark ink on it is 6.77:1.
+                        "flex h-16 w-16 items-center justify-center rounded-full bg-sheffield-light text-xl font-bold text-slate-800 opacity-70 hover:opacity-100"
                     },
                     aria_label: "{profile_name(user_id)}",
                     onclick: move |_| state.active_user_id.set(user_id),
@@ -358,7 +368,8 @@ fn RoutineRow(item: RoutineItemView, on_toggle: EventHandler<bool>) -> Element {
                 }
                 span { class: "block text-sm text-slate-600", "{item.description}" }
             }
-            span { class: "ml-auto text-xs uppercase tracking-wide text-sheffield-light",
+            // QA round 1 (Q1-15): `text-sheffield-light` on white is 2.16:1.
+            span { class: "ml-auto text-xs uppercase tracking-wide text-slate-600",
                 "{item.icon_name}"
             }
         }
@@ -394,7 +405,9 @@ fn CustomTaskRow(
                 }
             }
             button {
-                class: "shrink-0 rounded-lg px-2 py-1 text-sm font-semibold text-red-500 hover:bg-red-50",
+                // QA round 1 (Q1-15): `red-500` ink on white was 3.76:1;
+                // `red-700` is 6.5:1.
+                class: "shrink-0 rounded-lg px-2 py-1 text-sm font-semibold text-red-700 hover:bg-red-50",
                 aria_label: "Delete {task.title}",
                 onclick: move |event| {
                     event.stop_propagation();

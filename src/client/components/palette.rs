@@ -5,7 +5,9 @@
 //! **WCAG AA** (≥ 4.5:1 body, ≥ 3:1 large), **computed in Rust from the hex
 //! values**"*. This module is that computation, and [`PALETTE_PAIRS`] is that
 //! set of pairs — every ink-on-ground combination the two surfaces
-//! (`components/tv/**` and `components/mobile/**`) actually render.
+//! (`components/tv/**`, `components/mobile/**`, and the three shared panels
+//! `routine.rs`, `calendar.rs` and `whiteboard.rs` that `/m` renders)
+//! actually paint.
 //!
 //! # Why the table is the contract and not a comment
 //!
@@ -19,9 +21,11 @@
 //!    nesting-aware scanner so every element knows the ground it is sitting
 //!    on, and fails if any rendered ink/ground pair is missing from this
 //!    table — so the table cannot silently fall behind the components.
-//! 3. The same test greps every source file under `tv/**` and `mobile/**` and
-//!    fails on any colour utility whose token is not in [`PALETTE_TOKENS`] —
-//!    so a stray `slate-400` cannot appear at all.
+//! 3. The same test greps every source file under `components/**` (bar this
+//!    one) and fails on any colour utility whose token is not in
+//!    [`PALETTE_TOKENS`] — so a stray `slate-400` cannot appear at all.
+//!    QA round 1 (Q1-15) widened that grep from `tv/**` + `mobile/**`, which
+//!    had let five sub-AA classes through on the phone's Routine tab.
 //!
 //! # The palette is unchanged
 //!
@@ -108,14 +112,38 @@ pub const SLATE_600: Rgb = Rgb::hex(0x475569);
 /// Ink on the dark `?keys=1` overlay, and the phone's hairlines. Tailwind
 /// `slate-200`.
 pub const SLATE_200: Rgb = Rgb::hex(0xE2E8F0);
+/// The phone's card hairline. Tailwind `slate-100`.
+pub const SLATE_100: Rgb = Rgb::hex(0xF1F5F9);
+/// The phone's inert field fill (calendar form inputs, the week grid's
+/// all-day chips). Tailwind `slate-50`.
+pub const SLATE_50: Rgb = Rgb::hex(0xF8FAFC);
+/// The screensaver's ground and the phone dialog's scrim, at 50 %.
+pub const BLACK: Rgb = Rgb::hex(0x000000);
 
-/// Every colour token `tv/**` and `mobile/**` are allowed to name, as the
+/// The error hue, four Tailwind stops. Only the phone paints it — the kiosk
+/// has no destructive action — and only the two dark stops carry text.
+/// Tailwind `red-700`.
+pub const RED_700: Rgb = Rgb::hex(0xB91C1C);
+/// Tailwind `red-600`.
+pub const RED_600: Rgb = Rgb::hex(0xDC2626);
+/// Tailwind `red-200`.
+pub const RED_200: Rgb = Rgb::hex(0xFECACA);
+/// Tailwind `red-50`.
+pub const RED_50: Rgb = Rgb::hex(0xFEF2F2);
+
+/// Every colour token `src/client/components/**` is allowed to name, as the
 /// Tailwind token name (what follows `text-`, `bg-`, `ring-`, …).
 ///
 /// `tests/palette_tests.rs` fails on any colour utility outside this list, so
-/// this is the whole palette of the hub's two surfaces: nine colours and
+/// this is the whole palette of the hub's two surfaces: sixteen colours and
 /// one colourless token ([`COLOURLESS_TOKENS`]).
-pub const PALETTE_TOKENS: [(&str, Rgb); 9] = [
+///
+/// QA round 1 (Q1-15) widened the scan from `tv/**` and `mobile/**` to the
+/// whole of `components/**`, because `/m` renders `routine.rs`,
+/// `calendar.rs` and `whiteboard.rs` too. The seven tokens added with it are
+/// the ones those three files already painted: the error ramp, two neutral
+/// fills and black.
+pub const PALETTE_TOKENS: [(&str, Rgb); 16] = [
     ("sheffield-light", SHEFFIELD_LIGHT),
     ("sheffield-dark", SHEFFIELD_DARK),
     ("sheffield-accent", SHEFFIELD_ACCENT),
@@ -125,6 +153,13 @@ pub const PALETTE_TOKENS: [(&str, Rgb); 9] = [
     ("slate-800", SLATE_800),
     ("slate-600", SLATE_600),
     ("slate-200", SLATE_200),
+    ("slate-100", SLATE_100),
+    ("slate-50", SLATE_50),
+    ("black", BLACK),
+    ("red-700", RED_700),
+    ("red-600", RED_600),
+    ("red-200", RED_200),
+    ("red-50", RED_50),
 ];
 
 /// `transparent` is a token with no colour: the idle focus ring wears it so
@@ -340,6 +375,31 @@ pub const PALETTE_PAIRS: &[Pair] = &[
         ground: "bg-sheffield-accent/10",
         size: TextSize::Body,
         used_by: "the phone's `not connected to the hub` note",
+    },
+    // -- the error ramp, phone only (QA round 1, Q1-15) --------------------
+    Pair {
+        ink: "text-red-700",
+        ground: "bg-red-50",
+        size: TextSize::Body,
+        used_by: "the phone's routine error card",
+    },
+    Pair {
+        ink: "text-red-600",
+        ground: "bg-white",
+        size: TextSize::Body,
+        used_by: "the calendar's `Delete` button",
+    },
+    Pair {
+        ink: "text-white",
+        ground: "bg-red-600",
+        size: TextSize::Body,
+        used_by: "the `Try again` buttons on both error cards",
+    },
+    Pair {
+        ink: "text-red-700",
+        ground: "bg-white",
+        size: TextSize::Body,
+        used_by: "the calendar error card's heading and the task `Delete` button",
     },
     // -- the dark `?keys=1` overlay ----------------------------------------
     Pair {

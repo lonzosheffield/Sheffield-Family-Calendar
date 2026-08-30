@@ -30,10 +30,17 @@
 //!   markup of every panel and overlay.
 //!
 //! Plus the guard that keeps (a) honest over time: a scan of every source
-//! file under `tv/**` and `mobile/**` that fails on **any** colour utility
-//! whose token is not in `palette::PALETTE_TOKENS`. Without it a new
+//! file under `components/**` that fails on **any** colour utility whose
+//! token is not in `palette::PALETTE_TOKENS`. Without it a new
 //! `text-slate-400` could be added to a component that no golden model
 //! renders and nothing would notice.
+//!
+//! QA round 1 (Q1-15) widened that scan from `tv/**` + `mobile/**` to the
+//! whole of `components/**`: `/m` renders `routine.rs`, `calendar.rs` and
+//! `whiteboard.rs`, and five sub-AA classes had been living in that gap
+//! (`text-red-500` 3.76:1, `text-sheffield-accent` on paper 3.11:1, white on
+//! `bg-sheffield-accent` 3.17:1, `text-sheffield-light` 2.16:1, white on the
+//! `bg-sheffield-light` discs 2.16:1).
 
 #![cfg(feature = "server")]
 
@@ -386,12 +393,6 @@ fn t3_4_a_every_pair_the_kiosk_actually_paints_is_in_the_table_and_passes_aa() {
 fn t3_4_a_no_source_file_on_either_surface_names_a_colour_outside_the_palette() {
     let mut checked = 0usize;
     for (path, source) in surface_sources() {
-        // `palette.rs` is the module that *defines* the palette: it has to
-        // be able to name `slate-400` in order to prove `slate-400` is not
-        // a token. It renders nothing.
-        if path.ends_with("palette.rs") {
-            continue;
-        }
         for word in source.split(|c: char| !(c.is_ascii_alphanumeric() || "-/:[]%._".contains(c))) {
             // Strip Tailwind variants: `focus:ring-sheffield-sun`.
             let class = word.rsplit(':').next().unwrap_or(word);
@@ -412,7 +413,7 @@ fn t3_4_a_no_source_file_on_either_surface_names_a_colour_outside_the_palette() 
         checked > 40,
         "only {checked} colour utilities were scanned — the scanner found nothing to check"
     );
-    println!("{checked} colour utilities scanned across tv/** and mobile/**, all in-palette");
+    println!("{checked} colour utilities scanned across components/**, all in-palette");
 }
 
 // ---------------------------------------------------------------------------
@@ -601,25 +602,49 @@ fn logical_lines(source: &str) -> Vec<String> {
     out
 }
 
-/// Every `.rs` file under `src/client/components/{tv,mobile}` as
-/// `(path, contents)`.
+/// Every `.rs` file under `src/client/components/**` as `(path, contents)`,
+/// bar `palette.rs`.
+///
+/// QA round 1 (Q1-15) widened this from `{tv,mobile}` to the whole tree: the
+/// phone renders `routine.rs`, `calendar.rs` and `whiteboard.rs` as well as
+/// `mobile/**`, and five sub-AA classes were living in exactly that blind
+/// spot. `palette.rs` is skipped because it is the module that *defines* the
+/// palette — it has to be able to name `slate-400` in order to prove
+/// `slate-400` is not a token, and it renders nothing.
 fn surface_sources() -> Vec<(String, String)> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("src")
         .join("client")
         .join("components");
     let mut out = Vec::new();
-    for surface in ["tv", "mobile"] {
-        let dir = root.join(surface);
+    let mut queue = vec![root];
+    while let Some(dir) = queue.pop() {
         for entry in std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("reading {dir:?}: {e}")) {
             let path = entry.expect("dir entry").path();
-            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+            if path.is_dir() {
+                queue.push(path);
+                continue;
+            }
+            if path.extension().and_then(|e| e.to_str()) != Some("rs")
+                || path.file_name().and_then(|n| n.to_str()) == Some("palette.rs")
+            {
                 continue;
             }
             let text = std::fs::read_to_string(&path).expect("reading a source file");
             out.push((path.to_string_lossy().replace('\\', "/"), text));
         }
     }
-    assert!(out.len() >= 14, "expected both surfaces' modules");
+    out.sort();
+    assert!(
+        out.len() >= 20,
+        "expected both surfaces' modules and the shared panels, got {}",
+        out.len()
+    );
+    for shared in ["routine.rs", "calendar.rs", "whiteboard.rs"] {
+        assert!(
+            out.iter().any(|(path, _)| path.ends_with(shared)),
+            "the widened scan (Q1-15) must reach {shared}"
+        );
+    }
     out
 }

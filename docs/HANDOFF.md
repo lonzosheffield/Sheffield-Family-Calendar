@@ -2276,3 +2276,58 @@ alongside the other qa1 branches):
   exactly as Q1-10's solution requires. No assertion was weakened: each one
   still checks the same identity, ordering or round-trip, through the encoded
   marker instead of a plain string.
+
+---
+
+## T3.4 (QA round 1, Q1-15) → Boss (`assets/tailwind.css`)
+
+### H-30. Rebuild `assets/tailwind.css` once, after this branch merges
+
+Q1-15's solution ends: *"Rebuild `assets/tailwind.css` once (Boss) — the new
+classes must be in the committed CSS or CI's fail-on-diff step goes red."*
+`assets/**` is T0.7's (PURPLE §P4), so this branch does not touch it.
+
+Command (from `docs/DEV_WINDOWS.md`, Tailwind standalone
+`tailwindcss-windows-x64` v3.4.17):
+
+```
+tailwindcss.exe -c tailwind.config.js -i assets/input.css -o assets/tailwind.css --minify
+```
+
+Expected delta, from grepping the committed minified CSS against the classes
+this branch's substitutions add and drop:
+
+- **added:** `.border-red-600` (the calendar error card's rule, now on the
+  four-stop error ramp). Every other class the substitutions introduce —
+  `text-red-700`, `bg-sheffield-dark`, `text-slate-800`, `text-slate-600`,
+  `rounded-full`, `px-2` — is already in the committed CSS.
+- **dropped (now unused):** `.text-red-500`, `.border-red-500`,
+  `.text-slate-300`, `.text-sheffield-light`. (`.text-slate-400` and
+  `.text-slate-500` are already dead in the committed file and go with the
+  same rebuild.)
+
+No Rust test reads `assets/tailwind.css`, so this branch is green without the
+rebuild; it is CI's fail-on-diff step (T0.8) and the rendered colour of the
+calendar error card's left border that need it.
+
+### H-31. Files this branch edited that T3.4 does not own
+
+Q1-15 names `src/client/components/routine.rs` (T2.5's) and
+`src/client/components/whiteboard.rs` (T2.3's) as the sites of the fix, and
+PURPLE §P4 lists T3.4 as a "styling only" later editor of `tv/**` and
+`mobile/**` but not of the three shared panels `/m` renders. Everything
+changed here is a class string or a comment — no logic, no markup structure:
+
+- `routine.rs` — the five substitutions at the flagged lines.
+- `whiteboard.rs` — the `Clear Canvas` button's ground only.
+- `calendar.rs` (T2.4's) — two classes the widened scan would otherwise have
+  forced into the palette: `border-red-500` → `border-red-600` (keeps the
+  error ramp to Q1-15's four stops) and `text-slate-300` → `text-slate-600`
+  (that ink was 1.7:1 on white; adding `slate-300` as a token instead would
+  have contradicted the T3.4 contract).
+
+`ring-slate-100`, `bg-slate-50` and `bg-black`/`bg-black/50` were left exactly
+as their owners wrote them and became palette tokens instead, so no unflagged
+surface changed appearance.
+
+Please ratify, or hand the three files back to their owners for re-review.

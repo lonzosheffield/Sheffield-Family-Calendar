@@ -218,7 +218,9 @@ pub fn CalendarPanel() -> Element {
                     p { class: "text-slate-600", "Loading the calendar…" }
                 },
                 CalendarState::Error(message) => rsx! {
-                    div { class: "rounded-2xl border-l-4 border-red-500 bg-red-50 p-3",
+                    // QA round 1 (Q1-15): the error ramp is four stops
+                    // (`red-50/200/600/700`); `red-500` is off the palette.
+                    div { class: "rounded-2xl border-l-4 border-red-600 bg-red-50 p-3",
                         p { class: "font-semibold text-red-700", "The calendar could not be loaded." }
                         p { class: "text-sm text-red-600", "{message}" }
                         button {
@@ -264,7 +266,9 @@ pub fn CalendarPanel() -> Element {
                                     "{day.weekday} {day.day_of_month}"
                                 }
                                 if day.events.is_empty() {
-                                    p { class: "text-xs text-slate-300", "—" }
+                                    // QA round 1 (Q1-15): `slate-300` on white
+                                    // is 1.7:1; the muted stop is 7.5:1.
+                                    p { class: "text-xs text-slate-600", "—" }
                                 }
                                 ul { class: "space-y-1",
                                     for event in day.events.iter() {
