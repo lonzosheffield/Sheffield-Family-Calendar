@@ -63,7 +63,11 @@ pub fn backoff(attempt: u32) -> Duration {
 /// Seeded from a per-process entropy source rather than a constant, otherwise
 /// every kiosk and phone would pick the *same* jitter and reconnect in
 /// lockstep — which is exactly what jitter exists to prevent.
-fn unit_random() -> f64 {
+///
+/// `pub(crate)` since QA round 1 (Q1-08): `components::routine::client_nonce`
+/// mixes this into a per-page-load idempotency-key nonce, the same way this
+/// module already uses it for reconnect jitter.
+pub(crate) fn unit_random() -> f64 {
     use std::sync::atomic::{AtomicU64, Ordering};
     static STATE: AtomicU64 = AtomicU64::new(0);
 
@@ -80,8 +84,11 @@ fn unit_random() -> f64 {
     (value >> 11) as f64 / (1u64 << 53) as f64
 }
 
+/// `pub(crate)` since QA round 1 (Q1-08): also seeds
+/// `components::routine::client_nonce`'s per-page-load idempotency-key
+/// nonce.
 #[cfg(all(feature = "web", target_arch = "wasm32"))]
-fn entropy_seed() -> u64 {
+pub(crate) fn entropy_seed() -> u64 {
     let millis = web_sys::window()
         .and_then(|window| window.performance())
         .map(|performance| performance.now())
@@ -90,7 +97,7 @@ fn entropy_seed() -> u64 {
 }
 
 #[cfg(not(all(feature = "web", target_arch = "wasm32")))]
-fn entropy_seed() -> u64 {
+pub(crate) fn entropy_seed() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|since| since.subsec_nanos() as u64 ^ since.as_secs())

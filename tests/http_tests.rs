@@ -48,6 +48,15 @@ fn init_test_env() -> std::path::PathBuf {
     static ONCE: std::sync::Once = std::sync::Once::new();
     let base = std::env::temp_dir().join(format!("familyhub-http-tests-{}", std::process::id()));
     ONCE.call_once(|| {
+        // QA round 1 (Q1-08): the scratch directory is named after this
+        // process's PID, but Windows recycles PIDs and this directory (and
+        // the `mutation_log` rows inside its `family.db`) was never cleaned
+        // up between runs. A later run that lands on a reused PID inherited
+        // a `mutation_log` row for a since-hardcoded idempotency key, so its
+        // `claim_mutation` call saw "already claimed" and the test's own
+        // mutation silently no-op'd. Wipe any stale directory from a prior
+        // run under this PID before creating a fresh one.
+        let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).expect("test scratch directory is creatable");
 
         let db_path = base.join("family.db");
@@ -311,7 +320,8 @@ async fn http_toggle_routine_task_round_trip_mutates_db() {
         .post(format!("http://{addr}{TOGGLE_ROUTINE_ENDPOINT}"))
         .header("content-type", "application/json")
         .body(format!(
-            r#"{{"user_id":{USER_ID},"template_id":{template_id},"completed":true,"date":"{date}","idempotency_key":"http-test-toggle-routine-roundtrip"}}"#
+            r#"{{"user_id":{USER_ID},"template_id":{template_id},"completed":true,"date":"{date}","idempotency_key":"http-test-toggle-routine-roundtrip-{pid}"}}"#,
+            pid = std::process::id(),
         ))
         .send()
         .await
@@ -356,7 +366,8 @@ async fn http_toggle_routine_task_error_is_structured_not_a_panic() {
         .post(format!("http://{addr}{TOGGLE_ROUTINE_ENDPOINT}"))
         .header("content-type", "application/json")
         .body(format!(
-            r#"{{"user_id":99,"template_id":1,"completed":true,"date":"{date}","idempotency_key":"http-test-toggle-routine-error"}}"#
+            r#"{{"user_id":99,"template_id":1,"completed":true,"date":"{date}","idempotency_key":"http-test-toggle-routine-error-{pid}"}}"#,
+            pid = std::process::id(),
         ))
         .send()
         .await

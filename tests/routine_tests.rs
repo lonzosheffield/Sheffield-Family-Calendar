@@ -244,6 +244,74 @@ async fn t1_5_claim_mutation_is_true_once_and_false_on_every_replay() {
 }
 
 // ---------------------------------------------------------------------------
+// Q1-08 — a failed (FK) write releases its claim for the next delivery
+// ---------------------------------------------------------------------------
+
+/// QA round 1 (Q1-08): `claim_mutation` used to commit in its own statement
+/// *before* the write it guards ran. A write that then failed — here, a
+/// foreign-key violation from an unknown `user_id` — left the key claimed
+/// forever, so the *same* key, replayed afterward against a real profile,
+/// saw "already claimed" and silently did nothing while `toggle_routine_task`
+/// still reported success (the "200/`null` instead of 500" flake HANDOFF
+/// recorded at the wave-3 close). The fix runs the claim and the write in one
+/// transaction, so this failed write must roll the claim back too — this
+/// test proves that end to end, through the real HTTP endpoint, not just at
+/// the `db::claim_mutation` layer.
+#[tokio::test]
+async fn t1_5_q1_08_a_failed_fk_claim_releases_its_key_for_a_valid_users_replay() {
+    let addr = spawn_test_server().await;
+    let pool = db::pool().await.expect("test sqlite pool opens");
+    let date = today_string();
+
+    // A profile no other test in this binary writes a "today" routine
+    // completion for, so this test's assertions cannot race another's.
+    const VALID_USER: u32 = 2;
+    let key = format!("t1-5-q1-08-{}", uuid_ish());
+
+    let template_id = db::daily_routine(pool, VALID_USER, &date)
+        .await
+        .expect("seeded routine is readable")
+        .first()
+        .expect("the morning routine is seeded")
+        .template_id;
+    db::set_routine_completion(pool, VALID_USER, template_id, false, &date)
+        .await
+        .expect("clear this test's own row before asserting on it");
+
+    // First delivery: `user_id = 99` has no matching `profiles` row, so the
+    // write inside the transaction fails its foreign key and the whole
+    // transaction — claim included — must roll back.
+    let failed = toggle_routine(addr, 99, template_id, true, &date, &key).await;
+    assert_eq!(
+        failed.status().as_u16(),
+        500,
+        "an unknown user_id must fail, body: {:?}",
+        failed.text().await
+    );
+
+    // Second delivery, the exact same key, a real profile this time: if the
+    // first call's claim had stuck (the pre-fix bug), this would see
+    // "already claimed" and return 200 while writing nothing.
+    let applied = toggle_routine(addr, VALID_USER, template_id, true, &date, &key).await;
+    assert_eq!(
+        applied.status().as_u16(),
+        200,
+        "the same key must be free to apply once for a valid user, body: {:?}",
+        applied.text().await
+    );
+
+    let items = db::daily_routine(pool, VALID_USER, &date).await.unwrap();
+    assert!(
+        items
+            .iter()
+            .find(|i| i.template_id == template_id)
+            .unwrap()
+            .completed,
+        "the second (valid-user) delivery of the same key must have actually applied"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // 1 — date = yesterday writes yesterday's row
 // ---------------------------------------------------------------------------
 

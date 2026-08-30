@@ -95,10 +95,16 @@ pub async fn toggle_routine_task(
             .await
             .map_err(super::to_server_error)?;
 
+        // QA round 1 (Q1-08): claim + write share one transaction so a
+        // failed write (e.g. an unknown `user_id` violating the FK to
+        // `profiles`) rolls the claim back with it — the key is not lost,
+        // and the next delivery of the same request gets to apply for real
+        // instead of silently no-oping.
         let payload =
             format!(r#"{{"template_id":{template_id},"completed":{completed},"date":"{date}"}}"#);
+        let mut tx = pool.begin().await.map_err(super::to_server_error)?;
         let claimed = crate::server::db::claim_mutation(
-            pool,
+            &mut *tx,
             &idempotency_key,
             "toggle_routine_task",
             user_id,
@@ -113,9 +119,10 @@ pub async fn toggle_routine_task(
             return Ok(());
         }
 
-        crate::server::db::set_routine_completion(pool, user_id, template_id, completed, &date)
+        crate::server::db::set_routine_completion(&mut *tx, user_id, template_id, completed, &date)
             .await
             .map_err(super::to_server_error)?;
+        tx.commit().await.map_err(super::to_server_error)?;
 
         // Protocol v2: the notification carries `user_id` **and** `date` so a
         // client refetches only the profile that actually changed (W7).
@@ -200,9 +207,13 @@ pub async fn toggle_custom_task(
             .await
             .map_err(super::to_server_error)?;
 
+        // QA round 1 (Q1-08): see the matching comment in
+        // `toggle_routine_task` — claim + write in one transaction so a
+        // failed write releases the claim instead of burying it.
         let payload = format!(r#"{{"task_id":{task_id},"completed":{completed},"date":"{date}"}}"#);
+        let mut tx = pool.begin().await.map_err(super::to_server_error)?;
         let claimed = crate::server::db::claim_mutation(
-            pool,
+            &mut *tx,
             &idempotency_key,
             "toggle_custom_task",
             user_id,
@@ -215,9 +226,10 @@ pub async fn toggle_custom_task(
             return Ok(());
         }
 
-        crate::server::db::set_custom_task_completion(pool, task_id, completed)
+        crate::server::db::set_custom_task_completion(&mut *tx, task_id, completed)
             .await
             .map_err(super::to_server_error)?;
+        tx.commit().await.map_err(super::to_server_error)?;
 
         // G22/W1: the v1 endpoint never told anyone this changed, so a
         // phone's tick never reached the TV. Scoped by `user_id` + `date`

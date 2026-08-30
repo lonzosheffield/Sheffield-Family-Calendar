@@ -68,20 +68,46 @@ impl RoutineDateState {
     }
 }
 
+/// A per-page-load nonce identifying **this client**, mixed into every
+/// idempotency key it mints (QA round 1, Q1-08).
+///
+/// Before this, a key was `performance.now()-counter` with no per-client
+/// component: two devices whose clocks and counters happened to line up
+/// (both freshly reloaded, both toggling their first item) could mint the
+/// *same* key, and the second device's write would be silently dropped as a
+/// "replay" of the first. Seeding once per page load from
+/// [`crate::client::realtime::entropy_seed`] (the wall clock/`performance.now`
+/// mix already used for WS backoff jitter) and salting it with
+/// [`crate::client::realtime::unit_random`] gives this load a 64-bit value no
+/// other tab, device or reload is likely to reproduce, without pulling in a
+/// UUID crate on wasm.
+fn client_nonce() -> u64 {
+    use std::sync::OnceLock;
+    static NONCE: OnceLock<u64> = OnceLock::new();
+    *NONCE.get_or_init(|| {
+        let seed = crate::client::realtime::entropy_seed();
+        let salt = (crate::client::realtime::unit_random() * u64::MAX as f64) as u64;
+        seed ^ salt
+    })
+}
+
 /// A fresh idempotency key for one mutation (PLAN v2 T1.5 / R-15).
 ///
-/// No client-side UUID crate is pulled in for this: `web-sys`'s `Performance`
-/// clock plus a per-process monotonic counter already gives every call on
-/// this client a value no other call on this client will ever repeat, and a
-/// key only has to be unique among the retries of *one* mutation, not
-/// globally — the server dedupes by the key's bytes, not by trusting it as an
-/// identity. Mirrors [`crate::client::realtime::entropy_seed`]'s reasoning
-/// for staying dependency-free on wasm.
+/// No client-side UUID crate is pulled in for this: [`client_nonce`] (unique
+/// to this page load) plus a wall-clock timestamp plus a per-process
+/// monotonic counter gives every call on this client a value no other call —
+/// on this client *or any other* — will ever repeat, and a key only has to
+/// be unique among the retries of *one* mutation, not globally — the server
+/// dedupes by the key's bytes, not by trusting it as an identity.
 pub fn new_idempotency_key() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!("{}-{n}", crate::client::realtime::now_millis())
+    format!(
+        "{:016x}-{}-{n}",
+        client_nonce(),
+        crate::client::realtime::now_millis()
+    )
 }
 
 #[component]

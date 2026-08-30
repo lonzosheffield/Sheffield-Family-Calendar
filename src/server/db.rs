@@ -425,8 +425,14 @@ pub async fn daily_routine(
 }
 
 /// Record or clear a routine completion for `date`.
+///
+/// **QA round 1 (Q1-08):** generic over `impl sqlx::SqliteExecutor<'_>`
+/// rather than pinned to `&SqlitePool`, so `api::routine`'s two toggles can
+/// run this on the *same* `Transaction` as [`claim_mutation`] — one commit,
+/// one rollback, atomically. Every existing caller still passes `&SqlitePool`
+/// or `&pool`, both of which satisfy the bound unchanged.
 pub async fn set_routine_completion(
-    pool: &SqlitePool,
+    executor: impl sqlx::SqliteExecutor<'_>,
     user_id: u32,
     template_id: u32,
     completed: bool,
@@ -444,7 +450,7 @@ pub async fn set_routine_completion(
         .bind(user_id)
         .bind(template_id)
         .bind(date)
-        .execute(pool)
+        .execute(executor)
         .await?;
     } else {
         sqlx::query(
@@ -456,7 +462,7 @@ pub async fn set_routine_completion(
         .bind(user_id)
         .bind(template_id)
         .bind(date)
-        .execute(pool)
+        .execute(executor)
         .await?;
     }
 
@@ -559,15 +565,19 @@ pub async fn insert_custom_task_with_due_date(
     Ok(id as u32)
 }
 
+/// **QA round 1 (Q1-08):** generic over `impl sqlx::SqliteExecutor<'_>` for
+/// the same reason as [`set_routine_completion`] — `api::routine`'s
+/// `toggle_custom_task` runs this inside the same transaction as its
+/// `claim_mutation` call.
 pub async fn set_custom_task_completion(
-    pool: &SqlitePool,
+    executor: impl sqlx::SqliteExecutor<'_>,
     id: u32,
     completed: bool,
 ) -> Result<(), sqlx::Error> {
     sqlx::query("UPDATE custom_tasks SET is_completed = ?2 WHERE id = ?1")
         .bind(id)
         .bind(completed as i64)
-        .execute(pool)
+        .execute(executor)
         .await?;
     Ok(())
 }
@@ -634,8 +644,18 @@ pub fn date_within_window(date: &str, today: &str) -> bool {
 /// could otherwise both observe "not yet claimed" between their own select
 /// and insert. `INSERT OR IGNORE` makes the claim atomic — `rows_affected()`
 /// is `1` only for whichever caller's row actually landed.
+///
+/// **QA round 1 (Q1-08):** generic over `impl sqlx::SqliteExecutor<'_>`
+/// rather than `&SqlitePool`. A claim used to commit in its own statement
+/// *before* the write it guards — if the write then failed (a bad
+/// `user_id`, a constraint violation), the key stayed claimed forever and
+/// every retry or replay of that exact request quietly did nothing while
+/// still reporting success. Callers now run the claim and the write inside
+/// one `pool.begin()` transaction (`api::routine`'s two toggles) so a failed
+/// write rolls the claim back with it, and the next delivery of the same key
+/// gets a fresh chance to apply.
 pub async fn claim_mutation(
-    pool: &SqlitePool,
+    executor: impl sqlx::SqliteExecutor<'_>,
     idempotency_key: &str,
     kind: &str,
     user_id: u32,
@@ -651,7 +671,7 @@ pub async fn claim_mutation(
     .bind(kind)
     .bind(user_id)
     .bind(payload)
-    .execute(pool)
+    .execute(executor)
     .await?;
 
     Ok(result.rows_affected() == 1)
