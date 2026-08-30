@@ -6,8 +6,6 @@ use crate::client::components::tv::TvShell;
 use crate::client::realtime::use_realtime_provider;
 use crate::shared::types::MaximizedView;
 
-const TAILWIND_CSS: Asset = asset!("/assets/tailwind.css");
-
 /// Global UI state shared by every panel.
 #[derive(Clone, Copy)]
 pub struct AppState {
@@ -51,7 +49,15 @@ pub fn App() -> Element {
     });
 
     rsx! {
-        document::Link { rel: "stylesheet", href: TAILWIND_CSS }
+        // Q1-01: served straight from the binary at `server::router::build_router`
+        // (`GET /tailwind.css`, `include_str!`'d from `assets/tailwind.css`), not
+        // through `asset!()`. The `family-hub.exe` service binary this project
+        // ships (`cargo build --release --bin family-hub`) has no `dx`-rewritten
+        // manganis manifest beside it, so `asset!("/assets/tailwind.css")` used to
+        // SSR the un-rewritten placeholder path here — a 503 and an unstyled
+        // kiosk. A stable, literal `href` always resolves, on that binary and on
+        // the `dx build` bundle alike.
+        document::Link { rel: "stylesheet", href: "/tailwind.css" }
         // T2.2 / G6 / R-16: the manifest is linked at its **root** URL, not
         // through `asset!()`. A hashed `/assets/<hash>-manifest.json` puts
         // `start_url: "/m"` outside the manifest's own scope, and the install

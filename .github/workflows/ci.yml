@@ -89,4 +89,28 @@ jobs:
           Write-Host "no duplicate axum/tower-http/hyper versions in the dependency tree"
 
       - name: Windows-x64 release build
-        run: cargo build --features server --release
+        shell: pwsh
+        run: |
+          # Q1-01: the binary the owner installs as the service is
+          # `family-hub.exe` (src/bin/family_hub.rs), not the Dioxus
+          # fullstack app's own `src/main.rs` binary — and it needs the
+          # `dx build` client bundle (already produced above) copied beside
+          # it or the kiosk never hydrates. This step assembles both into
+          # one shippable directory and fails the build if the bundle is
+          # missing, rather than silently archiving nothing usable.
+          cargo build --features server --release --bin family-hub
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force dist/FamilyHub | Out-Null
+          Copy-Item target/release/family-hub.exe dist/FamilyHub/
+          Copy-Item -Recurse target/dx/family-calendar/release/web/public dist/FamilyHub/public
+          if (-not (Get-ChildItem dist/FamilyHub/public/assets -Filter *.wasm -ErrorAction SilentlyContinue)) {
+            Write-Error "dist/FamilyHub/public/assets has no .wasm bundle — nothing shippable was produced"
+            exit 1
+          }
+          Write-Host "assembled dist/FamilyHub: family-hub.exe + public/ (with a wasm bundle)"
+
+      - name: Upload FamilyHub artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FamilyHub-windows-x64
+          path: dist/FamilyHub

@@ -167,6 +167,20 @@ async fn http_tv_serves_dashboard_with_panel_markers() {
         body.contains("Whiteboard"),
         "the kiosk dashboard should render the whiteboard panel title"
     );
+    // Q1-01: the stylesheet must be the stable `/tailwind.css` route this
+    // binary serves itself, never the un-rewritten manganis `asset!()`
+    // placeholder — that placeholder is exactly what shipped the kiosk
+    // unstyled from `family-hub.exe`.
+    assert!(
+        body.contains(r#"href="/tailwind.css""#),
+        "the kiosk dashboard must link the stylesheet at the stable /tailwind.css \
+         route, got: {body}"
+    );
+    assert!(
+        !body.contains("This should be replaced by dx"),
+        "the kiosk dashboard must never link the un-rewritten manganis asset \
+         placeholder, got: {body}"
+    );
 }
 
 #[tokio::test]

@@ -580,6 +580,14 @@ fn t3_2_owner_checklist_has_eight_numbered_steps_each_with_a_pass_criterion() {
         content.to_lowercase().contains("elevated"),
         "docs/OWNER_CHECKLIST.md must say `family-hub.exe install` needs an elevated prompt"
     );
+    // Q1-01: the release binary alone is not a shippable kiosk — the `dx
+    // build` `public\` bundle must go in beside it or `/tv`/`/m` never
+    // hydrate. `install` itself now refuses to run without it.
+    assert!(
+        content.contains("public"),
+        "docs/OWNER_CHECKLIST.md step 3 must mention installing the `public\\` \
+         (dx build) folder beside family-hub.exe"
+    );
 }
 
 #[test]

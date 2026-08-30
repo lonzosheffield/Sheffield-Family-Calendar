@@ -39,7 +39,7 @@
 //! the same handler tree serve both origins.
 
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use axum::extract::{DefaultBodyLimit, Request};
@@ -126,6 +126,18 @@ pub fn build_router(config: &FamilyHubConfig) -> Router {
             }),
         )
         .route("/ws", get(realtime::ws_handler))
+        .route(
+            "/tailwind.css",
+            get(|| async {
+                (
+                    [
+                        (header::CONTENT_TYPE, "text/css"),
+                        (header::CACHE_CONTROL, "no-cache"),
+                    ],
+                    include_str!("../../assets/tailwind.css"),
+                )
+            }),
+        )
         .route(
             "/api/upload_photo",
             post(crate::server::api::photos::upload_photo_handler)
@@ -350,13 +362,84 @@ fn ensure_public_dir_exists() {
             "failed to create the Dioxus public-assets directory"
         );
     }
+    // Q1-01: an empty `public/` satisfies `ServeConfig::new()`'s existence
+    // check (above) without satisfying the kiosk at all — no `dx build` bundle
+    // means `/tv`/`/m` render but never hydrate: no WebSocket, no D-pad
+    // handler. Loud, not fatal (the CLI subcommands `run`/`tv-probe`/`status`
+    // must still work without one), so a developer or the service log tells
+    // the story instead of a silent blank kiosk.
+    if !public_bundle_present(&public_path) {
+        tracing::error!(
+            path = %public_path.display(),
+            "no wasm client bundle in the public directory: /tv and /m will render but \
+             never hydrate — copy target/dx/family-calendar/release/web/public next to \
+             the executable or set DIOXUS_PUBLIC_PATH"
+        );
+    }
 }
+
+/// Does `public_dir` hold a real `dx build` client bundle (at least one
+/// `.wasm` file under `public_dir/assets`)? Shared by
+/// [`ensure_public_dir_exists`]'s warning above and by
+/// `server::service::install_with`'s refusal to register a service that
+/// cannot serve the kiosk (Q1-01).
+pub fn public_bundle_present(public_dir: &Path) -> bool {
+    std::fs::read_dir(public_dir.join("assets"))
+        .map(|entries| {
+            entries
+                .flatten()
+                .any(|entry| entry.path().extension().is_some_and(|ext| ext == "wasm"))
+        })
+        .unwrap_or(false)
+}
+
+/// Everything [`run`] can fail with (Q1-04). Previously every one of these
+/// was an `.expect(...)` that panicked inside a detached `runtime.spawn`
+/// task on the Windows service path (`server::service::scm::run_service`) —
+/// the panic went to stderr, nowhere the SCM could see it, and the service
+/// stayed `RUNNING` while serving nothing. `run` returning a concrete,
+/// `Display`-able error instead lets every caller (`main.rs`,
+/// `service::run_console`, `service::scm::run_service`) log the failure
+/// through the already-installed [`crate::server::service::ServiceLogger`]
+/// and exit non-zero, so the SCM's failure actions (restart) actually fire.
+#[derive(Debug)]
+pub enum RunError {
+    DataDir(std::io::Error),
+    Db(sqlx::Error),
+    Pki(crate::server::pki::PkiError),
+    Bind {
+        addr: SocketAddr,
+        err: std::io::Error,
+    },
+    Tls(crate::server::tls::TlsError),
+    Serve(std::io::Error),
+}
+
+impl std::fmt::Display for RunError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DataDir(err) => write!(f, "failed to prepare the data directory: {err}"),
+            Self::Db(err) => write!(f, "failed to open the database: {err}"),
+            Self::Pki(err) => write!(f, "failed to open the local certificate authority: {err}"),
+            Self::Bind { addr, err } => write!(f, "failed to bind {addr}: {err}"),
+            Self::Tls(err) => write!(f, "failed to bind the HTTPS server address: {err}"),
+            Self::Serve(err) => write!(f, "http server error: {err}"),
+        }
+    }
+}
+
+impl std::error::Error for RunError {}
 
 /// Resolve `config`, prepare its data directory, open the database pool,
 /// start the calendar poller, and serve the router on **both** origins
 /// forever (PLAN v2 D3′). Extracted out of `main.rs` (T0.6) so `main.rs`
 /// stays under 25 lines and never defines a route itself.
-pub async fn run(config: FamilyHubConfig) {
+///
+/// Returns only on a startup failure (Q1-04) — a bind, database, or PKI
+/// error before the servers start serving. Once both listeners are up this
+/// future does not resolve; it is driven forever by `tokio::select!` at the
+/// bottom.
+pub async fn run(config: FamilyHubConfig) -> Result<(), RunError> {
     // First statement of the server's real entrypoint, before anything can
     // touch rustls (`reqwest` also links it, so a second provider is on the
     // table and `get_default()` would panic rather than choose).
@@ -372,9 +455,7 @@ pub async fn run(config: FamilyHubConfig) {
     // logs) is resolved once here, absolutely, from `FamilyHubConfig` —
     // never relative to the current working directory (G23/R-14) — and
     // logged before anything else binds or opens a file.
-    config
-        .ensure_dirs_and_log()
-        .expect("failed to prepare the data directory");
+    config.ensure_dirs_and_log().map_err(RunError::DataDir)?;
     ensure_public_dir_exists();
     // Downstream server-fn bodies (`db::pool`, `api::create_photo_task`,
     // `api::list_screensaver_images`) each resolve `FamilyHubConfig`
@@ -383,9 +464,7 @@ pub async fn run(config: FamilyHubConfig) {
     // same absolute file.
     std::env::set_var("DATABASE_URL", config.database_url());
 
-    crate::server::db::pool()
-        .await
-        .expect("failed to open the database");
+    crate::server::db::pool().await.map_err(RunError::Db)?;
     crate::server::calendar::spawn_polling_task();
     // T1.2 H-7: start the DST-safe midnight tick at boot rather than waiting
     // for the first WebSocket upgrade to self-start it.
@@ -404,8 +483,8 @@ pub async fn run(config: FamilyHubConfig) {
     // Certificate source. Only `SelfSignedCa` exists in this wave; an
     // unrecognised `certs.mode` fails here, loudly, rather than at the
     // first renewal months later.
-    let CertSource::SelfSignedCa = CertSource::from_mode(None).expect("supported certs.mode");
-    let pki = pki_for(&config.pki_dir()).expect("failed to open the local certificate authority");
+    let CertSource::SelfSignedCa = CertSource::from_mode(None).map_err(RunError::Pki)?;
+    let pki = pki_for(&config.pki_dir()).map_err(RunError::Pki)?;
     match pki.renew_if_due() {
         Ok(true) => tracing::info!("re-issued the server leaf certificate at startup"),
         Ok(false) => {}
@@ -421,12 +500,15 @@ pub async fn run(config: FamilyHubConfig) {
     // (`FAMILY_HUB_ADDR`, default `0.0.0.0:8080`).
     let http_listener = tokio::net::TcpListener::bind(config.http_addr)
         .await
-        .expect("failed to bind the HTTP server address");
+        .map_err(|err| RunError::Bind {
+            addr: config.http_addr,
+            err,
+        })?;
     let http_addr = http_listener.local_addr().unwrap_or(config.http_addr);
 
     let tls = TlsListener::bind(config.tls_addr, pki.as_ref())
         .await
-        .expect("failed to bind the HTTPS server address");
+        .map_err(RunError::Tls)?;
     let tls_addr = tls.local_addr;
     let resolver = tls.resolver();
 
@@ -459,10 +541,11 @@ pub async fn run(config: FamilyHubConfig) {
 
     tokio::select! {
         result = axum::serve(http_listener, http_router.into_make_service()) => {
-            result.expect("http server error");
+            result.map_err(RunError::Serve)?;
         }
         () = tls.serve(https_router) => {}
     }
+    Ok(())
 }
 
 /// Log both surfaces' URLs at startup so the owner can read the kiosk URL
@@ -511,6 +594,41 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
         std::env::remove_var("DIOXUS_PUBLIC_PATH");
+    }
+
+    /// Q1-01: `public_bundle_present` is what both `ensure_public_dir_exists`'s
+    /// warning and `service::install_with`'s refusal key off.
+    #[test]
+    fn public_bundle_present_is_false_for_an_empty_directory_and_true_with_a_wasm_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "familyhub-router-bundle-present-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("assets")).expect("scratch assets dir");
+
+        assert!(
+            !public_bundle_present(&dir),
+            "an assets dir with no .wasm file must not count as a bundle"
+        );
+
+        std::fs::write(dir.join("assets/app-abc123.wasm"), b"\0asm").expect("scratch wasm file");
+        assert!(
+            public_bundle_present(&dir),
+            "a .wasm file under assets/ must count as a bundle"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn public_bundle_present_is_false_when_the_directory_does_not_exist_at_all() {
+        let dir = std::env::temp_dir().join(format!(
+            "familyhub-router-bundle-missing-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(!public_bundle_present(&dir));
     }
 
     fn headers_with_host(host: &str) -> header::HeaderMap {

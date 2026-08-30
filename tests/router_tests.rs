@@ -323,6 +323,44 @@ async fn screensaver_route_serves_a_jpeg_with_the_right_content_type() {
 }
 
 // ---------------------------------------------------------------------------
+// Q1-01: /tailwind.css is served from the binary itself, not through the
+// manganis `asset!()` placeholder — the fix for the un-rewritten,
+// never-hydrating `family-hub.exe` kiosk.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn tailwind_css_is_served_from_the_binary_at_a_stable_url() {
+    let config = test_config();
+    let addr = spawn_router(&config).await;
+
+    let response = http_client()
+        .get(format!("http://{addr}/tailwind.css"))
+        .send()
+        .await
+        .expect("GET /tailwind.css should respond");
+
+    assert_eq!(response.status().as_u16(), 200);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        content_type.contains("text/css"),
+        "expected text/css, got {content_type:?}"
+    );
+
+    let body = response.text().await.expect("response body");
+    assert!(
+        body.contains("sheffield-accent"),
+        "expected the committed assets/tailwind.css content (with the sheffield-* \
+         palette), got a body of {} bytes",
+        body.len()
+    );
+}
+
+// ---------------------------------------------------------------------------
 // main.rs shape: < 25 lines, no route definitions, frozen thereafter.
 // ---------------------------------------------------------------------------
 

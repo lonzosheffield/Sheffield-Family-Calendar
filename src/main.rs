@@ -14,7 +14,10 @@ fn main() {
 
     // PURPLE §P5.4: the rustls CryptoProvider is installed as the first line of main.
     family_calendar::server::tls::install_crypto_provider();
-    tokio::runtime::Runtime::new()
-        .expect("failed to start tokio runtime")
-        .block_on(router::run(FamilyHubConfig::load()));
+    let runtime = tokio::runtime::Runtime::new().expect("failed to start tokio runtime");
+    // Q1-04: a startup failure must exit non-zero, not panic inside `block_on`.
+    if let Err(err) = runtime.block_on(router::run(FamilyHubConfig::load())) {
+        eprintln!("{err}");
+        std::process::exit(1);
+    }
 }

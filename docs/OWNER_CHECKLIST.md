@@ -56,10 +56,24 @@ lease expires — release it (`ipconfig /release` then `/renew` on the PC) and r
 
 ### 3. Install the hub as a Windows service — **elevated**
 
-Put the release binary at its **permanent** location first (for example
-`C:\Program Files\FamilyHub\family-hub.exe`). The installer registers the service
-against `std::env::current_exe()`, so moving the file afterwards leaves a service
-pointing at a path that no longer exists.
+Put **both** of these at the hub's **permanent** location (for example
+`C:\Program Files\FamilyHub\`) before installing:
+
+* `family-hub.exe`, from `cargo build --release --features server --bin family-hub`.
+* The `public\` folder from `dx build --platform web --release`
+  (`target\dx\family-calendar\release\web\public`), copied in **beside** the exe so
+  the result is `C:\Program Files\FamilyHub\public\assets\*.wasm`.
+
+`family-hub.exe` alone renders `/tv` and `/m` unstyled and inert — no wasm client, no
+WebSocket, no D-pad handling — because it has no `dx`-rewritten manifest of its own;
+`install` **refuses to run** (a `NotFound` error, logged) unless
+`public\assets\*.wasm` already exists next to the executable it is registering, so a
+missing bundle is caught here rather than discovered later on the television. The
+prebuilt CI artifact (`FamilyHub-windows-x64`) already contains both pieces laid out
+this way.
+
+The installer registers the service against `std::env::current_exe()`, so moving the
+file afterwards leaves a service pointing at a path that no longer exists.
 
 Then, from an **elevated** PowerShell (Run as administrator):
 

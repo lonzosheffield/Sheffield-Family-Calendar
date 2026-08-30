@@ -81,3 +81,65 @@ fn run_with_cwd_forced_to_system32_never_creates_a_db_there() {
 
     let _ = std::fs::remove_dir_all(&data_dir);
 }
+
+/// PURPLE §P3 T3.1(c): "a deliberate startup failure appears in the log file
+/// within 5 s (proves logging precedes everything)". Q1-04: exercises the
+/// **real** startup path — `router::run` returning `RunError::Bind` from a
+/// genuine second bind on an already-occupied port, propagated through
+/// `service::run_console` to a non-zero process exit — rather than a
+/// hand-written `tracing::error!` call standing in for a startup failure.
+#[test]
+fn a_startup_bind_failure_is_logged_within_five_seconds() {
+    let data_dir = scratch_data_dir("bind-failure");
+
+    // Occupy a real ephemeral port first, so the hub's own HTTP bind fails.
+    let occupied = std::net::TcpListener::bind("127.0.0.1:0").expect("bind an ephemeral port");
+    let addr = occupied.local_addr().expect("local_addr");
+
+    let mut child = Command::new(family_hub_exe())
+        .arg("run")
+        .env("FAMILY_HUB_DATA_DIR", &data_dir)
+        .env("FAMILY_HUB_ADDR", addr.to_string())
+        .env("FAMILY_HUB_TLS_ADDR", "127.0.0.1:0")
+        .spawn()
+        .expect("failed to spawn family-hub.exe run");
+
+    let started = Instant::now();
+    let deadline = started + Duration::from_secs(15);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("try_wait should not error") {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("family-hub.exe run did not exit within 15s of a startup bind failure");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let elapsed = started.elapsed();
+    drop(occupied);
+
+    assert!(
+        !status.success(),
+        "family-hub.exe run must exit non-zero when it fails to start, got {status:?}"
+    );
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "a startup bind failure took {elapsed:?} to end the process, expected under 5s"
+    );
+
+    let log_path = data_dir.join("logs").join("familyhub.log");
+    let contents = std::fs::read_to_string(&log_path).unwrap_or_else(|err| {
+        panic!(
+            "expected {} to exist and be readable: {err}",
+            log_path.display()
+        )
+    });
+    assert!(
+        contents.contains("failed to bind"),
+        "familyhub.log did not record the bind failure: {contents:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&data_dir);
+}

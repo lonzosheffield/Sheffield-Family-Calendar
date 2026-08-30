@@ -62,6 +62,16 @@ Phones still work.
 **Verify:** the kiosk shows today's routine, and `/health`'s `ws_clients` is at least
 1 (the television's own socket).
 
+* **The kiosk shows unstyled text, or never reacts to the remote at all.** This is not
+  the same failure as "blank" above — the page loaded, but `public\` (the `dx build`
+  client bundle) is missing beside `family-hub.exe`: no CSS variables resolve without
+  the wasm client's own DOM setup, and with no wasm there is no WebSocket and no D-pad
+  handler either. See `docs/OWNER_CHECKLIST.md` step 3 — reinstall with **both**
+  `family-hub.exe` and its `public\` folder in place (`install` now refuses to run at
+  all without `public\assets\*.wasm` next to the executable, so this specific failure
+  can only reach the television if `public\` was deleted or moved *after* a working
+  install).
+
 ---
 
 ## Failure mode 2 — The hub is unreachable
@@ -98,6 +108,19 @@ Then work down this list — it is ordered by how often each cause actually happ
    (`sc query FamilyHub` says "does not exist"). Re-do `docs/OWNER_CHECKLIST.md`
    step 3 — and remember the binary must already be at its permanent path before
    `install` runs.
+
+**It should recover on its own first.** `install` configures the service's SCM
+failure actions (restart after 5 s, then 30 s, then 60 s, resetting after 24 h with no
+further failures) and turns them on for non-crash failures too — a startup failure
+(a bad bind, a corrupt database, an unreadable PKI directory) now makes the service
+report `Stopped` with a non-zero exit code instead of staying `RUNNING` while serving
+nothing, so a transient problem (the address briefly unavailable at boot, say) usually
+clears itself within a minute or two before you need to do anything below.
+
+**More detail than the default log shows:** set `FAMILY_HUB_LOG=debug` (or `trace`)
+in the environment before `install`/`start`/`run` — see `docs/DEV_WINDOWS.md`. The
+default `info` level intentionally drops `dioxus_core`/`hyper`/`sqlx` internals to
+keep the log from churning its 10 MB × 5 rotation ring in under an hour of real use.
 
 **Bridge while you debug:** `family-hub.exe run` from a normal console starts the same
 server in the foreground, logging to that console. The family gets the hub back while

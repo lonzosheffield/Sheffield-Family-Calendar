@@ -216,7 +216,9 @@ impl Default for WindowsServiceHost {
 impl ServiceHost for WindowsServiceHost {
     fn create(&self, exe_path: &Path) -> Result<(), ServiceError> {
         use windows_service::service::{
-            ServiceAccess, ServiceErrorControl, ServiceInfo, ServiceStartType, ServiceType,
+            ServiceAccess, ServiceAction, ServiceActionType, ServiceErrorControl,
+            ServiceFailureActions, ServiceFailureResetPeriod, ServiceInfo, ServiceStartType,
+            ServiceType,
         };
         use windows_service::service_manager::ServiceManagerAccess;
 
@@ -237,11 +239,41 @@ impl ServiceHost for WindowsServiceHost {
         };
 
         let service = manager
-            .create_service(&info, ServiceAccess::CHANGE_CONFIG)
+            .create_service(&info, ServiceAccess::START | ServiceAccess::CHANGE_CONFIG)
             .map_err(|e| ServiceError::Scm(e.to_string()))?;
         service
             .set_description(SERVICE_DESCRIPTION)
             .map_err(|e| ServiceError::Scm(e.to_string()))?;
+
+        // Q1-04: a startup failure now makes `run_service` report `Stopped`
+        // with a non-zero exit code (`scm::run_service`, above) instead of
+        // leaving the service RUNNING forever — these SCM recovery actions
+        // are what actually turns that into a self-healing restart.
+        service
+            .update_failure_actions(ServiceFailureActions {
+                reset_period: ServiceFailureResetPeriod::After(Duration::from_secs(86_400)),
+                reboot_msg: None,
+                command: None,
+                actions: Some(vec![
+                    ServiceAction {
+                        action_type: ServiceActionType::Restart,
+                        delay: Duration::from_secs(5),
+                    },
+                    ServiceAction {
+                        action_type: ServiceActionType::Restart,
+                        delay: Duration::from_secs(30),
+                    },
+                    ServiceAction {
+                        action_type: ServiceActionType::Restart,
+                        delay: Duration::from_secs(60),
+                    },
+                ]),
+            })
+            .map_err(|e| ServiceError::Scm(e.to_string()))?;
+        service
+            .set_failure_actions_on_non_crash_failures(true)
+            .map_err(|e| ServiceError::Scm(e.to_string()))?;
+
         Ok(())
     }
 
@@ -374,6 +406,44 @@ fn install_with(
     runner: &dyn CommandRunner,
 ) -> Result<String, ServiceError> {
     let exe_path = std::env::current_exe()?;
+    install_with_exe(host, runner, exe_path)
+}
+
+/// [`install_with`]'s body, taking the executable path as an explicit
+/// argument (Q1-01) rather than always resolving `std::env::current_exe()`
+/// — the seam that lets a unit test point the wasm-bundle check below at a
+/// scratch directory instead of wherever the test binary itself happens to
+/// live.
+fn install_with_exe(
+    host: &dyn ServiceHost,
+    runner: &dyn CommandRunner,
+    exe_path: PathBuf,
+) -> Result<String, ServiceError> {
+    // Q1-01: refuse to register a service that cannot serve the kiosk at
+    // all. The binary the owner is told to install is `cargo build
+    // --release --bin family-hub` — with no `public\` bundle beside it
+    // (from `dx build --platform web --release`), `/tv` and `/m` render but
+    // never hydrate: no wasm client, no WebSocket, no D-pad handler. Skipped
+    // when `DIOXUS_PUBLIC_PATH` is set — that env var is itself an explicit
+    // "the bundle lives somewhere else" declaration (`server::router::
+    // ensure_public_dir_exists` resolves the same variable).
+    if std::env::var_os("DIOXUS_PUBLIC_PATH").is_none() {
+        let public = exe_path
+            .parent()
+            .map(|dir| dir.join("public"))
+            .unwrap_or_default();
+        if !crate::server::router::public_bundle_present(&public) {
+            return Err(ServiceError::Io(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!(
+                    "{} has no wasm client bundle; copy target/dx/family-calendar/release/web/public \
+                     beside family-hub.exe first",
+                    public.display()
+                ),
+            )));
+        }
+    }
+
     host.create(&exe_path)?;
 
     let firewall = configure_firewall(runner);
@@ -568,17 +638,59 @@ pub fn configure_power_plan(runner: &dyn CommandRunner) -> Vec<CommandOutcome> {
 // as the very first statement of the real startup path (D9).
 // ---------------------------------------------------------------------------
 
-/// A `tracing::Subscriber` that appends every event to a rotating log file
-/// and mirrors it, best-effort, to the Windows Event Log. Deliberately not
+/// The number of buffered, sub-WARN lines [`ServiceLogger`] will hold in
+/// memory before flushing anyway (Q1-05) — a bound on how much a crash (not
+/// a clean exit; those go through a WARN/ERROR or [`Drop`]) could lose,
+/// independent of how chatty a burst of INFO/DEBUG events gets.
+const FLUSH_EVERY_N_LINES: u32 = 64;
+
+/// The `FAMILY_HUB_LOG` environment variable, parsed.
+/// `trace`/`debug`/`warn`/`error` (case-insensitive) raise or lower the
+/// sink's level; anything else (unset included) is `§P5.5` default 33's
+/// `info`. See `docs/DEV_WINDOWS.md` and `docs/RECOVERY.md`.
+fn level_from_env() -> tracing::Level {
+    match std::env::var("FAMILY_HUB_LOG")
+        .ok()
+        .as_deref()
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("trace") => tracing::Level::TRACE,
+        Some("debug") => tracing::Level::DEBUG,
+        Some("warn") => tracing::Level::WARN,
+        Some("error") => tracing::Level::ERROR,
+        _ => tracing::Level::INFO,
+    }
+}
+
+/// The buffered writer plus how many lines have accumulated in it since the
+/// last flush — both guarded by one lock so a rotate-and-reopen (which
+/// replaces the writer) and the line counter it resets can never be seen out
+/// of step with each other by a concurrent event.
+struct LoggerFile {
+    writer: io::BufWriter<std::fs::File>,
+    lines_since_flush: u32,
+}
+
+/// A `tracing::Subscriber` that appends every event at or above
+/// [`ServiceLogger::max_level`] to a rotating log file and mirrors WARN+
+/// events, best-effort, to the Windows Event Log. Deliberately not
 /// installed via `tracing::subscriber::set_global_default` inside the unit
 /// tests below (that can only succeed once per process, and `cargo test`
 /// runs every test in this file in one process) — tests instead use
 /// `tracing::subscriber::with_default`, exactly like
 /// `server::config::tests::CountingSubscriber` already does.
 pub struct ServiceLogger {
-    file: Mutex<std::fs::File>,
+    file: Mutex<LoggerFile>,
     path: PathBuf,
     event_source: String,
+    /// Q1-05: `§P5.5` default 33 — `info` in the service, `debug` behind
+    /// `FAMILY_HUB_LOG`. Previously absent entirely (`enabled()` always
+    /// returned `true`), so every `dioxus_core`/`hyper`/`sqlx` TRACE event
+    /// was formatted and flushed on the request hot path: 543 TRACE lines /
+    /// 293 KB in about three idle minutes, enough to churn the 10 MB × 5
+    /// ring in well under an hour of real use and bury every real error.
+    max_level: tracing::Level,
 }
 
 impl ServiceLogger {
@@ -598,9 +710,13 @@ impl ServiceLogger {
             .append(true)
             .open(&path)?;
         Ok(Self {
-            file: Mutex::new(file),
+            file: Mutex::new(LoggerFile {
+                writer: io::BufWriter::new(file),
+                lines_since_flush: 0,
+            }),
             path,
             event_source: EVENT_SOURCE.to_string(),
+            max_level: level_from_env(),
         })
     }
 
@@ -608,15 +724,34 @@ impl ServiceLogger {
         &self.path
     }
 
+    /// Force any buffered lines to disk right now. Called automatically on
+    /// [`Drop`] and whenever a WARN+ event is appended; exposed publicly so
+    /// a caller (or a test) can force a deterministic flush point without
+    /// waiting for either of those (Q1-05).
+    pub fn flush(&self) {
+        if let Ok(mut file) = self.file.lock() {
+            use io::Write as _;
+            let _ = file.writer.flush();
+            file.lines_since_flush = 0;
+        }
+    }
+
     /// Append one formatted line, rotating first if this write would push
-    /// the file over the cap.
-    fn append_line(&self, line: &str) {
+    /// the file over the cap. Flushes immediately for `level <= WARN` (a
+    /// real problem must reach disk before a crash or `process::exit` can
+    /// lose it — `Drop` never runs on `process::exit`) or every
+    /// [`FLUSH_EVERY_N_LINES`] lines otherwise; every other write is a
+    /// buffered, unflushed `BufWriter` append (Q1-05).
+    fn append_line(&self, line: &str, level: tracing::Level) {
         let Ok(mut file) = self.file.lock() else {
             return;
         };
         // Rotate-then-reopen if the file has grown past the cap since we
         // opened it (a long-running service keeps this handle open for its
-        // whole life, so `open`'s own one-time rotation is not enough).
+        // whole life, so `open`'s own one-time rotation is not enough). The
+        // size check reads the file's on-disk size, so anything still
+        // sitting in `file.writer`'s buffer is invisible to it until the
+        // next flush — a bounded, harmless lag against a 10 MB cap.
         if let Ok(true) = backup::rotate_log_if_needed(
             &self.path,
             backup::LOG_ROTATION_MAX_BYTES,
@@ -627,12 +762,17 @@ impl ServiceLogger {
                 .append(true)
                 .open(&self.path)
             {
-                *file = reopened;
+                file.writer = io::BufWriter::new(reopened);
+                file.lines_since_flush = 0;
             }
         }
         use io::Write as _;
-        let _ = writeln!(file, "{line}");
-        let _ = file.flush();
+        let _ = writeln!(file.writer, "{line}");
+        file.lines_since_flush += 1;
+        if level <= tracing::Level::WARN || file.lines_since_flush >= FLUSH_EVERY_N_LINES {
+            let _ = file.writer.flush();
+            file.lines_since_flush = 0;
+        }
     }
 
     fn report_to_event_log(&self, level: &str, message: &str) {
@@ -640,9 +780,20 @@ impl ServiceLogger {
     }
 }
 
+impl Drop for ServiceLogger {
+    fn drop(&mut self) {
+        self.flush();
+    }
+}
+
 impl tracing::Subscriber for ServiceLogger {
-    fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
-        true
+    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+        *metadata.level() <= self.max_level
+    }
+    fn max_level_hint(&self) -> Option<tracing::level_filters::LevelFilter> {
+        Some(tracing::level_filters::LevelFilter::from_level(
+            self.max_level,
+        ))
     }
     fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
         tracing::span::Id::from_u64(1)
@@ -671,7 +822,7 @@ impl tracing::Subscriber for ServiceLogger {
 
         let now = chrono::Local::now().to_rfc3339();
         let line = format!("{now} {level:>5} {target}: {}", visitor.0);
-        self.append_line(&line);
+        self.append_line(&line, level);
 
         if level <= tracing::Level::WARN {
             self.report_to_event_log(level.as_str(), &visitor.0);
@@ -791,6 +942,15 @@ fn install_global_logger(config: &FamilyHubConfig) -> io::Result<std::sync::Arc<
             "a tracing subscriber was already installed; familyhub.log will not receive events"
         );
     }
+    // Q1-04: a panic anywhere in the process (including inside a detached
+    // `runtime.spawn` task, where a panic would otherwise vanish to stderr —
+    // nowhere the SCM can see it) is logged through the same sink as every
+    // other event, at ERROR, before the default hook's stderr print still
+    // runs.
+    std::panic::set_hook(Box::new(|info| {
+        tracing::error!(%info, "panic");
+        eprintln!("{info}");
+    }));
     Ok(logger)
 }
 
@@ -806,7 +966,12 @@ fn run_console(config: FamilyHubConfig) {
     tracing::info!(pid = std::process::id(), "family-hub run: starting");
 
     let runtime = tokio::runtime::Runtime::new().expect("failed to start tokio runtime");
-    runtime.block_on(crate::server::router::run(config));
+    // Q1-04: a startup failure must be logged and exit non-zero, not panic
+    // silently inside `block_on`.
+    if let Err(err) = runtime.block_on(crate::server::router::run(config)) {
+        tracing::error!(%err, "family-hub run: startup failed");
+        std::process::exit(1);
+    }
 }
 
 /// `family-hub.exe tv-probe` — a thin, testable wrapper the plan calls for
@@ -963,9 +1128,12 @@ mod scm {
         report_pending(checkpoint);
 
         let config_for_run = config.clone();
-        runtime.spawn(async move {
-            crate::server::router::run(config_for_run).await;
-        });
+        // Q1-04: keep the JoinHandle so the loop below can notice the server
+        // task ending on its own (a startup failure) rather than only ever
+        // waking up on an explicit SCM Stop — a service that stayed RUNNING
+        // while serving nothing never gave the SCM's recovery actions
+        // (`WindowsServiceHost::create`, below) a reason to fire.
+        let handle = runtime.spawn(async move { crate::server::router::run(config_for_run).await });
         checkpoint += 1;
         report_pending(checkpoint);
 
@@ -980,16 +1148,29 @@ mod scm {
         })?;
         tracing::info!("FamilyHub service: running");
 
-        // Block the service-control-handler thread until a Stop arrives;
+        // Block the service-control-handler thread until a Stop arrives, or
+        // until the server task itself ends unexpectedly (Q1-04);
         // `router::run` keeps serving on the runtime's own worker threads in
         // the meantime.
-        let _ = stop_rx.recv();
+        let mut exit_code = ServiceExitCode::Win32(0);
+        loop {
+            match stop_rx.recv_timeout(Duration::from_secs(1)) {
+                Ok(()) => break,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) if handle.is_finished() => {
+                    tracing::error!("FamilyHub service: the server task ended unexpectedly");
+                    exit_code = ServiceExitCode::ServiceSpecific(1);
+                    break;
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
 
         status_handle.set_service_status(ServiceStatus {
             service_type: ServiceType::OWN_PROCESS,
             current_state: ServiceState::Stopped,
             controls_accepted: ServiceControlAccept::empty(),
-            exit_code: ServiceExitCode::Win32(0),
+            exit_code,
             checkpoint: 0,
             wait_hint: Duration::default(),
             process_id: None,
@@ -1025,6 +1206,16 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("scratch dir");
         dir
+    }
+
+    /// A fake `family-hub.exe` path under `dir`, with a `public\assets\*.wasm`
+    /// bundle beside it — what `install_with_exe`'s Q1-01 check requires
+    /// before it will register the service at all.
+    fn bundled_exe_path(dir: &Path) -> PathBuf {
+        std::fs::create_dir_all(dir.join("public/assets")).expect("scratch public/assets dir");
+        std::fs::write(dir.join("public/assets/app-abc123.wasm"), b"\0asm")
+            .expect("scratch wasm file");
+        dir.join("family-hub.exe")
     }
 
     // -----------------------------------------------------------------
@@ -1089,28 +1280,98 @@ mod tests {
     }
 
     #[test]
-    fn install_registers_the_service_pointed_at_this_executable() {
+    fn install_registers_the_service_pointed_at_the_given_executable() {
+        let dir = scratch_dir("install-register");
+        let exe_path = bundled_exe_path(&dir);
         let host = MockServiceHost::not_installed();
         let runner = RecordingCommandRunner::default();
 
-        let summary = install_with(&host, &runner).expect("install succeeds against the mock");
+        let summary = install_with_exe(&host, &runner, exe_path.clone())
+            .expect("install succeeds against the mock");
 
         assert!(*host.installed.lock().unwrap());
         assert!(summary.contains(SERVICE_NAME));
         let created_with = host.created_with.lock().unwrap().clone();
         assert_eq!(
             created_with,
+            Some(exe_path),
+            "install must point the service at the executable path it was given, not a hard-coded path"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `install_with` (no `_exe` suffix, the real CLI entry point) really
+    /// does forward `std::env::current_exe()` — the property the previous
+    /// version of this test proved — exercised with `DIOXUS_PUBLIC_PATH` set
+    /// so the Q1-01 bundle check does not need a `public\` folder to exist
+    /// next to whatever the test binary happens to be.
+    #[test]
+    fn install_with_forwards_the_real_running_executable() {
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = scratch_dir("install-current-exe");
+        std::fs::create_dir_all(dir.join("assets")).expect("scratch assets dir");
+        std::fs::write(dir.join("assets/app.wasm"), b"\0asm").expect("scratch wasm file");
+        std::env::set_var("DIOXUS_PUBLIC_PATH", &dir);
+
+        let host = MockServiceHost::not_installed();
+        let runner = RecordingCommandRunner::default();
+        install_with(&host, &runner).expect("install succeeds against the mock");
+
+        std::env::remove_var("DIOXUS_PUBLIC_PATH");
+        let created_with = host.created_with.lock().unwrap().clone();
+        assert_eq!(
+            created_with,
             Some(std::env::current_exe().expect("current_exe")),
             "install must point the service at the running executable, not a hard-coded path"
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn install_refuses_when_no_wasm_bundle_is_present_beside_the_executable() {
+        let dir = scratch_dir("install-no-bundle");
+        // Deliberately no `public\assets\*.wasm` under `dir`.
+        let exe_path = dir.join("family-hub.exe");
+        let host = MockServiceHost::not_installed();
+        let runner = RecordingCommandRunner::default();
+
+        let err = install_with_exe(&host, &runner, exe_path)
+            .expect_err("install must refuse without a wasm client bundle");
+        assert!(
+            matches!(&err, ServiceError::Io(e) if e.kind() == io::ErrorKind::NotFound),
+            "expected a NotFound I/O error, got {err:?}"
+        );
+        assert!(
+            !*host.installed.lock().unwrap(),
+            "install must not register the service when it refuses to install"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn install_succeeds_once_the_wasm_bundle_is_present_beside_the_executable() {
+        let dir = scratch_dir("install-with-bundle");
+        let exe_path = bundled_exe_path(&dir);
+        let host = MockServiceHost::not_installed();
+        let runner = RecordingCommandRunner::default();
+
+        install_with_exe(&host, &runner, exe_path).expect("install succeeds with a bundle present");
+        assert!(*host.installed.lock().unwrap());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn install_configures_three_firewall_rules_and_the_power_plan() {
+        let dir = scratch_dir("install-firewall");
+        let exe_path = bundled_exe_path(&dir);
         let host = MockServiceHost::not_installed();
         let runner = RecordingCommandRunner::default();
 
-        install_with(&host, &runner).expect("install succeeds");
+        install_with_exe(&host, &runner, exe_path).expect("install succeeds");
 
         let calls = runner.calls.lock().unwrap();
         let netsh_calls: Vec<_> = calls.iter().filter(|(p, _)| p == "netsh.exe").collect();
@@ -1140,21 +1401,27 @@ mod tests {
             powercfg_calls >= 2,
             "expected at least standby + hibernate powercfg calls"
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn install_still_reports_success_when_the_firewall_and_power_commands_fail() {
         // A hub that cannot tighten the firewall/power plan (no elevation)
         // must still finish installing (docs/HANDOFF.md H-12 precedent).
+        let dir = scratch_dir("install-command-failures");
+        let exe_path = bundled_exe_path(&dir);
         let host = MockServiceHost::not_installed();
         let runner = RecordingCommandRunner {
             fail: true,
             ..Default::default()
         };
 
-        let summary = install_with(&host, &runner).expect("install still succeeds");
+        let summary = install_with_exe(&host, &runner, exe_path).expect("install still succeeds");
         assert!(*host.installed.lock().unwrap());
         assert!(summary.contains("0/3") || summary.contains("firewall rules ok: 0/3"));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1166,10 +1433,12 @@ mod tests {
 
     #[test]
     fn install_then_start_then_status_then_stop_then_uninstall_round_trips() {
+        let dir = scratch_dir("install-round-trip");
+        let exe_path = bundled_exe_path(&dir);
         let host = MockServiceHost::not_installed();
         let runner = RecordingCommandRunner::default();
 
-        install_with(&host, &runner).expect("install");
+        install_with_exe(&host, &runner, exe_path).expect("install");
         assert_eq!(
             host.query_state().expect("installed"),
             ServiceRunState::Stopped
@@ -1194,6 +1463,8 @@ mod tests {
             ServiceError::NotInstalled
         ));
         assert_eq!(status_with(&host), 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1216,6 +1487,11 @@ mod tests {
         tracing::subscriber::with_default(logger.clone(), || {
             tracing::info!("hello from the unit test");
         });
+        // Q1-05: an INFO line is buffered, not flushed on every write (that
+        // hot-path flush is exactly what turned 543 TRACE lines into 293 KB
+        // in three idle minutes) — force it to disk explicitly rather than
+        // relying on the 64-line batch threshold.
+        logger.flush();
 
         let contents = std::fs::read_to_string(logger.log_path()).expect("log file readable");
         assert!(
@@ -1226,49 +1502,86 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// PURPLE §P3 T3.1(c): "a deliberate startup failure appears in the log
-    /// file within 5 s (proves logging precedes everything)". The logger is
-    /// opened first, exactly as `run_console`/`run_service` do, and the
-    /// failure is a genuine one — a second bind on a port a first listener
-    /// is already holding — not a synthetic `tracing::error!` call.
+    // PURPLE §P3 T3.1(c) ("a deliberate startup failure appears in the log
+    // file within 5 s") moved to `tests/service_tests.rs::
+    // a_startup_bind_failure_is_logged_within_five_seconds` (Q1-04): it now
+    // exercises the real `family-hub.exe run` startup path — a genuine bind
+    // failure propagated through `router::RunError` — rather than a
+    // hand-written `tracing::error!` call standing in for one.
+
+    // -----------------------------------------------------------------
+    // Q1-05: log level. §P5.5 default 33 — `info` in the service, `debug`
+    // behind `FAMILY_HUB_LOG` — was not implemented: `enabled()` returned
+    // `true` unconditionally, so every `dioxus_core`/`hyper`/`sqlx` TRACE
+    // event was formatted and flushed on the request hot path.
+    // -----------------------------------------------------------------
+
     #[test]
-    fn a_deliberate_startup_failure_is_logged_within_five_seconds() {
-        let dir = scratch_dir("logger-failure");
+    fn default_log_level_drops_debug_and_trace_but_keeps_info_and_above() {
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var("FAMILY_HUB_LOG");
+        let dir = scratch_dir("log-level-default");
         let logger = Arc::new(ServiceLogger::open(&dir).expect("open logger"));
+        assert_eq!(logger.max_level, tracing::Level::INFO);
 
-        let started = std::time::Instant::now();
-
-        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
         tracing::subscriber::with_default(logger.clone(), || {
-            runtime.block_on(async {
-                // First listener claims a real, free ephemeral port.
-                let first = tokio::net::TcpListener::bind("127.0.0.1:0")
-                    .await
-                    .expect("first bind must succeed to occupy a port");
-                let addr = first.local_addr().expect("local_addr");
-
-                // The deliberate failure: bind the SAME port again.
-                match tokio::net::TcpListener::bind(addr).await {
-                    Ok(_) => panic!("second bind on an occupied port unexpectedly succeeded"),
-                    Err(err) => {
-                        tracing::error!(%addr, %err, "deliberate startup failure: address already in use");
-                    }
-                }
-            });
+            tracing::trace!("q1-05 trace line, must be dropped by default");
+            tracing::debug!("q1-05 debug line, must be dropped by default");
+            tracing::info!("q1-05 info line, must be kept by default");
+            tracing::warn!("q1-05 warn line, must be kept by default");
         });
-
-        let elapsed = started.elapsed();
-        assert!(
-            elapsed < Duration::from_secs(5),
-            "logging the startup failure took {elapsed:?}, expected under 5s"
-        );
+        logger.flush();
 
         let contents = std::fs::read_to_string(logger.log_path()).expect("log file readable");
+        assert!(!contents.contains("q1-05 trace line"), "{contents:?}");
+        assert!(!contents.contains("q1-05 debug line"), "{contents:?}");
+        assert!(contents.contains("q1-05 info line"), "{contents:?}");
+        assert!(contents.contains("q1-05 warn line"), "{contents:?}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn family_hub_log_env_var_raises_the_level_to_debug() {
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("FAMILY_HUB_LOG", "debug");
+        let dir = scratch_dir("log-level-debug-env");
+        let logger = Arc::new(ServiceLogger::open(&dir).expect("open logger"));
+        std::env::remove_var("FAMILY_HUB_LOG");
+        assert_eq!(logger.max_level, tracing::Level::DEBUG);
+
+        tracing::subscriber::with_default(logger.clone(), || {
+            tracing::trace!("q1-05 trace line, still dropped under FAMILY_HUB_LOG=debug");
+            tracing::debug!("q1-05 debug line, kept under FAMILY_HUB_LOG=debug");
+        });
+        logger.flush();
+
+        let contents = std::fs::read_to_string(logger.log_path()).expect("log file readable");
+        assert!(!contents.contains("q1-05 trace line"), "{contents:?}");
+        assert!(contents.contains("q1-05 debug line"), "{contents:?}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn warn_and_error_events_flush_immediately_without_an_explicit_flush_call() {
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var("FAMILY_HUB_LOG");
+        let dir = scratch_dir("log-level-warn-flush");
+        let logger = Arc::new(ServiceLogger::open(&dir).expect("open logger"));
+
+        tracing::subscriber::with_default(logger.clone(), || {
+            tracing::error!("q1-05 error line flushes on its own");
+        });
+        // No `logger.flush()` here: a WARN/ERROR event must already be on
+        // disk (this is what lets `run_console`/`scm::run_service` log a
+        // startup failure and then `std::process::exit`/return without
+        // losing it — `Drop` never runs on `std::process::exit`).
+        let contents = std::fs::read_to_string(logger.log_path()).expect("log file readable");
         assert!(
-            contents.contains("deliberate startup failure"),
-            "log file did not record the startup failure: {contents:?}"
+            contents.contains("q1-05 error line flushes on its own"),
+            "{contents:?}"
         );
-        assert!(contents.contains("ERROR"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
