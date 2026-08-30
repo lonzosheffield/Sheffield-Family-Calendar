@@ -1331,6 +1331,11 @@ mod tests {
 
     #[test]
     fn install_refuses_when_no_wasm_bundle_is_present_beside_the_executable() {
+        // Boss (QA round 2 close): hold `ENV_LOCK` — the sibling test above
+        // sets `DIOXUS_PUBLIC_PATH` to a directory that *has* a wasm file, and
+        // without the lock this test could observe it and see `install`
+        // succeed (seen once on `main`, 2026-08-30).
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = scratch_dir("install-no-bundle");
         // Deliberately no `public\assets\*.wasm` under `dir`.
         let exe_path = dir.join("family-hub.exe");
