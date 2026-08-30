@@ -159,14 +159,14 @@ fn last_google_poll_cell() -> &'static Mutex<Option<String>> {
     LAST_GOOGLE_POLL.get_or_init(|| Mutex::new(None))
 }
 
-/// Record a successful Google Calendar poll. **Seam, not wired in**:
-/// `src/server/calendar.rs` is T2.4's file (`docs/reviews/PURPLE_TEAM.md`
-/// §P4), so T1.7 cannot add the call itself; `docs/HANDOFF.md` asks T2.4 to
-/// call this once per successful `fetch_today` inside `store_events`. Until
-/// then `/health`'s `last_google_poll` is honestly `null` — which is also the
-/// correct value today, since PURPLE §P5.5 default 24 ("no Google service
-/// account assumed") means the poller does not even start in this run
-/// (A4 — no credentials exist).
+/// Record a successful Google Calendar poll. Called by T2.4's
+/// `calendar::spawn_polling_task` once per successful full-window replace
+/// (`src/server/calendar.rs` is T2.4's file, `docs/reviews/PURPLE_TEAM.md`
+/// §P4; the call was requested through `docs/HANDOFF.md` and landed with
+/// T2.4). Until a poll has succeeded `/health`'s `last_google_poll` is
+/// honestly `null` — which is also the correct value today, since PURPLE
+/// §P5.5 default 24 ("no Google service account assumed") means the poller
+/// does not even start in this run (A4 — no credentials exist).
 pub fn record_google_poll_success(at: chrono::DateTime<chrono::Local>) {
     if let Ok(mut guard) = last_google_poll_cell().lock() {
         *guard = Some(at.to_rfc3339());

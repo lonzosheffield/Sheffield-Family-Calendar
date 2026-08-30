@@ -1437,9 +1437,10 @@ The first is a two-line change and removes the class of bug; the second keeps
 the throughput and needs a query change. Either way the assertion stands
 unchanged: it is describing correct behaviour, and it is the code that is
 wrong.
-## From T2.5 (photo tasks v2)
 
 ---
+
+## From T2.5 (photo tasks v2)
 
 T2.5 owns `src/server/router.rs` this wave (§P4) and `src/client/components/routine.rs`,
 plus new files it created (`src/server/api/photos.rs`, `tests/photo_tests.rs`).
@@ -1533,3 +1534,95 @@ cross-surface test should include a draw-then-immediate-snapshot case").
 Flagging for whoever next owns `tests/whiteboard_tests.rs` / T2.3's
 write-behind insert — not fixed here (out of this task's file ownership and
 out of scope for photo tasks).
+
+---
+
+## Boss decisions at the wave 2-a rerun close (T2.4, T2.5 merged)
+
+Merged in order T2.4 → T2.5 (squash), full gate green after each
+(`cargo fmt --check`, both clippy targets with `-D warnings`,
+`cargo test --features server` — 132 lib + every integration suite,
+including `calendar_tests` 14/14 and `photo_tests` 6/6). T2.7's branch and
+worktree are untouched (wave 2-b). The two merge conflicts were exactly the
+ones T2.4 H-20 predicted: `src/server/api/mod.rs` (both sides kept —
+T2.4's six calendar re-exports plus T2.5's `photos::delete_custom_task`) and
+the two appended `docs/HANDOFF.md` sections (both kept, T2.4 first).
+`Cargo.toml` auto-merged (rrule in `[dependencies]`, the profile overrides
+after `[profile.release]`).
+
+**Review outcomes (no rejections).** No task weakened a test or committed a
+secret. Edits outside the §P4 ownership table, each ratified:
+
+- **T2.4 H-20 (`Cargo.toml`: `rrule = "=0.14.0"`, server feature only):
+  ratified.** Same shape as T1.3/T1.4's pinned blocks; `all_unchecked()` is
+  absent from the tree (grep-verified at review).
+- **T2.4 H-21 (`src/server/api/mod.rs` re-exports): ratified.**
+  `get_today_events` keeps name, endpoint and signature.
+- **T2.5 H-26 (`db.rs`: `custom_tasks()` auto-hide filter +
+  `insert_custom_task_with_due_date`): ratified.** `0002_core.sql` named the
+  column as T1.5/T2.5's; the filter is a no-op for every pre-existing test
+  (all insert `due_date = NULL`).
+- **T2.5 H-27 (`shared/types.rs` `CustomTaskView.due_date`, `tv/fixture.rs`
+  mechanical `None`s): ratified.** Additive, `#[serde(default)]`.
+- **T2.5 H-28 (`tests/http_tests.rs` Gate-2 assertion 10): ratified.** The
+  rename `encode_first_photo` → `read_first_photo` follows the retired base64
+  path; the assertion still proves `Vec<FileData>` reads back through the 0.7
+  shape and now checks mime + raw bytes instead of a base64 string. Not a
+  weakening.
+- **T2.5 H-29 (`Cargo.toml` `[profile.dev.package.*]` opt-level 3 for
+  `image`/`zune-jpeg`/`zune-core`/`png`/`image-webp`): ratified.** Dev/test
+  only; `[profile.release]` unchanged. Without it the 12 MP fixture cannot
+  meet §P3 T2.5(a)'s < 3 s under `cargo test`.
+- **T2.5 `assets/tailwind.css` (edited without a HANDOFF note): superseded.**
+  It is a generated file that Boss rebuilds at every close (below), so the
+  branch's version was simply overwritten. Rule restated for wave 2-b/3:
+  do not commit `assets/tailwind.css` on a task branch; ask for the rebuild.
+- **T2.5 `wasm_bindgen(inline_js)` snippet in `routine.rs` (~45 lines of
+  JS): accepted, with a `docs/NON_RUST.md` row added by Boss.** It is the
+  first hand-written JS in the tree besides `sw.js`. The code comment
+  declares it under the `wasm-bindgen` glue exception and the reasoning is
+  sound (a `web-sys` pipeline needs half a dozen feature flags on a
+  Boss-owned `Cargo.toml`; the server re-sniffs and re-encodes regardless),
+  but a hand-written snippet is a component, not glue, and needs its own
+  row. **Rule for later waves: any new `inline_js` lands with its
+  `docs/NON_RUST.md` row in the same commit, or it is rejected.**
+- **T2.2 H-23 (offline enqueue on both toggle-failure paths in
+  `routine.rs`): applied by T2.5, as deferred at the previous close.**
+  Closed.
+
+**Applied by Boss in this close:**
+
+- **T2.4 H-23 — `assets/tailwind.css` rebuilt once** on the merged tree with
+  the pinned 3.4.17 binary (`tailwindcss.exe -i input.css -o
+  assets/tailwind.css --minify`); `grid-cols-7`, the `red-*` error-box
+  utilities, `uppercase` and `tracking-wide` verified present.
+- **T2.4 H-24 — `src/server/health.rs` doc comment** on
+  `record_google_poll_success` no longer names `fetch_today`/`store_events`;
+  it now says where the call actually lives. Doc-only.
+- **`docs/NON_RUST.md`** gained the `inline_js` row described above.
+
+**Left recorded (not applied), with the reason:**
+
+- **T2.4 H-22 (TV kiosk still renders `is_empty()`; `TvModel.events` →
+  `CalendarState<Vec<CalendarEvent>>`): scheduled for the 2-b boundary as a
+  T2.1-owner micro-commit.** It is mechanical but touches `tv/model.rs`,
+  `tv/shell.rs`, `tv/surface.rs`, `tv/fixture.rs` and every `TvModel`
+  construction in `tests/tv_tests.rs`, so it is not a one-line apply. T2.4's
+  three-step recipe stands; the golden focus file should not move.
+- **T2.4 H-25 + T2.5's residual (`loop_tests` post-restart Snapshot flake,
+  ~15 %; `whiteboard_tests` 500-stroke count flake): one root cause,
+  T2.3's write-behind `record_stroke`.** Both suites passed in both full runs
+  at this close, so not blocking, but the flake is real and measured.
+  **Decision: fix by awaiting the insert (T2.4's option 1)** as a
+  T2.3-owner micro-commit at the 2-b boundary, then re-measure
+  `t1_2_3`'s p99 — if it regresses past the 250 ms budget, fall back to the
+  contiguous-committed-seq `snapshot` (option 2). Neither assertion is to be
+  weakened.
+- **`src/client/components/dashboard.rs`** is still unreferenced (neither
+  T2.4 nor T2.5 reads it); deleted at the 2-b close as already planned.
+- **T2.1 H-23 (server `Health` heartbeat)** remains scheduled for the 2-b
+  boundary, unchanged.
+
+**Worktrees:** `.claude/worktrees/wf_d57bfb45-d60-2` (T2.4) and
+`wf_d57bfb45-d60-3` (T2.5) removed; `wf_a4f253d4-9d7-32` (T2.7, unmerged)
+kept.
