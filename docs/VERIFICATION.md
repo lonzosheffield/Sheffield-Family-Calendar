@@ -90,3 +90,63 @@ Acceptance tests organized by task:
 **Note on pre-existing T2.3 residual:**
 - `tests/whiteboard_tests.rs::t2_3_a_five_hundred_strokes_persist_and_replay_in_seq_order` was already marked as a known residual in docs/HANDOFF.md (T2.3 H-21) — a detached out-of-order stroke insert issue independent of T3.3's work. This failure was verified to exist on unmodified main (commit 41eb990) and remains unchanged by this task.
 
+## Rendered in Chrome
+
+**Date:** 2026-08-30 (Boss pass, after the T3.3 squash-merge to `main`)  
+**Browser:** Chrome on the Windows 11 dev box, driven through the Claude-in-Chrome MCP tools (`tabs_create_mcp`, `navigate`, `resize_window`, `computer`, `read_console_messages`, `read_network_requests`). The tools were available; everything below was observed, not inferred.  
+**Server:** release build started in the background with `FAMILY_HUB_DATA_DIR` pointed at a fresh temp directory (`family.db` migrated to version 3, PKI generated, `/health` answered `{"db":true,"ws_clients":…,"migration_version":3,"days_to_expiry":396}`). Two binaries were exercised — see the first finding.
+
+### Finding 1 — the `cargo build --release --features server` binary serves an unstyled `/tv`
+
+`target/release/family-calendar.exe` (plain cargo, no `dx`) SSRs this stylesheet tag on `/tv`:
+
+```html
+<link rel="stylesheet" href="/assets/This should be replaced by dx as part of the build process. If you see this error, make sure you are using a matching version of dx and dioxus and you are not stripping symbols from your binary."/>
+```
+
+That is the un-rewritten `asset!("/assets/tailwind.css")` placeholder from `src/client/app.rs`: manganis only rewrites it when the **server** binary is produced by `dx build`. The request 503s, no Tailwind CSS is applied, and the kiosk renders as browser-default HTML (Times New Roman, unstyled buttons, no visible focus ring) — screenshot: [tv-cargo-binary-unstyled.jpg](verification/tv-cargo-binary-unstyled.jpg). The wasm client still hydrated (server fns were called, the WebSocket connected) but the page is unusable on a television.
+
+`dx build --platform web --release` builds the same server (`target/dx/family-calendar/release/web/server.exe`, with `public/` beside it) with the link rewritten to `/assets/tailwind-dxhe5dba96a1372f1ff.css` (200, `text/css`). **The shippable Windows binary is dx's `server.exe`, not `cargo build --release`'s `family-calendar.exe`.** CI's final "Windows-x64 release build" step (`cargo build --features server --release`) therefore produces an artefact that must not be installed as-is; `docs/DEV_WINDOWS.md` and `docs/FIRE_TV.md` should point the owner at the dx output. Carried to `docs/HANDOFF.md` for T3.5.
+
+Everything below was captured against the dx-built `server.exe`.
+
+### `/tv` at 1920×1080 (`http://127.0.0.1:8080/tv`)
+
+Window resized to 1920×1080 via `resize_window` (the tool reports the capture at 1510×812 because the display is DPI-scaled; the layout is the 1920-wide one). Screenshot: [tv-1920x1080-routine.jpg](verification/tv-1920x1080-routine.jpg).
+
+- Header: "Morning Routine · Boy 1" in the T3.4 blue, "updated HH:MM" top-right, **no red Disconnected badge**.
+- Left rail: the four seeded profiles (Boy 1–4, red/amber/green/blue avatars) as large cards; Boy 1 selected with the yellow focus ring on it (autofocus on mount worked without a click).
+- Right: progress bar plus the `0 / 8` pill, the eight seeded routine items as large checkbox cards with title and subtitle, scrollable.
+- Bottom: the three panel tabs (Morning Routine / Today / Whiteboard), the current one filled.
+- Overscan margin visible on all four sides; nothing clipped at the edges; type comfortably readable at 10-ft scale.
+
+### Console errors
+
+`read_console_messages` on `/tv` across two full page loads: **zero errors or warnings from the application.** The only three entries are `Error: A listener indicated an asynchronous response by returning true, but the message channel closed before a response was received` at `/tv:0:0`, which is emitted by an installed Chrome extension (the Acrobat extension `efaidnbmnnnibpcajpcglclefindmkaj`, visible in the same tab's network log injecting its content scripts) — not by the page.
+
+Network on `/tv`: `GET /tv` 200, the hashed `.js` / `.wasm` / `.css` assets 200, server fns `tv_clock`, `list_profiles`, `get_daily_routine`, `get_custom_tasks`, `get_today_events`, `list_screensaver_images` all `POST … 200`. One oddity worth a note, not a fix: the page's `<link rel="manifest" href="/manifest.webmanifest">` on the HTTP origin answers 308 to `https://…:8443/manifest.webmanifest` (by design — the manifest is an `/m`-only route), which Chrome logs as a failed manifest fetch on the TV. Harmless on the kiosk (it never installs a PWA), but it is one extra request per load.
+
+### WebSocket
+
+**Connected.** `/health` reported `"ws_clients":1` while the single `/tv` tab was open (0 before it was opened), the header showed no Disconnected badge, and after the first server process was killed and the dx `server.exe` started in its place the tab re-connected on its own (`ws_clients` back to 1 within about 6 s) without a reload — the T1.2 reconnect path works in a real browser. (The MCP network log does not list WebSocket upgrades, so `/health` is the evidence.)
+
+### Routine driven by keyboard (D-pad emulation)
+
+Keys sent with `computer(action: "key")` to the freshly loaded page, no mouse click first:
+
+| Press | Observed |
+| --- | --- |
+| `Enter` | focus ring moved from the Boy 1 rail card into the list — yellow ring on item 1 "Wake up and thank God for the day!" |
+| `ArrowDown` | ring moved to item 2 "Make your bed" |
+| `Enter` | `POST /api/toggle_routine_task` 200; item 2 rendered checked (filled blue tick), progress bar advanced, pill became `1 / 8` — screenshot: [tv-routine-after-enter-toggle.jpg](verification/tv-routine-after-enter-toggle.jpg) |
+| `ArrowRight` | panel cycled to **Today** ("Nothing on the calendar today.", the Today tab filled) — screenshot: [tv-today-after-arrowright.jpg](verification/tv-today-after-arrowright.jpg) |
+
+So the routine is fully drivable with arrows + Enter, and the focus ring is visible on every step. One caveat that is a harness artefact, not an app fault: when the key handler's `<div tabindex="0">` loses focus (one click on empty body, on the unstyled build) key presses go nowhere until the surface is focused again — the same as any remote-driven kiosk, and the shell's `onmounted` autofocus covers the real boot. Also: `computer(screenshot)` timed out for 30 s whenever the `/tv` tab sat in the background behind another tab (Chrome throttles background renderers); every capture taken with the tab in front succeeded, and the app itself never froze (`/health` and the server fns kept answering throughout).
+
+### `/m` over HTTPS
+
+`https://127.0.0.1:8443/m` hit Chrome's privacy interstitial for the hub's private CA (expected — the CA is not installed in this profile), and the MCP tools cannot attach to an interstitial (`Cannot attach to this target` / `Frame with ID 0 is showing error page`), so the bypass could not be clicked. The fallback `http://127.0.0.1:8080/m` is a 308 to the same HTTPS URL (T1.3, by design), so it lands on the same interstitial. **`/m` was therefore not rendered in Chrome in this pass.** Verified out-of-band instead: `curl -k https://127.0.0.1:8443/m` gives 200 with `<title>Sheffield Family Hub</title>` and the hashed Tailwind link, and `manifest.webmanifest` is 200 `application/manifest+json` on the TLS origin. Rendering `/m` on a phone with the CA installed is already a step of `docs/OWNER_CHECKLIST.md`; this Chrome pass does not replace it.
+
+### Housekeeping
+
+Background server stopped after the pass (`taskkill`), the temp data directory left under the session scratchpad, both Chrome tabs closed.

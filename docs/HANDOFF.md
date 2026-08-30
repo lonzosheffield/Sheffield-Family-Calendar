@@ -2135,3 +2135,46 @@ action.
   `target/`) did not reproduce in the Boss's gate run either. Keep the cheap
   mitigation on the table: `cargo clean` (or a separate `CARGO_TARGET_DIR`)
   between the wasm32 and host clippy targets if CI ever shows it.
+
+---
+
+## Boss — wave 3 close (T3.3 merge, release binary rendered in Chrome)
+
+`phase-3/T3.3` squash-merged as `T3.3: Verification pass …` after its
+`docs_tests` ran green on top of `main` (17/17). Full baseline (fmt, both
+clippy invocations, `cargo test --features server`) re-run after this close:
+all four exit 0 — 166 lib unit tests plus every integration binary green
+(`whiteboard_tests` 3/3, so the T2.3 residual T3.3 recorded did not
+reproduce here; `realtime_tests` 12/12 in 130 s). T3.3's branch was not
+`cargo fmt --check` clean (the `expected_tasks` vec); formatted at the merge.
+
+**Applied:** the carried-forward T3.3 item — `docs/VERIFICATION.md` deleted
+from `PLANNED_ARTEFACTS` in `tests/docs_tests.rs`, so the link checker now
+holds `PLAN.md`/`HANDOFF.md` to the file that exists.
+
+**Added:** a "Rendered in Chrome" section at the end of
+`docs/VERIFICATION.md` — the release binary started against a temp
+`FAMILY_HUB_DATA_DIR`, `/tv` opened in Chrome at 1920×1080 through the
+Claude-in-Chrome tools, screenshots under `docs/verification/`, console and
+network read, WebSocket confirmed via `/health`, the routine driven by
+`Enter` / `ArrowDown` / `Enter` / `ArrowRight`.
+
+**Carried forward:**
+- **T3.5 / CI / runbooks — the plain `cargo build --release --features
+  server` binary is not shippable.** It SSRs the un-rewritten
+  `asset!("/assets/tailwind.css")` placeholder as the stylesheet `href`
+  (503, page renders unstyled). Only `dx build --platform web --release`'s
+  `target/dx/family-calendar/release/web/server.exe` (with `public/` beside
+  it) carries the hashed link. CI's last step should build/archive the dx
+  server binary (or the release-build step should be documented as
+  compile-check only), and `docs/DEV_WINDOWS.md` / `docs/FIRE_TV.md` /
+  `docs/OWNER_CHECKLIST.md` should name `server.exe` from the dx output as
+  the binary the T3.1 service installs. Details and screenshot in
+  `docs/VERIFICATION.md` §"Rendered in Chrome", Finding 1.
+- **T3.5:** `/m` over HTTPS was not rendered in this pass — Chrome's
+  private-CA interstitial cannot be driven by the MCP tools, and the HTTP
+  fallback 308s back to it. The phone-side render stays with the owner
+  checklist (CA installed on the phone).
+- **Minor, no action unless convenient:** `/tv` on the HTTP origin links
+  `/manifest.webmanifest`, which 308s to the TLS origin and shows as a failed
+  manifest fetch in Chrome on every kiosk load.
