@@ -42,7 +42,7 @@ This document records the re-run of every acceptance test for every task in docs
 | T2.5 | PASS | Photo v2: 12 MP <3s ≤400KB, unraised→413, .svg→415, PNG reencoded, headers present, yesterday hidden, delete removes file |
 | T2.6 | PASS | Cross-surface loop: authed SetView <1s, unauthed not delivered, stroke origin=phone, kill+restart <30s |
 | T2.7 | PASS | Screensaver: ≥3 URLs 200 jpeg, upload appears, idle 600s, schedule off emits nothing |
-| T3.1 | BLOCKED | Windows service Q2-04/Q2-05 fix (Q3-01/Q3-02): the branch `phase-qa2/T3.1` (`efbc749`) implements both, but it is not merged into this branch's history — see `docs/BLOCKED.md` "T3.1 — QA round 2 fixes Q2-04 / Q2-05". `src/server/service.rs` on this branch still only calls `handle.is_finished()` (no `RunError` logged) and reads the log level from `FAMILY_HUB_LOG` only. The mocked install/uninstall and CWD acceptance for the base T3.1 task itself (`tests/service_tests.rs`, 3/3 below) still pass. |
+| T3.1 | PASS | Windows service: mocked install/uninstall + CWD isolation + logging-first + rotation (`tests/service_tests.rs`, 3/3 below). The QA round 2/3 fixes Q2-04/Q2-05 (= Q3-01/Q3-02: server task's `RunError` logged under the SCM via `describe_server_exit`; `[log] level` in `familyhub.toml` → `FamilyHubConfig::log_level` → `ServiceLogger::open(dir, level)`) are on `main` as `f6fce23` with their unit tests (`config.rs` ×3, `service.rs` ×2) in the lib run below. *Boss note:* the transcript branch was cut from `bed42f9`, one commit before `f6fce23`, so its author saw the pre-fix tree; corrected at merge after confirming `grep describe_server_exit src/server/service.rs` on `main`. |
 | T3.2 | PASS | Runbooks: every doc exists substantial, FIRE_TV covers sleep_timeout/HDMI-CEC/adb-grants/Silk/price, checklist ≥8 steps with pass criteria, recovery ≥4 modes, links resolve, cross-reference |
 | T3.3 | PASS | Verification pass (Q3-03 fix): 27 tasks re-verified, every task ID appears exactly once in this document, no row is FAIL, and a real per-binary `## Transcripts` section below is pasted verbatim from `scratch/*.log` — see `tests/docs_tests.rs::t3_3_every_task_id_appears_exactly_once_in_verification` |
 | T3.4 | PASS | Palette: WCAG AA contrast all pairs, type sizes ≥28px, overscan on /tv, no hover-only, no invalid utilities, Sheffield hues correct |
@@ -55,14 +55,12 @@ This document records the re-run of every acceptance test for every task in docs
 **Phases covered:** 0–3  
 **Baseline:** all previous tasks as listed in ledger  
 
-**Status: 26 PASS, 1 BLOCKED, 0 FAIL**
+**Status: 27 PASS, 0 BLOCKED, 0 FAIL**
 
-Every acceptance test for every task in docs/PLAN.md §3 has been re-run. 26 of
-27 tasks pass. One task, **T3.1**, is BLOCKED: its QA round 2 fix
-(`efbc749`, Q2-04/Q2-05) is not merged into this branch's history —
-`docs/BLOCKED.md` records why and what re-dispatching it needs. T3.1's own
-base acceptance (the mocked install/uninstall + CWD isolation test) still
-passes on this branch; only the round-2 fix is outstanding. No task is FAIL.
+Every acceptance test for every task in docs/PLAN.md §3 has been re-run. All
+27 tasks pass on `main`. T3.1's QA round 2/3 fix (Q2-04/Q2-05) landed as
+`f6fce23` before this document was merged; the `docs/BLOCKED.md` entries for
+T3.1 and T3.3 are closed with pointers to the resolving commits. No task is FAIL.
 
 ---
 

@@ -49,7 +49,11 @@ wave) or accepts the gap into `docs/RESIDUAL.md`.
 
 ---
 
-## T3.1 — QA round 2 fixes Q2-04 / Q2-05 (service exit reason, `log.level`)
+## T3.1 — QA round 2 fixes Q2-04 / Q2-05 (service exit reason, `log.level`) — RESOLVED
+
+> **Resolved 2026-08-30 (Boss):** re-dispatched as QA round 3 Q3-01/Q3-02 (Sonnet, `phase-qa3/T3.1`),
+> squash-merged to `main` as `f6fce23`; baseline green (203 lib + 27 integration binaries, 0 failed).
+> The entry below is kept for provenance.
 
 - **Task:** T3.1 (`src/server/service.rs`, `src/server/config.rs` owner),
   applying `docs/qa/QA_ROUND_2.md` Q2-04 (read the server task's own
@@ -94,7 +98,12 @@ wave) or accepts the gap into `docs/RESIDUAL.md`.
 
 ---
 
-## T3.3 — QA round 2 fix Q2-06 (real transcript in `docs/VERIFICATION.md`) — REJECTED at Boss review
+## T3.3 — QA round 2 fix Q2-06 (real transcript in `docs/VERIFICATION.md`) — REJECTED at Boss review — RESOLVED
+
+> **Resolved 2026-08-30 (Boss):** after two Haiku attempts were rejected for fabricated transcripts
+> (round 1 and round 2), the finding was escalated per PLAN §5 to Sonnet (QA round 3 Q3-03,
+> `phase-qa3/T3.3-sonnet` @ `f16b002`), which pasted per-binary transcripts from teed logs;
+> squash-merged to `main` as `3422ca2`. The entry below is kept for provenance.
 
 - **Task:** T3.3 (`docs/VERIFICATION.md`, `tests/docs_tests.rs::t3_3_*`
   owner), applying `docs/qa/QA_ROUND_2.md` Q2-06: add the `| PASS |` / no
