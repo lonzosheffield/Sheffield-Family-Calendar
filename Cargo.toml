@@ -120,6 +120,15 @@ mdns-sd = { version = "=0.21.0", optional = true }
 # `mdns-sd` already pulls this exact version in, so it adds no new subtree.
 if-addrs = { version = "=0.15.0", optional = true }
 
+# T3.1 — Windows service host (PLAN v2 D9, PURPLE_TEAM.md §P5.4). Windows-only
+# by nature (wraps the Service Control Manager); this project targets Windows
+# exclusively (no aarch64/Linux job — T0.8), so it is added unconditionally
+# under the `server` feature like every other server-only crate rather than
+# behind an extra `cfg(windows)` target table. `src/server/service.rs` guards
+# its own body with `#[cfg(windows)]` anyway so `cargo check --features
+# server` still type-checks off Windows.
+windows-service = { version = "=0.8.1", optional = true }
+
 [dev-dependencies]
 tokio-tungstenite = "0.28"
 image = "0.25"
@@ -163,7 +172,25 @@ server = [
     "dep:if-addrs",
     "dep:argon2",
     "dep:rrule",
+    "dep:windows-service",
 ]
+
+[[bin]]
+# T3.1 (PLAN v2 D9): the Windows service host / CLI —
+# `family-hub.exe install|uninstall|start|stop|status|run|tv-probe`. A
+# separate binary target rather than a mode of the frozen `src/main.rs`
+# (`docs/reviews/PURPLE_TEAM.md` §P4: `src/main.rs` "T0.6 owner, none
+# [later], frozen"): `main.rs` is Dioxus's own fullstack entry point (it
+# `dioxus::launch`es the client app off the `server` feature and hands the
+# server feature straight to `router::run` with no subcommands at all), and
+# growing subcommand parsing, SCM plumbing and a dedicated logger into it
+# would be exactly the edit §P4 forbids. `family-hub.exe` reuses every piece
+# of the existing server (`router::run`, `config::FamilyHubConfig`,
+# `backup::rotate_log_if_needed`) from its own `main()` instead of
+# duplicating any of it.
+name = "family-hub"
+path = "src/bin/family_hub.rs"
+required-features = ["server"]
 
 [profile.release]
 opt-level = "z"

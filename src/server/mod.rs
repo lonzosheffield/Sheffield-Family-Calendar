@@ -21,5 +21,9 @@ pub mod mdns;
 pub mod pki;
 #[cfg(feature = "server")]
 pub mod router;
+// T3.1 - Windows service host + CLI (PLAN v2 D9): install/uninstall/start/
+// stop/status/run/tv-probe, logging, firewall + power-plan configuration.
+#[cfg(feature = "server")]
+pub mod service;
 #[cfg(feature = "server")]
 pub mod tls;

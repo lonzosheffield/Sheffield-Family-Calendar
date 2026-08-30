@@ -1814,3 +1814,42 @@ at boot). One allowlist/re-encode implementation now exists in the tree.
 **Worktrees:** `.claude/worktrees/wf_d57bfb45-d60-5` (T2.7, merged) removed.
 No other task worktree remains; the `worktree-*` placeholder branches carry
 no checkout.
+
+---
+
+## From T3.1 (Windows service) → T3.2 (runbooks)
+
+`family-hub.exe` is a new `[[bin]]` target (`src/bin/family_hub.rs`,
+`required-features = ["server"]`) — a separate executable from the Dioxus
+fullstack app's own frozen `src/main.rs`, per `docs/reviews/PURPLE_TEAM.md`
+§P4. Subcommands: `install|uninstall|start|stop|status|run|tv-probe`, all via
+`windows_service::service_manager` (no PowerShell scripts). `run` is the
+foreground/console mode (also what a developer uses without installing the
+service); the SCM launches the same binary with no arguments, which
+`try_run_as_service` in `server::service` detects.
+
+For **T3.2 / `docs/OWNER_CHECKLIST.md` A3** (elevated, owner-run — this task
+deliberately did not attempt a real install): the exact command is
+`family-hub.exe install`, run from an elevated prompt, from wherever the
+release binary was placed (it registers the service pointed at
+`std::env::current_exe()`, so it must already be at its permanent location
+before installing). It configures three firewall rules (`netsh advfirewall
+firewall add rule name=FamilyHub ...`, TCP 8080/8443 + UDP 5353) and the AC
+power plan (`powercfg /change {standby,hibernate,monitor}-timeout-ac 0`),
+both best-effort — a failure there is logged but does not stop the install.
+
+Logging: `<data>\logs\familyhub.log`, rotated at 10 MB × 5 (reuses
+`server::backup::rotate_log_if_needed` — T1.6's function, not duplicated),
+mirrored best-effort to the Windows Event Log under source name `FamilyHub`
+(`docs/NON_RUST.md` gained `netsh.exe`/`powercfg.exe`/`advapi32.dll` rows on
+the same "OS built-in at runtime" basis as T1.3's `icacls.exe`, per the
+Boss decision already recorded above at the wave 1-a close). The logger is
+installed as the first statement of both `run` and the real service's
+`win_service_main` (D9).
+
+`install`/`uninstall`/`start`/`stop`/`status` are unit-tested against a
+`ServiceHost` trait's mock (`server::service::tests::MockServiceHost`) per
+PURPLE §P3 T3.1's modified acceptance for this run — **no elevated install
+was performed by this task**; that is owner step A3, and `sc query
+FamilyHub` / `netsh advfirewall firewall show rule name=FamilyHub*` are the
+owner's own verification commands once they run `install` for real.
