@@ -1998,3 +1998,13 @@ close.
 **Worktrees:** `.claude/worktrees/wf_d57bfb45-d60-7` (T3.1) and
 `.claude/worktrees/wf_d57bfb45-d60-8` (T3.4) removed after merge. The
 `worktree-*` placeholder branches carry no checkout.
+
+**Flake seen once at this close (for T3.5 QA):** in one of five full
+`cargo test --features server` runs on identical code,
+`tests/http_tests.rs` `http_toggle_routine_task_round_trip_mutates_db` (line
+320, expected 200) and `http_toggle_routine_task_error_is_structured_not_a_panic`
+(line 360, got 200/`null` instead of 500) failed together, then passed in
+isolation and in the next full run. Both compute `date` from
+`chrono::Local::now()` and ran across the local midnight rollover during this
+session; `http_tests.rs` was not touched in wave 3. Worth a look at the
+two tests' shared server/DB and the ±1-day window in the QA loop.
