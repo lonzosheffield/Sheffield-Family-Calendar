@@ -58,12 +58,41 @@ async fn hub_lock() -> tokio::sync::MutexGuard<'static, ()> {
         .await
 }
 
-/// The realtime hub on its own router — no database, no SSR, just `/ws`.
+/// The realtime hub on its own router — just `/ws`, no SSR.
+///
+/// **T2.3** swapped `record_stroke`/`clear_board`/`snapshot` for rows in
+/// `whiteboard_strokes` (`docs/HANDOFF.md` H-10, the seam this task's own
+/// doc comment reserved), so the hub now touches a real SQLite database —
+/// [`init_test_env`] points this test binary's process at its own throwaway
+/// file, the same `DATABASE_URL` convention every other integration test
+/// binary already uses (`tests/profiles_tests.rs::init_test_env`,
+/// `tests/http_tests.rs::init_test_env`), so it can never collide with
+/// another test binary's data.
 fn hub_router() -> Router {
     Router::new().route("/ws", get(realtime::ws_handler))
 }
 
+/// Point every test in this binary at one throwaway sqlite file, isolated
+/// from every other test binary's `DATABASE_URL` (mirrors
+/// `tests/profiles_tests.rs::init_test_env`).
+fn init_test_env() {
+    static ONCE: OnceLock<()> = OnceLock::new();
+    ONCE.get_or_init(|| {
+        let base =
+            std::env::temp_dir().join(format!("familyhub-realtime-tests-{}", std::process::id()));
+        std::fs::create_dir_all(&base).expect("test scratch directory is creatable");
+        let db_path = base.join("family.db");
+        let url = format!(
+            "sqlite://{}",
+            db_path.display().to_string().replace('\\', "/")
+        );
+        std::env::set_var("DATABASE_URL", url);
+        std::env::set_var("FAMILY_HUB_DATA_DIR", &base);
+    });
+}
+
 async fn spawn_hub() -> (SocketAddr, JoinHandle<()>) {
+    init_test_env();
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind an ephemeral port");
@@ -352,7 +381,7 @@ async fn t1_2_2_a_lagging_client_is_resynced_and_the_socket_stays_open() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn t1_2_3_eight_clients_at_thirty_messages_per_second_for_thirty_seconds() {
     let _guard = hub_lock().await;
-    realtime::reset_board();
+    realtime::reset_board().await;
     let (addr, server) = spawn_hub().await;
 
     const CLIENTS: u64 = 8;
@@ -509,7 +538,7 @@ async fn t1_2_3_eight_clients_at_thirty_messages_per_second_for_thirty_seconds()
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn t1_2_4_a_draw_is_echoed_to_both_clients_stamped_with_the_sender() {
     let _guard = hub_lock().await;
-    realtime::reset_board();
+    realtime::reset_board().await;
     let (addr, server) = spawn_hub().await;
 
     let mut a = connect(addr).await;
@@ -709,7 +738,7 @@ async fn t1_2_6_set_view_requires_a_parent_session() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn t1_2_7_a_client_reconnects_and_resnapshots_within_thirty_seconds() {
     let _guard = hub_lock().await;
-    realtime::reset_board();
+    realtime::reset_board().await;
     let (addr, server) = spawn_hub().await;
 
     let mut client = connect(addr).await;

@@ -159,15 +159,59 @@ Ten seconds of scribbling therefore produce ≤ 300 messages of ~20 points, not
 
 ### Sequencing
 
-The server assigns a monotonically increasing `seq` to every `Draw` and
-`BoardCleared`. `Snapshot` returns strokes with `seq > since_seq`, in order.
-The live board retains the most recent **2,000** strokes (PURPLE §P5.5 default
-15); `ClearBoard` empties it and advances `seq`.
+The server assigns a monotonically increasing `seq` to every `Draw`.
+`Snapshot` returns live strokes with `seq > since_seq`, in order. The live
+board retains the most recent **2,000** strokes (PURPLE §P5.5 default 15);
+`ClearBoard` empties it by stamping every live row's `cleared_at` watermark
+(below).
 
-**T2.3 replaces the in-memory store** in `server::api::realtime`
+**T2.3 replaced the in-memory store** in `server::api::realtime`
 (`record_stroke`, `clear_board`, `snapshot`) with the `whiteboard_strokes`
-table from T1.1's `0002_core` migration. The three signatures and the `seq`
-contract above are what it must preserve.
+table from T1.1's `0002_core` migration (`docs/HANDOFF.md` H-10). The three
+signatures and the `seq` contract above are preserved, with two deliberate
+refinements, both explained in full in `record_stroke`'s own doc comment in
+`realtime.rs` (and `docs/HANDOFF.md` H-21):
+
+* **A `Draw`'s `seq` is minted from an in-process counter, not the database,
+  and the row is written by a detached task the publish does not wait for.**
+  T1.2's own load test (8 clients × 30 msg/s × 30 s, p99 fan-out latency under
+  250 ms) measured 759 ms p99 when publishing waited on a transactional
+  insert over the single write connection — SQLite has exactly one writer,
+  and 240 durable transactions/second leaves no room for that budget. `seq`
+  is still unique and strictly increasing the instant it is minted; a reader
+  (`snapshot`) only ever reports what has actually committed, so nothing
+  fabricates or reorders a stroke — a client just might see one painted a
+  few milliseconds before it is durable, which a live whiteboard's fan-out
+  was always going to do anyway (R-06/G20).
+* **`ClearBoard`'s `seq` is the board's current high-water mark, not a
+  freshly minted one.** A clear does not draw anything, so it has nothing to
+  allocate a sequence number *for*. The alternative (inserting a tombstone
+  row just to bump a counter) would add a stroke that does not exist for no
+  behavioural gain: a client reacts to receiving `BoardCleared` itself, not
+  to its `seq` field changing.
+
+### `cleared_at` and undo
+
+`ClearBoard` never deletes a row; it stamps `cleared_at` on every currently
+live one (`whiteboard_strokes.cleared_at`, `db::clear_board`). `board_snapshot`
+only ever returns rows where `cleared_at IS NULL`, so the very next `Snapshot`
+is empty while the cleared rows still exist on disk — for T1.6's retention
+sweep (`db::compact_board`, exposed as `realtime::compact_board`) to hard-
+delete on the midnight tick, per `docs/HANDOFF.md` H-10's note that undo and
+compaction share one rule: **only ever remove what is provably safe**, and
+prefer a watermark to a delete wherever a client might still be relying on
+what "used to be there."
+
+Undo-own-last-stroke (PURPLE §P3 T2.3c) follows the same instinct but has no
+wire message of its own: `ClientMessage` carries no `Undo` variant. It is a
+plain `#[server]` fn instead — `api::whiteboard::undo_last_stroke(client_id)`,
+calling `db::undo_last_stroke` (T1.1), which deletes **only** the most recent
+live row whose `client_id` column matches the caller's own server-minted
+[`ClientId`](#2-clientid) — never another connection's. On an actual removal
+the fn republishes a fresh `ServerMessage::Snapshot` of the whole board, which
+every already-connected client (the undoer included) applies exactly the way
+it applies a `Resync`'s re-requested one: clear the canvas, replay in `seq`
+order. No new message shape was worth adding for something this infrequent.
 
 ---
 

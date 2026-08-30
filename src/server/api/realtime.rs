@@ -341,75 +341,150 @@ impl RateLimiter {
 }
 
 // ---------------------------------------------------------------------------
-// Board state (in-memory until T2.3 persists it)
+// Board state — persisted (T2.3)
 // ---------------------------------------------------------------------------
+//
+// The in-memory `BoardState` T1.2 shipped this module with is gone: every
+// live stroke is now one row in `whiteboard_strokes` (`docs/PROTOCOL.md` §5,
+// `src/server/db.rs`'s `insert_stroke_at_seq`/`board_snapshot`/`clear_board`/
+// `undo_last_stroke`, landed by T1.1 for exactly this swap — see
+// `docs/HANDOFF.md` H-10). `clear_board`/`snapshot`/`undo_last_stroke` are
+// `async` and fallible now because a query is, where the old
+// `Mutex<VecDeque<_>>` never could be.
+//
+// `record_stroke` is deliberately **not** `Ok`-gated on the write finishing:
+// T1.2's own load test (t1_2_3, 8 clients × 30 msg/s × 30 s) requires p99
+// fan-out latency under 250 ms, and awaiting a transactional insert on the
+// single write connection before publishing measured **759 ms p99** under
+// that same load — SQLite's single writer cannot durably commit 240
+// transactions/second with room to spare for that budget. The `seq` the
+// server stamps on a `Draw` still has to be minted synchronously (every
+// client needs it *now*, to paint and to order against), so it comes from an
+// in-process counter (`next_seq`) seeded from the database once and never
+// touched by SQLite again; the row itself is written by a detached task that
+// the publish does not wait for. This is a plain write-behind cache: `seq`
+// values are unique and monotonic the instant they are minted (an
+// `AtomicI64`, contended for microseconds, not milliseconds), and every
+// reader (`snapshot`) reports only what has actually committed, so a client
+// only ever sees strokes that are really on disk — it just might see them a
+// few milliseconds after everyone already painted them, which a whiteboard's
+// live fan-out was always going to do anyway (R-06/G20's whole point).
 
-#[derive(Default)]
-struct BoardState {
-    seq: i64,
-    strokes: VecDeque<(i64, Stroke)>,
+static NEXT_SEQ: tokio::sync::OnceCell<std::sync::atomic::AtomicI64> =
+    tokio::sync::OnceCell::const_new();
+
+async fn seq_counter(board_id: i64) -> Result<&'static std::sync::atomic::AtomicI64, sqlx::Error> {
+    NEXT_SEQ
+        .get_or_try_init(|| async move {
+            let pool = crate::server::db::pool().await?;
+            let seeded = crate::server::db::board_max_seq(pool, board_id).await?;
+            Ok::<_, sqlx::Error>(std::sync::atomic::AtomicI64::new(seeded))
+        })
+        .await
 }
 
-static BOARD: OnceLock<Mutex<BoardState>> = OnceLock::new();
+/// Append a stroke by `client_id` and return the sequence number the server
+/// stamped on it. The row itself is written by a detached task — see the
+/// module-level comment above for why.
+pub async fn record_stroke(
+    board_id: i64,
+    client_id: &str,
+    stroke: &Stroke,
+) -> Result<i64, sqlx::Error> {
+    let counter = seq_counter(board_id).await?;
+    let seq = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
 
-fn board() -> &'static Mutex<BoardState> {
-    BOARD.get_or_init(|| Mutex::new(BoardState::default()))
+    let client_id = client_id.to_string();
+    let stroke = stroke.clone();
+    tokio::spawn(async move {
+        let points = crate::server::db::stroke_points_json(&stroke);
+        let Ok(pool) = crate::server::db::pool().await else {
+            tracing::error!("no write pool available to persist stroke seq={seq}");
+            return;
+        };
+        if let Err(err) = crate::server::db::insert_stroke_at_seq(
+            pool,
+            board_id,
+            seq,
+            &client_id,
+            &stroke.color,
+            stroke.width,
+            &points,
+        )
+        .await
+        {
+            tracing::error!(%err, "failed to persist stroke seq={seq}");
+        }
+    });
+
+    Ok(seq)
 }
 
-/// Append a stroke and return the sequence number the server stamped on it.
+/// Move the `cleared_at` watermark: every live stroke is stamped, so the next
+/// `Snapshot` is empty while the rows survive for T1.6's compaction pass.
+/// Returns the board's current high-water `seq` (unchanged by the clear
+/// itself — clearing stamps rows, it does not mint a new sequence number).
+pub async fn clear_board(board_id: i64) -> Result<i64, sqlx::Error> {
+    let pool = crate::server::db::pool().await?;
+    crate::server::db::clear_board(pool, board_id).await?;
+    let counter = seq_counter(board_id).await?;
+    Ok(counter.load(std::sync::atomic::Ordering::SeqCst))
+}
+
+/// `(latest_seq, live strokes with seq > since_seq)`, in `seq` order.
 ///
-/// **T2.3 replaces this body** with a row in `whiteboard_strokes` (one row per
-/// stroke, `seq`, `board_id`, `cleared_at` watermark). The signature and the
-/// `seq` contract are what `docs/PROTOCOL.md` freezes.
-pub fn record_stroke(stroke: &Stroke) -> i64 {
-    let mut state = match board().lock() {
-        Ok(state) => state,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    state.seq += 1;
-    let seq = state.seq;
-    state.strokes.push_back((seq, stroke.clone()));
-    while state.strokes.len() > MAX_RETAINED_STROKES {
-        state.strokes.pop_front();
+/// `latest_seq` is the highest `seq` actually present among the returned
+/// rows (or `since_seq` unchanged, if none are) — **not** the in-process
+/// counter, which can be briefly ahead of what has committed. Bookmarking
+/// against a seq nothing has been *delivered* for yet would let a future
+/// `RequestSnapshot { since_seq }` silently skip a stroke still in flight
+/// when this call ran.
+pub async fn snapshot(board_id: i64, since_seq: i64) -> Result<(i64, Vec<Stroke>), sqlx::Error> {
+    let pool = crate::server::db::read_pool().await?;
+    let rows = crate::server::db::board_snapshot(pool, board_id).await?;
+    let mut latest = since_seq;
+    let mut strokes = Vec::with_capacity(rows.len());
+    for row in rows {
+        if row.seq <= since_seq {
+            continue;
+        }
+        latest = latest.max(row.seq);
+        match row.into_stroke() {
+            Ok(stroke) => strokes.push(stroke),
+            Err(err) => tracing::error!(%err, "stored stroke has invalid points JSON; skipped"),
+        }
     }
-    seq
+    Ok((latest, strokes))
 }
 
-/// Move the `cleared_at` watermark: everything before the returned `seq` is
-/// gone from future snapshots.
-pub fn clear_board() -> i64 {
-    let mut state = match board().lock() {
-        Ok(state) => state,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    state.seq += 1;
-    state.strokes.clear();
-    state.seq
+/// Remove the calling client's own most recent live stroke (R-22 "undo-own-
+/// last"). Returns the removed `seq`, or `None` when that client has nothing
+/// left to undo. Called from `api::whiteboard::undo_last_stroke`, not over
+/// the WS wire — `docs/PROTOCOL.md`'s `ClientMessage` has no bespoke "undo"
+/// variant; the caller republishes a fresh [`ServerMessage::Snapshot`]
+/// instead, which every viewer (including the caller) already knows how to
+/// apply.
+pub async fn undo_last_stroke(board_id: i64, client_id: &str) -> Result<Option<i64>, sqlx::Error> {
+    let pool = crate::server::db::pool().await?;
+    crate::server::db::undo_last_stroke(pool, board_id, client_id).await
 }
 
-/// `(latest_seq, strokes with seq > since_seq)`, in `seq` order.
-pub fn snapshot(since_seq: i64) -> (i64, Vec<Stroke>) {
-    let state = match board().lock() {
-        Ok(state) => state,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    let strokes = state
-        .strokes
-        .iter()
-        .filter(|(seq, _)| *seq > since_seq)
-        .map(|(_, stroke)| stroke.clone())
-        .collect();
-    (state.seq, strokes)
+/// Test helper: forget every stroke on `board_id`, live or cleared.
+pub async fn reset_board() {
+    if let Ok(pool) = crate::server::db::pool().await {
+        let _ = crate::server::db::hard_reset_board(pool, DEFAULT_BOARD_ID).await;
+    }
 }
 
-/// Test helper: forget every stroke and reset the sequence.
-pub fn reset_board() {
-    let mut state = match board().lock() {
-        Ok(state) => state,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    state.seq = 0;
-    state.strokes.clear();
+/// Hard-delete cleared strokes and trim the live set back down to
+/// [`MAX_RETAINED_STROKES`]. T1.6 registers this with the retention sweep
+/// (`docs/HANDOFF.md` H-10: "register work on the midnight tick with
+/// `realtime::on_day_rolled` rather than editing the loop"); exposed here so
+/// T2.3's own acceptance test ("the rows are gone after compaction") does not
+/// have to wait for that hook to land.
+pub async fn compact_board(board_id: i64) -> Result<u64, sqlx::Error> {
+    let pool = crate::server::db::pool().await?;
+    crate::server::db::compact_board(pool, board_id, MAX_RETAINED_STROKES as i64).await
 }
 
 // ---------------------------------------------------------------------------
@@ -696,11 +771,11 @@ where
             continue;
         };
 
-        handle_client_message(&mut conn, outbound, client_message);
+        handle_client_message(&mut conn, outbound, client_message).await;
     }
 }
 
-fn handle_client_message(conn: &mut Connection, outbound: &Outbound, message: ClientMessage) {
+async fn handle_client_message(conn: &mut Connection, outbound: &Outbound, message: ClientMessage) {
     match message {
         ClientMessage::Hello { protocol } => {
             if protocol != PROTOCOL_VERSION {
@@ -726,24 +801,32 @@ fn handle_client_message(conn: &mut Connection, outbound: &Outbound, message: Cl
                 );
                 return;
             }
-            let seq = record_stroke(&stroke);
-            publish(&ServerMessage::Draw {
-                board_id,
-                seq,
-                origin: conn.client_id.clone(),
-                stroke,
-            });
+            match record_stroke(board_id, conn.client_id.as_str(), &stroke).await {
+                Ok(seq) => publish(&ServerMessage::Draw {
+                    board_id,
+                    seq,
+                    origin: conn.client_id.clone(),
+                    stroke,
+                }),
+                Err(err) => {
+                    tracing::error!(%err, "client {} could not persist a stroke", conn.client_id);
+                }
+            }
         }
         ClientMessage::ClearBoard { board_id } => {
             if !valid_board(board_id, &conn.client_id) {
                 return;
             }
-            let seq = clear_board();
-            publish(&ServerMessage::BoardCleared {
-                board_id,
-                seq,
-                origin: conn.client_id.clone(),
-            });
+            match clear_board(board_id).await {
+                Ok(seq) => publish(&ServerMessage::BoardCleared {
+                    board_id,
+                    seq,
+                    origin: conn.client_id.clone(),
+                }),
+                Err(err) => {
+                    tracing::error!(%err, "client {} could not clear the board", conn.client_id);
+                }
+            }
         }
         ClientMessage::RequestSnapshot {
             board_id,
@@ -752,12 +835,16 @@ fn handle_client_message(conn: &mut Connection, outbound: &Outbound, message: Cl
             if !valid_board(board_id, &conn.client_id) {
                 return;
             }
-            let (seq, strokes) = snapshot(since_seq);
-            outbound.push_message(&ServerMessage::Snapshot {
-                board_id,
-                seq,
-                strokes,
-            });
+            match snapshot(board_id, since_seq).await {
+                Ok((seq, strokes)) => outbound.push_message(&ServerMessage::Snapshot {
+                    board_id,
+                    seq,
+                    strokes,
+                }),
+                Err(err) => {
+                    tracing::error!(%err, "client {} could not load a snapshot", conn.client_id);
+                }
+            }
         }
         ClientMessage::SetView { view, auth } => {
             if !authorised(auth.as_deref()) {

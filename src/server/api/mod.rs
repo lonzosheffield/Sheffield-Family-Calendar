@@ -14,6 +14,7 @@
 //! | [`profiles`] | T1.4 (profiles, settings, parent PIN) |
 //! | [`calendar`] | T2.4 (calendar v2) |
 //! | [`screensaver`] | T2.7 (screensaver completion) |
+//! | [`whiteboard`] | T2.3 (whiteboard v2 — new module, undo-own-last-stroke) |
 //!
 //! Every server function is re-exported here, so call sites keep using
 //! `crate::server::api::<name>` exactly as before the split.
@@ -24,6 +25,7 @@ pub mod profiles;
 pub mod realtime;
 pub mod routine;
 pub mod screensaver;
+pub mod whiteboard;
 
 pub use calendar::get_today_events;
 pub use profiles::{
@@ -35,6 +37,7 @@ pub use routine::{
     toggle_routine_task,
 };
 pub use screensaver::list_screensaver_images;
+pub use whiteboard::undo_last_stroke;
 
 /// Shared `sqlx::Error` → `ServerFnError` conversion used by every module in
 /// this directory.

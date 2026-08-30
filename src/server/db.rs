@@ -29,7 +29,7 @@ use sqlx::{Row, SqlitePool};
 use tokio::sync::OnceCell;
 
 use crate::server::config::FamilyHubConfig;
-use crate::shared::types::{CustomTaskView, RoutineItemView};
+use crate::shared::types::{CustomTaskView, RoutineItemView, Stroke, StrokePoint};
 
 /// The numbered migrations in `migrations/`, embedded into the binary.
 ///
@@ -787,6 +787,41 @@ pub async fn insert_stroke(
     Ok(stroke)
 }
 
+/// Insert a stroke at an **already-minted** `seq`, with no `SELECT MAX` and
+/// no explicit transaction — a single `INSERT`.
+///
+/// T2.3's write-behind design (`server::api::realtime`'s module doc comment)
+/// mints `seq` from an in-process counter so publishing a `Draw` never waits
+/// on the write connection, and persists the row afterwards from a detached
+/// task; this is the write half of that split. `UNIQUE (board_id, seq)`
+/// still catches a real bug (two callers minting the same number) exactly as
+/// it would have for [`insert_stroke`]'s derived one.
+pub async fn insert_stroke_at_seq(
+    pool: &SqlitePool,
+    board_id: i64,
+    seq: i64,
+    client_id: &str,
+    color: &str,
+    width: f64,
+    points: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+        INSERT INTO whiteboard_strokes (board_id, seq, client_id, color, width, points)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+        "#,
+    )
+    .bind(board_id)
+    .bind(seq)
+    .bind(client_id)
+    .bind(color)
+    .bind(width)
+    .bind(points)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 /// Every live (not cleared) stroke on `board_id`, in `seq` order — the body of
 /// the `Snapshot` message a joining client receives.
 pub async fn board_snapshot(
@@ -852,6 +887,95 @@ pub async fn undo_last_stroke(
     .await?;
 
     Ok(row.map(|(seq,)| seq))
+}
+
+/// The highest `seq` ever allocated on `board_id` (live or cleared), or `0`
+/// when the board has never been drawn on. This is the watermark
+/// `Snapshot`/`BoardCleared` carry — a plain `MAX(seq)` rather than a second
+/// counter column, since [`insert_stroke`] already derives the next `seq` the
+/// same way (T2.3, per H-10: "add another query shape to `db.rs` in your own
+/// branch rather than duplicating SQL elsewhere").
+pub async fn board_max_seq(pool: &SqlitePool, board_id: i64) -> Result<i64, sqlx::Error> {
+    let (seq,): (i64,) =
+        sqlx::query_as("SELECT COALESCE(MAX(seq), 0) FROM whiteboard_strokes WHERE board_id = ?1")
+            .bind(board_id)
+            .fetch_one(pool)
+            .await?;
+    Ok(seq)
+}
+
+/// Encode a stroke's points as the JSON array [`insert_stroke`] stores.
+pub fn stroke_points_json(stroke: &Stroke) -> String {
+    let raw: Vec<[f64; 2]> = stroke.points.iter().map(|p| [p.x, p.y]).collect();
+    serde_json::to_string(&raw).unwrap_or_else(|_| "[]".to_string())
+}
+
+impl StoredStroke {
+    /// Reconstruct the wire [`Stroke`] this row represents, from its JSON
+    /// `points` column.
+    pub fn into_stroke(self) -> Result<Stroke, serde_json::Error> {
+        let raw: Vec<[f64; 2]> = serde_json::from_str(&self.points)?;
+        Ok(Stroke {
+            points: raw.into_iter().map(|[x, y]| StrokePoint { x, y }).collect(),
+            color: self.color,
+            width: self.width,
+        })
+    }
+}
+
+/// Hard-delete every cleared stroke on `board_id`, then trim the live strokes
+/// down to the newest `keep_last` — the retention sweep §5/D4 describe
+/// ("keep the last 2,000") and `docs/HANDOFF.md` H-10 reserves for T1.6's
+/// midnight-tick hook. T2.3 lands the query shape now because its own
+/// acceptance test ("the rows are gone after compaction") needs it to exist;
+/// T1.6 registers the call with `realtime::on_day_rolled` rather than
+/// duplicating the SQL (H-10). Returns the number of rows removed.
+pub async fn compact_board(
+    pool: &SqlitePool,
+    board_id: i64,
+    keep_last: i64,
+) -> Result<u64, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+
+    let cleared = sqlx::query(
+        "DELETE FROM whiteboard_strokes WHERE board_id = ?1 AND cleared_at IS NOT NULL",
+    )
+    .bind(board_id)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+
+    let trimmed = sqlx::query(
+        r#"
+        DELETE FROM whiteboard_strokes
+        WHERE board_id = ?1 AND cleared_at IS NULL AND id NOT IN (
+            SELECT id FROM whiteboard_strokes
+            WHERE board_id = ?1 AND cleared_at IS NULL
+            ORDER BY seq DESC
+            LIMIT ?2
+        )
+        "#,
+    )
+    .bind(board_id)
+    .bind(keep_last)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+
+    tx.commit().await?;
+    Ok(cleared + trimmed)
+}
+
+/// Test-only: forget every stroke on `board_id`, live or cleared, so a fresh
+/// process-wide board can be asserted against a clean slate (mirrors the v1
+/// in-memory `reset_board`'s role in `tests/realtime_tests.rs`). `seq` is
+/// derived from `MAX(seq)`, so deleting every row is enough to restart it.
+pub async fn hard_reset_board(pool: &SqlitePool, board_id: i64) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM whiteboard_strokes WHERE board_id = ?1")
+        .bind(board_id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
