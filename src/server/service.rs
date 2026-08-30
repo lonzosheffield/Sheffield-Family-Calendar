@@ -644,17 +644,22 @@ pub fn configure_power_plan(runner: &dyn CommandRunner) -> Vec<CommandOutcome> {
 /// independent of how chatty a burst of INFO/DEBUG events gets.
 const FLUSH_EVERY_N_LINES: u32 = 64;
 
-/// The `FAMILY_HUB_LOG` environment variable, parsed.
-/// `trace`/`debug`/`warn`/`error` (case-insensitive) raise or lower the
-/// sink's level; anything else (unset included) is `§P5.5` default 33's
+/// `raw` — `config.log_level` (Q2-05: `FAMILY_HUB_LOG`, else `[log] level` in
+/// `familyhub.toml`), already resolved by `server::config` — parsed into a
+/// level. `trace`/`debug`/`warn`/`error` (case-insensitive) raise or lower
+/// the sink's level; anything else (`None` included) is `§P5.5` default 33's
 /// `info`. See `docs/DEV_WINDOWS.md` and `docs/RECOVERY.md`.
-fn level_from_env() -> tracing::Level {
-    match std::env::var("FAMILY_HUB_LOG")
-        .ok()
-        .as_deref()
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
+///
+/// Previously this read `FAMILY_HUB_LOG` directly (`level_from_env`), which
+/// only ever worked for `family-hub.exe run` in a shell that had set the
+/// variable: a service started by the SCM inherits the machine's
+/// environment, not that shell's, so the installed service could never be
+/// given anything but `info` — the runbooks described a control that did
+/// nothing on the deployed path. Taking the already-resolved string as a
+/// parameter instead of reading the environment itself is also what makes
+/// this function testable without mutating process-global state.
+pub fn level_from(raw: Option<&str>) -> tracing::Level {
+    match raw.map(str::to_ascii_lowercase).as_deref() {
         Some("trace") => tracing::Level::TRACE,
         Some("debug") => tracing::Level::DEBUG,
         Some("warn") => tracing::Level::WARN,
@@ -697,7 +702,11 @@ impl ServiceLogger {
     /// Open (creating if needed) `<data>\logs\familyhub.log` and rotate it
     /// first if it is already at the size cap, so a service that has been
     /// running for months never starts a fresh log inside an oversized file.
-    pub fn open(log_dir: &Path) -> io::Result<Self> {
+    ///
+    /// `max_level` (Q2-05) is resolved by the caller — `install_global_logger`
+    /// passes `level_from(config.log_level.as_deref())` — rather than read
+    /// here, so this constructor takes no dependency on the environment.
+    pub fn open(log_dir: &Path, max_level: tracing::Level) -> io::Result<Self> {
         std::fs::create_dir_all(log_dir)?;
         let path = log_dir.join(LOG_FILE_NAME);
         let _ = backup::rotate_log_if_needed(
@@ -716,7 +725,7 @@ impl ServiceLogger {
             }),
             path,
             event_source: EVENT_SOURCE.to_string(),
-            max_level: level_from_env(),
+            max_level,
         })
     }
 
@@ -936,7 +945,10 @@ mod eventlog {
 /// process-global-state-free); a second call in the same process is a
 /// programmer error the caller controls, not something tests exercise.
 fn install_global_logger(config: &FamilyHubConfig) -> io::Result<std::sync::Arc<ServiceLogger>> {
-    let logger = std::sync::Arc::new(ServiceLogger::open(&config.log_dir())?);
+    let logger = std::sync::Arc::new(ServiceLogger::open(
+        &config.log_dir(),
+        level_from(config.log_level.as_deref()),
+    )?);
     if tracing::subscriber::set_global_default(logger.clone()).is_err() {
         eprintln!(
             "a tracing subscriber was already installed; familyhub.log will not receive events"
@@ -971,6 +983,25 @@ fn run_console(config: FamilyHubConfig) {
     if let Err(err) = runtime.block_on(crate::server::router::run(config)) {
         tracing::error!(%err, "family-hub run: startup failed");
         std::process::exit(1);
+    }
+}
+
+/// Turn the outcome of the SCM path's server `JoinHandle` into the text
+/// logged before the service reports `Stopped` (Q2-04). The `run` console
+/// path above already surfaces a startup failure's `RunError` text via
+/// `%err`; the service path previously only ever noticed via
+/// `handle.is_finished()`, so the log said "the server task ended
+/// unexpectedly" with no reason — the bind/DB/PKI detail Q1-04 was about was
+/// lost exactly where the SCM (and whoever reads the log after a restart)
+/// needed it. Extracted out of the SCM's match arm so this mapping is
+/// unit-testable without a real Windows service.
+fn describe_server_exit(
+    result: Result<Result<(), crate::server::router::RunError>, tokio::task::JoinError>,
+) -> String {
+    match result {
+        Ok(Ok(())) => "the server task returned without an error".to_string(),
+        Ok(Err(err)) => format!("startup failed: {err}"),
+        Err(join) => format!("the server task panicked: {join}"),
     }
 }
 
@@ -1132,8 +1163,12 @@ mod scm {
         // task ending on its own (a startup failure) rather than only ever
         // waking up on an explicit SCM Stop — a service that stayed RUNNING
         // while serving nothing never gave the SCM's recovery actions
-        // (`WindowsServiceHost::create`, below) a reason to fire.
-        let handle = runtime.spawn(async move { crate::server::router::run(config_for_run).await });
+        // (`WindowsServiceHost::create`, below) a reason to fire. `mut`
+        // (Q2-04): `runtime.block_on(&mut handle)` below needs `&mut
+        // JoinHandle` to poll the task's own `Result<(), RunError>` instead
+        // of only ever learning *that* it ended via `is_finished()`.
+        let mut handle =
+            runtime.spawn(async move { crate::server::router::run(config_for_run).await });
         checkpoint += 1;
         report_pending(checkpoint);
 
@@ -1157,7 +1192,14 @@ mod scm {
             match stop_rx.recv_timeout(Duration::from_secs(1)) {
                 Ok(()) => break,
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) if handle.is_finished() => {
-                    tracing::error!("FamilyHub service: the server task ended unexpectedly");
+                    // Q2-04: `is_finished()` alone only told the log *that*
+                    // the task ended, never *why* — the bind/DB/PKI reason
+                    // Q1-04 was about, which the `run` console path already
+                    // logs. Reading the task's own `Result` here (it is
+                    // already finished, so this resolves immediately) closes
+                    // that gap on the deployed service path too.
+                    let reason = describe_server_exit(runtime.block_on(&mut handle));
+                    tracing::error!(%reason, "FamilyHub service: the server task ended unexpectedly");
                     exit_code = ServiceExitCode::ServiceSpecific(1);
                     break;
                 }
@@ -1480,6 +1522,32 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
+    // Q2-04: the SCM path reads the server task's own `Result` instead of
+    // only ever noticing it ended. `describe_server_exit` cannot be driven
+    // through a real `JoinHandle` without an async runtime and an actual
+    // panic/error, so these tests build each `Result` variant by hand.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn describe_server_exit_surfaces_the_run_error_text() {
+        let err = crate::server::router::RunError::Bind {
+            addr: "127.0.0.1:8080".parse().unwrap(),
+            err: std::io::Error::new(std::io::ErrorKind::AddrInUse, "address in use"),
+        };
+        let text = describe_server_exit(Ok(Err(err)));
+        assert!(
+            text.contains("failed to bind 127.0.0.1:8080"),
+            "the RunError::Bind text must survive into the service log: {text:?}"
+        );
+    }
+
+    #[test]
+    fn describe_server_exit_reports_a_clean_return_as_unexpected() {
+        let text = describe_server_exit(Ok(Ok(())));
+        assert!(text.contains("returned without an error"), "{text:?}");
+    }
+
+    // -----------------------------------------------------------------
     // ServiceLogger — file write, rotation reuse, and the "startup failure
     // logged within 5s" acceptance (PURPLE §P3 T3.1(c)/(e)).
     // -----------------------------------------------------------------
@@ -1487,7 +1555,7 @@ mod tests {
     #[test]
     fn service_logger_writes_events_to_the_log_file() {
         let dir = scratch_dir("logger-write");
-        let logger = Arc::new(ServiceLogger::open(&dir).expect("open logger"));
+        let logger = Arc::new(ServiceLogger::open(&dir, level_from(None)).expect("open logger"));
 
         tracing::subscriber::with_default(logger.clone(), || {
             tracing::info!("hello from the unit test");
@@ -1519,14 +1587,19 @@ mod tests {
     // behind `FAMILY_HUB_LOG` — was not implemented: `enabled()` returned
     // `true` unconditionally, so every `dioxus_core`/`hyper`/`sqlx` TRACE
     // event was formatted and flushed on the request hot path.
+    //
+    // Q2-05: `level_from` no longer reads the environment itself (a service
+    // started by the SCM never sees the owner's shell's env), so these three
+    // tests drive it directly through `level_from(raw)` instead of setting
+    // and clearing `FAMILY_HUB_LOG` — no `ENV_LOCK` needed for them any
+    // more. `server::config`'s own tests cover the `FAMILY_HUB_LOG` / `[log]
+    // level` resolution that produces `raw`.
     // -----------------------------------------------------------------
 
     #[test]
     fn default_log_level_drops_debug_and_trace_but_keeps_info_and_above() {
-        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        std::env::remove_var("FAMILY_HUB_LOG");
         let dir = scratch_dir("log-level-default");
-        let logger = Arc::new(ServiceLogger::open(&dir).expect("open logger"));
+        let logger = Arc::new(ServiceLogger::open(&dir, level_from(None)).expect("open logger"));
         assert_eq!(logger.max_level, tracing::Level::INFO);
 
         tracing::subscriber::with_default(logger.clone(), || {
@@ -1547,12 +1620,10 @@ mod tests {
     }
 
     #[test]
-    fn family_hub_log_env_var_raises_the_level_to_debug() {
-        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        std::env::set_var("FAMILY_HUB_LOG", "debug");
+    fn configured_debug_level_raises_the_level_to_debug() {
         let dir = scratch_dir("log-level-debug-env");
-        let logger = Arc::new(ServiceLogger::open(&dir).expect("open logger"));
-        std::env::remove_var("FAMILY_HUB_LOG");
+        let logger =
+            Arc::new(ServiceLogger::open(&dir, level_from(Some("debug"))).expect("open logger"));
         assert_eq!(logger.max_level, tracing::Level::DEBUG);
 
         tracing::subscriber::with_default(logger.clone(), || {
@@ -1570,10 +1641,8 @@ mod tests {
 
     #[test]
     fn warn_and_error_events_flush_immediately_without_an_explicit_flush_call() {
-        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        std::env::remove_var("FAMILY_HUB_LOG");
         let dir = scratch_dir("log-level-warn-flush");
-        let logger = Arc::new(ServiceLogger::open(&dir).expect("open logger"));
+        let logger = Arc::new(ServiceLogger::open(&dir, level_from(None)).expect("open logger"));
 
         tracing::subscriber::with_default(logger.clone(), || {
             tracing::error!("q1-05 error line flushes on its own");
@@ -1599,7 +1668,7 @@ mod tests {
     #[test]
     fn writing_twenty_megabytes_of_log_lines_rotates_under_the_cap() {
         let dir = scratch_dir("logger-rotate");
-        let logger = ServiceLogger::open(&dir).expect("open logger");
+        let logger = ServiceLogger::open(&dir, level_from(None)).expect("open logger");
 
         // A ~200-byte line, ~110k writes ≈ 20 MB — well past the 10 MB cap,
         // enough to force multiple rotations while staying fast in a test.

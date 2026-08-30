@@ -15,6 +15,7 @@ television is a browser pointed at a URL. Nothing here needs a rebuild.
 | Is the hub alive? | `http://<hub-ip>:8080/health` — JSON: `db`, `last_google_poll`, `cert_not_after`, `days_to_expiry`, `disk_free_bytes`, `ws_clients`, `uptime_seconds`, `migration_version` |
 | What it has been doing | `%ProgramData%\FamilyHub\logs\familyhub.log` (rotated at 10 MB × 5), mirrored to Event Viewer → Windows Logs → Application, source `FamilyHub` |
 | Service controls (elevated) | `family-hub.exe status` · `start` · `stop` · `install` · `uninstall` · `run` (foreground) · `tv-probe` |
+| Log level | `info` by default; `$env:FAMILY_HUB_LOG` (`run` only — a shell's environment is not inherited by the installed service) or `[log]\nlevel = "debug"` in *familyhub.toml* (installed service — `stop`/`start` to apply) |
 
 **Triage in one move:** open `http://<hub-ip>:8080/health` from a phone or laptop.
 It answers → the server is fine, the problem is the television or the network
@@ -117,10 +118,13 @@ report `Stopped` with a non-zero exit code instead of staying `RUNNING` while se
 nothing, so a transient problem (the address briefly unavailable at boot, say) usually
 clears itself within a minute or two before you need to do anything below.
 
-**More detail than the default log shows:** set `FAMILY_HUB_LOG=debug` (or `trace`)
-in the environment before `install`/`start`/`run` — see `docs/DEV_WINDOWS.md`. The
-default `info` level intentionally drops `dioxus_core`/`hyper`/`sqlx` internals to
-keep the log from churning its 10 MB × 5 rotation ring in under an hour of real use.
+**More detail than the default log shows:** for `family-hub.exe run` set
+`$env:FAMILY_HUB_LOG = "debug"` (or `trace`) in that shell — see `docs/DEV_WINDOWS.md`.
+For the **installed service** the shell's environment is not inherited — put
+`[log]\nlevel = "debug"` in *familyhub.toml* next to `family-hub.exe` (or under the
+data directory) and `family-hub.exe stop` / `start`. The default `info` level
+intentionally drops `dioxus_core`/`hyper`/`sqlx` internals to keep the log from
+churning its 10 MB × 5 rotation ring in under an hour of real use.
 
 **Bridge while you debug:** `family-hub.exe run` from a normal console starts the same
 server in the foreground, logging to that console. The family gets the hub back while

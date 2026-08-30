@@ -77,6 +77,7 @@ fn test_config() -> FamilyHubConfig {
         http_addr: "127.0.0.1:0".parse().expect("valid socket address"),
         tls_addr: "0.0.0.0:8443".parse().expect("valid socket address"),
         screensaver_schedule_hour: None,
+        log_level: None,
     }
 }
 
@@ -90,6 +91,7 @@ fn isolated_config(name: &str) -> FamilyHubConfig {
         http_addr: "127.0.0.1:0".parse().expect("valid socket address"),
         tls_addr: "0.0.0.0:8443".parse().expect("valid socket address"),
         screensaver_schedule_hour: None,
+        log_level: None,
     }
 }
 

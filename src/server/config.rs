@@ -41,6 +41,14 @@ const ENV_TLS_ADDR: &str = "FAMILY_HUB_TLS_ADDR";
 /// schedule the process can ever build, which was the bug: there was no
 /// enable path at all. Setting this is that path.
 const ENV_SCREENSAVER_HOUR: &str = "FAMILY_HUB_SCREENSAVER_HOUR";
+/// QA round 2, Q2-05: the log level. A service started by the SCM inherits
+/// the machine's environment, not the owner's shell, so `FAMILY_HUB_LOG` set
+/// in a PowerShell prompt before `install`/`start` never reaches it — the
+/// runbooks described a control that did nothing on the deployed path.
+/// `[log] level` in `familyhub.toml` is the seam that actually reaches an
+/// installed service; the env var still wins when both are present, so a
+/// developer's `run` shell keeps working exactly as before.
+const ENV_LOG_LEVEL: &str = "FAMILY_HUB_LOG";
 
 const CONFIG_FILE_NAME: &str = "familyhub.toml";
 
@@ -57,6 +65,13 @@ pub struct FamilyHubConfig {
     /// schedule stays off, per PURPLE §P5.5 default 20 — a family that never
     /// sets this sees exactly today's idle-only behaviour, forever.
     pub screensaver_schedule_hour: Option<u32>,
+    /// QA round 2, Q2-05: `FAMILY_HUB_LOG`, else `[log] level` in
+    /// `familyhub.toml`, else `None` (§P5.5 default 33's `info`). Passed to
+    /// [`crate::server::service::level_from`] by
+    /// `service::install_global_logger` — this field only resolves *which*
+    /// string won; `level_from` still owns the string → `tracing::Level`
+    /// mapping and its default.
+    pub log_level: Option<String>,
 }
 
 impl FamilyHubConfig {
@@ -77,12 +92,14 @@ impl FamilyHubConfig {
         let http_addr = resolve_addr(env, file, ENV_HTTP_ADDR, "http_addr", DEFAULT_HTTP_ADDR);
         let tls_addr = resolve_addr(env, file, ENV_TLS_ADDR, "tls_addr", DEFAULT_TLS_ADDR);
         let screensaver_schedule_hour = resolve_screensaver_hour(env, file);
+        let log_level = env.var(ENV_LOG_LEVEL).or_else(|| file.get("log.level"));
 
         Self {
             data_dir,
             http_addr,
             tls_addr,
             screensaver_schedule_hour,
+            log_level,
         }
     }
 
@@ -145,6 +162,12 @@ impl FamilyHubConfig {
                 tracing::info!(schedule_hour = hour, "scheduled screensaver enabled")
             }
             None => tracing::info!("scheduled screensaver disabled (no schedule_hour configured)"),
+        }
+        match &self.log_level {
+            Some(level) => tracing::info!(log_level = %level, "resolved log level"),
+            None => tracing::info!(
+                "resolved log level: info (no FAMILY_HUB_LOG / [log] level configured)"
+            ),
         }
 
         Ok(())
@@ -374,6 +397,34 @@ mod tests {
         let _ = FamilyHubConfig::from_sources(&TomlValues::default(), &env);
     }
 
+    // QA round 2, Q2-05: `FAMILY_HUB_LOG` set in the owner's shell never
+    // reaches a service started by the SCM (it inherits the machine
+    // environment, not that shell's). `[log] level` in `familyhub.toml` is
+    // the seam that does reach it; env still wins when both are set, exactly
+    // like every other key this module resolves.
+
+    #[test]
+    fn log_level_defaults_to_none() {
+        let config = FamilyHubConfig::from_sources(&TomlValues::default(), &empty_env());
+        assert_eq!(config.log_level, None);
+    }
+
+    #[test]
+    fn env_log_level_overrides_file_and_default() {
+        let file = TomlValues::parse("[log]\nlevel = \"warn\"\n");
+        let env = FakeEnv(BTreeMap::from([(ENV_LOG_LEVEL, "debug")]));
+
+        let config = FamilyHubConfig::from_sources(&file, &env);
+        assert_eq!(config.log_level.as_deref(), Some("debug"));
+    }
+
+    #[test]
+    fn file_log_level_is_used_when_env_is_unset() {
+        let file = TomlValues::parse("[log]\nlevel = \"debug\"\n");
+        let config = FamilyHubConfig::from_sources(&file, &empty_env());
+        assert_eq!(config.log_level.as_deref(), Some("debug"));
+    }
+
     #[test]
     fn every_path_is_absolute_under_data_dir() {
         let data_dir = PathBuf::from("C:/temp/familyhub-unit-test");
@@ -382,6 +433,7 @@ mod tests {
             http_addr: DEFAULT_HTTP_ADDR.parse().unwrap(),
             tls_addr: DEFAULT_TLS_ADDR.parse().unwrap(),
             screensaver_schedule_hour: None,
+            log_level: None,
         };
 
         assert_eq!(config.db_path(), data_dir.join("family.db"));
@@ -451,6 +503,7 @@ mod tests {
             http_addr: DEFAULT_HTTP_ADDR.parse().unwrap(),
             tls_addr: DEFAULT_TLS_ADDR.parse().unwrap(),
             screensaver_schedule_hour: None,
+            log_level: None,
         };
 
         let counter = Arc::new(AtomicUsize::new(0));

@@ -165,15 +165,27 @@ cargo run --features server --bin family-hub -- tv-probe
 `windows_service::service_manager` — no PowerShell scripts. Installing it for real is
 `docs/OWNER_CHECKLIST.md` step 3 and needs elevation; `run` needs neither.
 
-**Log level (Q1-05).** `familyhub.log` writes at `info` by default — `debug`/`trace`
+**Log level (Q1-05, Q2-05).** `familyhub.log` writes at `info` by default — `debug`/`trace`
 events (which include every `dioxus_core`/`hyper`/`sqlx` internal, chatty enough to
 churn the 10 MB × 5 rotation ring in under an hour) are dropped before they are even
-formatted. Set `FAMILY_HUB_LOG=debug` (or `trace`/`warn`/`error`) in the environment
-before `run`/`install`/`start` to raise or lower it for one session:
+formatted.
+
+For `family-hub.exe run` set `$env:FAMILY_HUB_LOG = "debug"` (or `trace`/`warn`/`error`)
+in that shell before starting it:
 
 ```powershell
 $env:FAMILY_HUB_LOG = "debug"
 target\release\family-hub.exe run
+```
+
+For the **installed service** the shell's environment is not inherited — a service
+started by the SCM sees the machine's environment, not yours. Put `[log]\nlevel =
+"debug"` in *familyhub.toml* next to `family-hub.exe` (or under the data directory)
+instead, then `family-hub.exe stop` and `start` to pick it up:
+
+```toml
+[log]
+level = "debug"
 ```
 
 ---

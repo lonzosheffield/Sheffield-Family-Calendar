@@ -2621,3 +2621,80 @@ locked `worktree-wf_d57bfb45-d60-38` placeholder (branch deleted). Kept:
 `wf_d57bfb45-d60-34` (`phase-qa2/T3.1`, blocked, unmerged),
 `wf_d57bfb45-d60-35` (`phase-qa2/T3.3`, rejected, unmerged),
 `wf_d57bfb45-d60-24` (`phase-qa1/T3.3`, rejected, unmerged).
+
+---
+
+## T3.1 — QA round 3 (`phase-qa3/T3.1`, Q3-01 / Q3-02)
+
+Rebased the blocked `phase-qa2/T3.1` (`efbc749`) onto `main` (`bed42f9`,
+carrying `94ecba6`'s `docs/qa/QA_ROUND_3.md`) — `git rebase main` from the
+branch tip landed with **zero conflicts** (the ownership-scoped hunks
+`docs/qa/QA_ROUND_3.md` warned about — `ENV_LOCK` in the no-bundle install
+test, both sides of `tests/router_tests.rs`/`tests/photo_tests.rs` —
+resolved cleanly on their own; only `tests/calendar_tests.rs`, new on `main`
+since `efbc749` was cut, needed a hand-added `log_level: None,` for
+`spawn_http_server`'s `FamilyHubConfig` literal to keep the crate compiling).
+
+One regression surfaced only once the full suite ran against the rebased
+docs: `t3_2_every_internal_doc_link_resolves` failed with 2 broken
+references — `efbc749` backticked `` `familyhub.toml` `` twice in
+`docs/RECOVERY.md` (once in `docs/DEV_WINDOWS.md` too, which happened not to
+trip the checker only because a mid-sentence line wrap shifted that
+occurrence's backtick parity). `docs/HANDOFF.md`'s own T3.2 wave-3 close
+already recorded the fix for exactly this: nothing in the repo is named
+`familyhub.toml` (it is the optional runtime config file `config.rs` reads
+from the data directory), so it is named in italics — *familyhub.toml* —
+never as a backticked repo path. Applied that to all three spots.
+
+Assertions run on this machine, this attempt (fresh worktree, no observed
+host contention):
+
+```
+cargo fmt --check
+  → exit 0
+
+cargo clippy --features server --all-targets -- -D warnings
+  → exit 0
+
+cargo clippy --features web --target wasm32-unknown-unknown -- -D warnings
+  → exit 0
+
+cargo test --features server
+  → test result: ok. 203 passed; 0 failed (lib unittests, incl.
+    describe_server_exit_surfaces_the_run_error_text and
+    describe_server_exit_reports_a_clean_return_as_unexpected)
+  → test result: ok. 11 passed; 0 failed (backup_tests)
+  → test result: ok. 15 passed; 0 failed (calendar_tests)
+  → test result: ok. 6 passed; 0 failed (ci_tests)
+  → test result: ok. 4 passed; 0 failed (config_tests)
+  → test result: ok. 9 passed; 0 failed (db_tests)
+  → test result: ok. 17 passed; 0 failed (docs_tests, incl.
+    t3_2_every_internal_doc_link_resolves ... ok)
+  → test result: ok. 1 passed; 0 failed (health_pool_closed_tests)
+  → test result: ok. 2 passed; 0 failed (health_tests)
+  → test result: ok. 14 passed; 0 failed (http_tests)
+  → test result: ok. 1 passed; 0 failed (loop_tests)
+  → test result: ok. 6 passed; 0 failed (palette_tests)
+  → test result: ok. 7 passed; 0 failed (photo_tests)
+  → test result: ok. 6 passed; 0 failed (profiles_tests)
+  → test result: ok. 16 passed; 0 failed (pwa_tests)
+  → test result: ok. 17 passed; 0 failed (realtime_tests, 131.85s)
+  → test result: ok. 12 passed; 0 failed (router_tests)
+  → test result: ok. 10 passed; 0 failed (routine_tests)
+  → test result: ok. 5 passed; 0 failed (screensaver_tests)
+  → test result: ok. 3 passed; 0 failed (service_tests —
+    run_with_cwd_forced_to_system32_never_creates_a_db_there,
+    a_startup_bind_failure_is_logged_within_five_seconds,
+    run_generates_the_first_run_setup_code_and_logs_it_once_health_answers)
+  → test result: ok. 9 passed; 0 failed; 1 ignored (storage_tests)
+  → test result: ok. 7 passed; 0 failed (tls_tests)
+  → test result: ok. 22 passed; 0 failed (tv_tests)
+  → test result: ok. 3 passed; 0 failed (whiteboard_tests)
+  → doc-tests: ok. 0 passed; 0 failed; 1 ignored
+Overall: 406 passed, 0 failed, 2 ignored across the lib and 27 integration
+binaries. exit 0.
+```
+
+Q3-01 and Q3-02 are both closed by this commit (`6f0e9e0` on
+`phase-qa3/T3.1`, on top of the rebase commit `476f104`). Boss: please mark
+`docs/BLOCKED.md`'s T3.1 entry RESOLVED and squash-merge.
