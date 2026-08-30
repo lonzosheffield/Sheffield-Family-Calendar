@@ -710,3 +710,49 @@ note already told this task to expect).
   `tests/health_tests.rs`, solely to close the process-wide `db::pools()`
   `OnceCell` (H-9) without taking down any other test that shares a binary —
   see that file's own doc comment.
+
+---
+
+## Boss decisions at the wave 1-b close (T1.4, T1.5, T1.7 merged)
+
+Merged in order T1.4 → T1.5 → T1.7 (squash), baseline green after each.
+T1.6 was not part of this closeout and its branch/worktree are untouched.
+
+- **H-15 (`argon2 = "=0.6.0"` in `Cargo.toml`): ratified** as this wave's
+  serialized Cargo.toml micro-commit — it is exactly the §P5.4 pin and no
+  other wave 1-b task touched `Cargo.toml`.
+- **H-16 (`api/realtime.rs::session` delegating to `auth.rs`): ratified** —
+  the seam was reserved for T1.4 by T1.2's own doc comment; public
+  signatures unchanged, `tests/realtime_tests.rs` unmodified and green.
+- **H-17 / H-17b (test constant bumps, `CHECK` → `CONSTRAINT`): ratified** as
+  mechanical and non-weakening. Boss applied the same bump to
+  `tests/health_tests.rs` (`migration_version` 2 → 3), which T1.7 wrote
+  against the pre-0003 tree in the same wave.
+- **T1.7 → T2.4 (`record_google_poll_success`): applied by Boss** — one call
+  in `src/server/calendar.rs`'s poll loop after `store_events`. T2.4 keeps
+  it when it rewrites that loop.
+- **T1.7 `GetDiskFreeSpaceExW` FFI: `docs/NON_RUST.md` row added** for
+  symmetry with the `icacls.exe` precedent (OS built-in at runtime).
+- **T1.7 → T2.1 (`StalenessTracker` on the TV): decided — T2.1 ports it
+  client-side** into `src/client/components/tv/**` (its own files). No third
+  owner on `src/shared/types.rs`, no `web_time` crate. `std::time::Instant`
+  is unavailable on wasm32 anyway, so the port takes its injected "now" as
+  milliseconds from the same performance-clock source
+  `src/client/components/routine.rs::new_idempotency_key` already uses;
+  `src/server/health.rs`'s struct + 4 unit tests remain the reference
+  semantics (on past 90 s, off within 2 s). The badge is
+  `!RealtimeBus::connected || tracker.is_stale(now)`.
+- **H-18 (first-run setup code display): left for T2.1** (TV first-run
+  screen) — call `auth::ensure_setup_code`/`read_setup_code` from
+  server-rendered code, per T1.4's note. Not network-exposed; that stays.
+- **H-19 (session as bearer value, not cookie): open, scheduled for the
+  2-a boundary.** PLAN D3′ / §P5.5 default 31 (HttpOnly/Secure/Lax cookie,
+  HTTPS origin only) remains the target. `router.rs` is T2.5's in wave 2-a
+  and T2.2 (phone login flow) runs in the same wave, so neither can add the
+  login route without a conflict: Boss will apply the `Set-Cookie` login
+  route in `router.rs` as a micro-commit at the 2-a/2-b boundary (or fold it
+  into T2.5's router edit if T2.5's brief is amended). Until then T2.2 holds
+  the bearer token client-side and passes it as `auth: Option<SessionToken>`
+  exactly as the WS protocol already does.
+
+Wave 2-a (T2.1–T2.5) may start from this `main` once T1.6 is also closed.

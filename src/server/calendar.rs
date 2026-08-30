@@ -82,7 +82,12 @@ pub fn spawn_polling_task() {
         loop {
             ticker.tick().await;
             match fetch_today(&client, &config).await {
-                Ok(events) => store_events(events).await,
+                Ok(events) => {
+                    store_events(events).await;
+                    // T1.7 HANDOFF (applied by Boss at the wave 1-b close):
+                    // `/health`'s `last_google_poll` is fed from here.
+                    crate::server::health::record_google_poll_success(chrono::Local::now());
+                }
                 Err(err) => tracing::error!("google calendar poll failed: {err}"),
             }
         }
