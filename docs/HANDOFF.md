@@ -2106,3 +2106,32 @@ straight after (exit 0). Stale incremental artefacts from the interleaved
 wasm/host clippy runs are the obvious suspect; no source file involved was
 touched by this task. Recorded for T3.5 in case CI ever shows it — a
 `cargo clean` between the two clippy targets is the cheap mitigation.
+
+---
+
+## Boss — wave 3 close (T3.2 merge)
+
+`phase-3/T3.2` squash-merged as `T3.2: Runbooks …` after the four gates ran
+green on top of it (fmt, clippy server/all-targets, clippy web/wasm32, full
+`--features server` test run, exit 0).
+
+**Ratified:** Appendix A renumbered 1–13 with the new step 4 (parent PIN);
+Fully Kiosk PLUS priced `€8.90 / $10.99` everywhere; HDMI-CEC documented as
+not applicable to the Fire TV Edition television and moved to Branch B′, with
+the television's own sleep/power-saver timers as the replacement step.
+
+**Applied:** T3.2 request 1 — a one-line "Delivered numbering" pointer under
+`docs/PLAN.md` Appendix A mapping A1…A12 onto the delivered steps 1–13.
+`docs/reviews/PURPLE_TEAM.md` Appendix A is a frozen review record and was
+left as is. Request 2 (`familyhub.toml` in italics, not backticks) needs no
+action.
+
+**Carried forward:**
+- **T3.3:** once `docs/VERIFICATION.md` exists, delete it from
+  `PLANNED_ARTEFACTS` in `tests/docs_tests.rs` so the link checker holds
+  `PLAN.md`/`HANDOFF.md` to it.
+- **T3.5 / CI:** the one-off rustc ICE (`Res::Err but no error emitted` while
+  compiling `tests/tv_tests.rs` right after a wasm32 clippy against the same
+  `target/`) did not reproduce in the Boss's gate run either. Keep the cheap
+  mitigation on the table: `cargo clean` (or a separate `CARGO_TARGET_DIR`)
+  between the wasm32 and host clippy targets if CI ever shows it.
