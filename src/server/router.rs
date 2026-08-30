@@ -130,6 +130,14 @@ pub fn build_router(config: &FamilyHubConfig) -> Router {
         // this file's `login_handler` doc comment. `/api/session` is the
         // probe `mobile/session.rs::is_parent()` polls, since a JS client
         // can never read an `HttpOnly` cookie's value itself.
+        // Q2-01: the HTTP half of first-run setup — `set_initial_parent_pin`
+        // is a `#[server]` fn nothing in `src/client/` ever calls, so a
+        // browser-driven parent had no way to actually redeem the setup code
+        // this file's `run` now guarantees exists. Mirrors `/api/login`
+        // exactly (same origin check, same cookie shape) rather than
+        // reaching for the server-fn wrapper, so the phone Settings UI (once
+        // it is wired up) can drive first-run setup with a plain fetch.
+        .route("/api/setup", post(setup_handler))
         .route("/api/login", post(login_handler))
         .route("/api/logout", post(logout_handler))
         .route("/api/session", get(session_probe_handler))
@@ -240,6 +248,53 @@ struct LoginRequest {
     pin: String,
 }
 
+#[derive(serde::Deserialize)]
+struct SetupRequest {
+    setup_code: String,
+    pin: String,
+}
+
+/// `POST /api/setup` — redeems the first-run setup code (Q2-01) and sets the
+/// very first parent PIN. Same origin discipline as [`login_handler`] (a
+/// cookie is ambient, so this refuses a request whose `Origin`/
+/// `Sec-Fetch-Site` says it came from somewhere else) and the same
+/// `Set-Cookie` shape on success, since success here is exactly a first
+/// sign-in.
+async fn setup_handler(headers: HeaderMap, Json(body): Json<SetupRequest>) -> Response {
+    if !crate::server::auth::same_origin_or_absent(&headers) {
+        return (
+            StatusCode::FORBIDDEN,
+            "cross-origin setup requests are not allowed",
+        )
+            .into_response();
+    }
+
+    let pool = match crate::server::db::pool().await {
+        Ok(pool) => pool,
+        Err(err) => {
+            tracing::error!(%err, "POST /api/setup: database unavailable");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "the hub's database is unavailable",
+            )
+                .into_response();
+        }
+    };
+    let data_dir = FamilyHubConfig::load().data_dir;
+
+    match crate::server::auth::set_initial_pin(pool, &data_dir, &body.setup_code, &body.pin).await {
+        Ok(token) => (
+            StatusCode::OK,
+            [(header::SET_COOKIE, session_cookie(&token))],
+        )
+            .into_response(),
+        Err(crate::server::auth::AuthError::PinAlreadySet) => {
+            (StatusCode::CONFLICT, "a parent PIN is already set").into_response()
+        }
+        Err(err) => (StatusCode::UNAUTHORIZED, err.to_string()).into_response(),
+    }
+}
+
 /// `POST /api/login` — the real, server-enforced PIN check
 /// (`auth::verify_pin`, argon2id + the [Q1-02/03 backoff gate]) plus, on
 /// success, a `Set-Cookie` for the phone. Cookies are ambient (every request
@@ -295,11 +350,32 @@ async fn logout_handler(headers: HeaderMap) -> Response {
 
 /// `GET /api/session` — the probe `mobile/session.rs::is_parent()` polls,
 /// since JavaScript can never read an `HttpOnly` cookie's value to check it
-/// itself: `204` for a live parent session, `401` otherwise.
-async fn session_probe_handler(headers: HeaderMap) -> StatusCode {
+/// itself: `204` for a live parent session, `401` for no/invalid session, and
+/// (Q2-01) `404` when no parent PIN has been set at all yet — distinct from
+/// "not signed in" so a client can tell "log in" from "run first-run setup"
+/// apart without a separate round trip.
+async fn session_probe_handler(headers: HeaderMap) -> Response {
+    let pool = match crate::server::db::pool().await {
+        Ok(pool) => pool,
+        Err(err) => {
+            tracing::error!(%err, "GET /api/session: database unavailable");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    match crate::server::auth::pin_is_set(pool).await {
+        Ok(true) => {}
+        Ok(false) => return StatusCode::NOT_FOUND.into_response(),
+        Err(err) => {
+            tracing::error!(%err, "GET /api/session: could not check whether a PIN is set");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    }
+
     match crate::server::auth::session_from_headers(&headers) {
-        Some(token) if crate::server::auth::is_valid_session(&token) => StatusCode::NO_CONTENT,
-        _ => StatusCode::UNAUTHORIZED,
+        Some(token) if crate::server::auth::is_valid_session(&token) => {
+            StatusCode::NO_CONTENT.into_response()
+        }
+        _ => StatusCode::UNAUTHORIZED.into_response(),
     }
 }
 
@@ -572,7 +648,22 @@ pub async fn run(config: FamilyHubConfig) -> Result<(), RunError> {
     // same absolute file.
     std::env::set_var("DATABASE_URL", config.database_url());
 
-    crate::server::db::pool().await.map_err(RunError::Db)?;
+    let pool = crate::server::db::pool().await.map_err(RunError::Db)?;
+    // Q2-01 (QA round 2): a first-run setup code was only ever generated by
+    // `api::profiles::parent_setup_status`, and nothing in `src/client/`
+    // calls that server fn — on a real install the code never got written to
+    // the log or `<data>\setup-code.txt`, so no parent could ever obtain one
+    // and every parent-only feature was permanently unreachable. Generating
+    // it here, once, right after the pool opens, makes it exist independent
+    // of whether any client ever asks. `ensure_setup_code` is idempotent (a
+    // no-op once a PIN is set, and reuses the same code across restarts
+    // before that), so this is safe to call unconditionally at every boot.
+    // Logged at ERROR (not propagated as a `RunError`) because a parent
+    // being unable to ever set a PIN is a serious defect but not one that
+    // should stop the TV — which needs no PIN at all — from serving.
+    if let Err(err) = crate::server::auth::ensure_setup_code(pool, &config.data_dir).await {
+        tracing::error!(%err, "failed to generate the first-run parent PIN setup code");
+    }
     crate::server::calendar::spawn_polling_task();
     // T1.2 H-7: start the DST-safe midnight tick at boot rather than waiting
     // for the first WebSocket upgrade to self-start it.

@@ -279,8 +279,8 @@ The setup code is single-use, so it cannot simply be read again. On the hub PC:
 3. Clear the stored PIN so the hub falls back to first-run behaviour: with any SQLite
    client, `DELETE FROM settings WHERE key = 'parent_pin_hash';` and
    `DELETE FROM settings WHERE key = 'parent_setup_code';`.
-4. Start the service. It mints a fresh setup code, writes it to the log and to
-   `%ProgramData%\FamilyHub\setup-code.txt`, and shows it on the television.
+4. Start the service. It mints a fresh setup code and writes it to the log and to
+   `%ProgramData%\FamilyHub\setup-code.txt`.
 5. Re-do `docs/OWNER_CHECKLIST.md` step 4 with the new code.
 
 There is **no lockout** to wait out — repeated wrong PINs only slow the next attempt

@@ -9,8 +9,9 @@
 //!   construction).
 //! * **The first-run setup code** — a second, throwaway 6-digit code the
 //!   server invents once, before any PIN exists, so that *setting* the very
-//!   first PIN can be gated on physical proximity to the server (the log,
-//!   `<data>\setup-code.txt`, and — once T2.1 lands — the TV) rather than on
+//!   first PIN can be gated on physical proximity to the server (the log and
+//!   `<data>\setup-code.txt` — **not** the television; the Boss decided
+//!   against showing it there, `docs/HANDOFF.md` H-24) rather than on
 //!   nothing at all. It is stored in plain text in `settings`: it is not the
 //!   thing being protected, it is what protects the thing that will be.
 //!
@@ -198,10 +199,14 @@ pub async fn pin_is_set(pool: &SqlitePool) -> Result<bool, AuthError> {
 /// rather than printing a different one (the file and the log line from the
 /// first boot stay accurate).
 ///
-/// Called from [`crate::server::api::profiles::parent_setup_status`], which
-/// every client (TV included, once T2.1 lands) asks at least once — that is
-/// this module's self-starting trigger, the same pattern
-/// `api::realtime::ensure_background_tasks` uses for the midnight tick.
+/// Called unconditionally from `server::router::run` right after the
+/// database pool opens (Q2-01, QA round 2) — a first-run code that only ever
+/// got generated when some client happened to call
+/// [`crate::server::api::profiles::parent_setup_status`] was never generated
+/// at all on a real install, since nothing in `src/client/` calls that
+/// server fn. Also called from `parent_setup_status` itself and from this
+/// module's own callers, all harmlessly: idempotent before a PIN exists
+/// (reuses the same code across restarts) and a no-op after one is set.
 pub async fn ensure_setup_code(
     pool: &SqlitePool,
     data_dir: &Path,
@@ -242,8 +247,9 @@ pub async fn read_setup_code(pool: &SqlitePool) -> Result<Option<String>, AuthEr
 }
 
 /// Set the very first parent PIN. Requires the first-run setup code (proving
-/// the caller has physical access to the server's log/file/TV) and only ever
-/// succeeds once — call [`change_pin`] afterwards.
+/// the caller has physical access to the server's log or
+/// `<data>\setup-code.txt`) and only ever succeeds once — call
+/// [`change_pin`] afterwards.
 pub async fn set_initial_pin(
     pool: &SqlitePool,
     data_dir: &Path,

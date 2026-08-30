@@ -2397,3 +2397,73 @@ appends or two independent hunks at one call site:
 Removed: every merged `phase-qa1/*` worktree, the merged `phase-3/T3.3`
 worktree, and the four locked `worktree-wf_d57bfb45-d60-{21,25,26,28}`
 placeholders. Kept: `wf_d57bfb45-d60-24` (`phase-qa1/T3.3`, rejected, unmerged).
+
+---
+
+## T1.4 — QA round 2 fix (`phase-qa2/T1.4`, Q2-01)
+
+Applied Q2-01's solution in full: `server::router::run` now calls
+`auth::ensure_setup_code(pool, &config.data_dir)` unconditionally right after
+`db::pool()` opens (logged at `ERROR`, not propagated as a `RunError` — a
+parent being unable to ever obtain a setup code is a serious defect but not
+one that should stop the TV, which needs no PIN at all, from serving).
+Before this, the only caller was `api::profiles::parent_setup_status`, a
+`#[server]` fn nothing in `src/client/` ever calls — verified again before
+fixing: `parent_setup_status`/`set_initial_parent_pin` do not appear anywhere
+under `src/client/`.
+
+Added `POST /api/setup` next to `/api/login` in `src/server/router.rs`: same
+`same_origin_or_absent` check, `auth::set_initial_pin`, 200 with the same
+`Set-Cookie` shape login uses, 409 on `AuthError::PinAlreadySet`, 401 on
+every other error (wrong code, bad PIN format). `GET /api/session` now
+checks `auth::pin_is_set` first and returns 404 before any PIN exists, so a
+client can tell "run first-run setup" apart from "log in" without a second
+round trip.
+
+Tests: `tests/service_tests.rs::run_generates_the_first_run_setup_code_and_logs_it_once_health_answers`
+spawns the real `family-hub.exe run` binary, polls a real `/health` over a
+real listener until it answers 200, then asserts `setup-code.txt` exists and
+`familyhub.log` contains "generated the first-run parent PIN setup code".
+`tests/router_tests.rs::login_sets_a_well_formed_session_cookie` now also
+drives `/api/setup` (wrong code → 401 no cookie; correct code → 200 + the
+five cookie flags; a second call → 409) and asserts `GET /api/session` is
+404 before the PIN exists.
+
+### Cross-owner doc edits (T3.2's files) — please ratify
+
+Q2-01 also named two runbook lines that claimed the setup code is "shown on
+the television" — a promise `docs/HANDOFF.md` H-24 already records the Boss
+decided against (`docs/reviews/PURPLE_TEAM.md`'s T2.1 note), never
+implemented, and now actively wrong once this fix lands. Dropped:
+
+- `docs/OWNER_CHECKLIST.md` step 4: "...and onto the television" →
+  "...and to `%ProgramData%\FamilyHub\setup-code.txt`." (full stop, TV
+  clause removed).
+- `docs/RECOVERY.md`, Failure mode 7 step 4: "...and shows it on the
+  television" removed from the same sentence.
+
+Both files are T3.2's (`docs/reviews/PURPLE_TEAM.md` §P4); the edits are
+textual only (no structural/heading changes, step/mode numbering untouched)
+and forced by Q2-01's own solution text. `src/server/auth.rs`'s doc comments
+(this task's own file) were also corrected to stop promising a TV display.
+
+### Not applied — needs a Boss commit
+
+Q2-01's solution text also asks for two Boss-level actions this task's tier
+does not have standing to do on its own (PLAN v2 §5.2: "changing an
+acceptance criterion requires a Boss commit... recorded in
+`docs/HANDOFF.md`"):
+
+1. Amend `docs/PLAN.md` §3 T1.4 / `docs/reviews/PURPLE_TEAM.md` §P5.5
+   default 9 so the first-run setup code is described as "log +
+   `setup-code.txt` (not shown on the TV)" instead of the current text
+   implying a TV display — the plan's own wording is the source the QA
+   finding traced the "TV" claim back to in the first place.
+2. Create `docs/RESIDUAL.md` recording the item Q2-01 flags as residual: the
+   join-QR overlay PLAN v2 D3′ describes (the raw-IP HTTPS phone URL,
+   T2.1/T2.2 territory) is HTTP-gated the same way the setup code briefly
+   was — nothing in this fix wires a QR-code equivalent into the *TV*
+   surface for first-run setup, since D1/D8 already scope calendar
+   editing/administration off the TV to phone-only. Recorded here rather
+   than invented by this task, which owns `auth.rs`/`router.rs`, not the QR
+   overlay (T2.1's/T2.2's files).

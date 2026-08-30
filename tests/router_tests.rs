@@ -373,15 +373,73 @@ async fn login_sets_a_well_formed_session_cookie() {
     let addr = spawn_router(&config).await;
     let pool = db::pool().await.expect("test sqlite pool opens");
 
-    // This test binary's only caller of `set_initial_pin`, so it owns the
-    // PIN it sets without racing any other test in this file.
+    // This test binary's only caller of `set_initial_pin` (directly or via
+    // /api/setup), so it owns the PIN it sets without racing any other test
+    // in this file.
     let code = auth::ensure_setup_code(pool, &config.data_dir)
         .await
         .expect("ensure a setup code exists")
         .expect("no PIN has been set yet in this fresh test binary");
-    auth::set_initial_pin(pool, &config.data_dir, &code, "482913")
+
+    // Q2-01: before any PIN exists, /api/session must say so distinctly
+    // (404), not "not signed in" (401) — a client needs to tell "run
+    // first-run setup" apart from "log in" without another round trip.
+    let before_pin = http_client()
+        .get(format!("http://{addr}/api/session"))
+        .send()
         .await
-        .expect("the real setup code sets the initial PIN");
+        .expect("GET /api/session should respond");
+    assert_eq!(before_pin.status().as_u16(), 404);
+
+    // Q2-01: POST /api/setup is the HTTP route a browser actually drives —
+    // `set_initial_parent_pin` is a `#[server]` fn nothing in `src/client/`
+    // calls. A wrong setup code is rejected without setting a PIN.
+    let wrong_code = http_client()
+        .post(format!("http://{addr}/api/setup"))
+        .json(&serde_json::json!({ "setup_code": "000000", "pin": "482913" }))
+        .send()
+        .await
+        .expect("POST /api/setup should respond");
+    assert_eq!(wrong_code.status().as_u16(), 401);
+    assert!(wrong_code.headers().get("set-cookie").is_none());
+
+    let setup = http_client()
+        .post(format!("http://{addr}/api/setup"))
+        .json(&serde_json::json!({ "setup_code": code.clone(), "pin": "482913" }))
+        .send()
+        .await
+        .expect("POST /api/setup should respond");
+    assert_eq!(setup.status().as_u16(), 200);
+    let setup_cookie = setup
+        .headers()
+        .get("set-cookie")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        setup_cookie.starts_with("fh_session="),
+        "cookie: {setup_cookie:?}"
+    );
+    assert!(
+        setup_cookie.contains("HttpOnly"),
+        "cookie: {setup_cookie:?}"
+    );
+    assert!(setup_cookie.contains("Secure"), "cookie: {setup_cookie:?}");
+    assert!(
+        setup_cookie.contains("SameSite=Lax"),
+        "cookie: {setup_cookie:?}"
+    );
+    assert!(setup_cookie.contains("Path=/"), "cookie: {setup_cookie:?}");
+
+    // A second call, now that a PIN exists, is refused as a conflict rather
+    // than silently re-running first-run setup.
+    let second_setup = http_client()
+        .post(format!("http://{addr}/api/setup"))
+        .json(&serde_json::json!({ "setup_code": code, "pin": "999999" }))
+        .send()
+        .await
+        .expect("POST /api/setup should respond");
+    assert_eq!(second_setup.status().as_u16(), 409);
 
     let response = http_client()
         .post(format!("http://{addr}/api/login"))

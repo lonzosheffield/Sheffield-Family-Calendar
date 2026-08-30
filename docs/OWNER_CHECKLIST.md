@@ -104,7 +104,7 @@ unreachable".
 ### 4. Set the parent PIN
 
 The hub ships with no PIN. On first run it writes a one-time **setup code** to the
-log, to `%ProgramData%\FamilyHub\setup-code.txt`, and onto the television. Open
+log and to `%ProgramData%\FamilyHub\setup-code.txt`. Open
 `https://<hub-ip>:8443/m` on a phone (step 7 installs the certificate that makes this
 pleasant; before that the browser will warn), go to **Settings**, enter the setup code
 and choose a **six-digit** PIN.
