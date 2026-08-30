@@ -1250,3 +1250,35 @@ nightly sweep (`nightly_maintenance` in `backup.rs`) calls it against
 if the service's log writer uses a different file name, either point it at
 `familyhub.log` or have T3.1 call `backup::rotate_log_if_needed` directly
 with its own path instead of relying on the nightly sweep's hard-coded one.
+
+## Boss decisions at the Recovery close (T1.6 squash-merged to `main`)
+
+T1.6's branch (`phase-1/T1.6`, dd38499, forked from 1bc45d9) was merged
+after waves 1-b and 2-a. Its structured report was lost, so the branch was
+reviewed against PURPLE §P3 T1.6 (a)-(f) directly: every letter has a named
+test in `tests/backup_tests.rs`, and the whole suite is green on `main`.
+
+- **T1.6 H-15 (`router::run` calls `backup::register_nightly_hooks()`) —
+  applied.** One line, next to `realtime::ensure_background_tasks()`, so
+  the nightly backup → stroke compaction → photo retention → log rotation
+  sweep now actually runs on the midnight tick.
+- **T1.6 H-16 (log file name for T3.1) — recorded, not applied.** T3.1
+  owns the service log writer; it must either write to
+  `<data>\logs\familyhub.log` or call `backup::rotate_log_if_needed`
+  with its own path. Carried forward as a T3.1 input.
+- **Duplicate stroke-compaction SQL resolved in favour of T2.3's
+  `db::compact_board`.** T1.6 had added an identical two-pass
+  `db::compact_strokes` in the same wave T2.3 landed `compact_board` (H-20
+  above). Only `compact_board` (transactional) survives in `db.rs`;
+  `backup::compact_strokes` is a thin delegate to it. `db::delete_custom_task_row`
+  is the one retention fn T1.6 still adds to `db.rs`.
+- **`tests/backup_tests.rs` restore drill expects `migration_version == 3`**
+  (was 2 on the branch) — the same mechanical bump H-17 applied to
+  `storage_tests.rs`; not a weakened assertion.
+- **Numbering:** T1.6's H-15/H-16 collide with T1.4's H-15/H-16 above.
+  Per-section numbering is already how T2.1/T2.2/T2.3 read; left as is,
+  qualified by section wherever referenced.
+- **`phase-2/T2.7` is deliberately not merged yet.** It was built before
+  T2.5 existed and will be reconciled once T2.5 lands.
+- `.gitignore` now excludes `.claude/worktrees/` (agent worktrees are
+  checkouts, never content).

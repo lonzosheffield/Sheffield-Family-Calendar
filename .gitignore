@@ -8,3 +8,4 @@ family.db-wal
 .DS_Store
 service-account.json
 .env
+.claude/worktrees/

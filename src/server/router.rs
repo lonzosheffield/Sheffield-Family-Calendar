@@ -299,6 +299,9 @@ pub async fn run(config: FamilyHubConfig) {
     // T1.2 H-7: start the DST-safe midnight tick at boot rather than waiting
     // for the first WebSocket upgrade to self-start it.
     crate::server::api::realtime::ensure_background_tasks();
+    // T1.6 H-15: register the nightly backup / retention sweep on the
+    // day-rolled hook. Exactly once — each call adds another hook closure.
+    crate::server::backup::register_nightly_hooks();
 
     // Certificate source. Only `SelfSignedCa` exists in this wave; an
     // unrecognised `certs.mode` fails here, loudly, rather than at the
