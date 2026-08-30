@@ -136,8 +136,8 @@ image = "0.25"
 # the `tiny_skia` pixmap it renders into) and decoded back to its payload by
 # an independent reader (`rqrr`), so the assertion covers the real rendered
 # component output rather than the encoder's own matrix.
-resvg = "0.45"
-rqrr = "0.10"
+resvg = "=0.45.1"
+rqrr = "=0.10.1"
 
 [features]
 default = []

@@ -135,3 +135,33 @@ fn ci_workflow_pins_tailwind_and_dx_versions() {
         "ci.yml must pin the Tailwind standalone binary to tailwindcss-windows-x64 v3.4.17"
     );
 }
+
+/// T0.7 QA fix Q2-07: validate that resvg, usvg, and tiny-skia are pinned
+/// exactly in xtask/Cargo.toml (PURPLE_TEAM.md §P5.4, Cargo.toml/Cargo.lock
+/// are Boss-serialised).
+#[test]
+fn xtask_crate_versions_are_pinned_exactly() {
+    let xtask_cargo = Path::new(env!("CARGO_MANIFEST_DIR")).join("xtask/Cargo.toml");
+    let content = fs::read_to_string(&xtask_cargo)
+        .unwrap_or_else(|e| panic!("xtask/Cargo.toml must exist and be readable: {e}"));
+
+    let crates_to_check = ["resvg", "usvg", "tiny-skia"];
+    for crate_name in &crates_to_check {
+        let lines: Vec<&str> = content
+            .lines()
+            .filter(|line| line.contains(crate_name))
+            .collect();
+
+        assert!(
+            !lines.is_empty(),
+            "xtask/Cargo.toml must contain a line for {crate_name}"
+        );
+
+        for line in lines {
+            assert!(
+                line.contains("\"="),
+                "xtask/Cargo.toml: every {crate_name} line must contain \"= (exact pin). Found: {line:?}"
+            );
+        }
+    }
+}

@@ -140,8 +140,7 @@ fn render_svg_to_png(
     is_maskable: bool,
 ) -> Result<ImageBuffer<image::Rgba<u8>, Vec<u8>>> {
     // Parse SVG using usvg
-    let fontdb = usvg::fontdb::Database::new();
-    let rtree = usvg::Tree::from_str(svg_content, &usvg::Options::default(), &fontdb)?;
+    let rtree = usvg::Tree::from_str(svg_content, &usvg::Options::default())?;
 
     let mut pixmap = tiny_skia::Pixmap::new(width, height)
         .ok_or_else(|| anyhow::anyhow!("Failed to create pixmap"))?;
