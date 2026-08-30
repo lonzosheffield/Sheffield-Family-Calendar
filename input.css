@@ -2,6 +2,34 @@
 @tailwind components;
 @tailwind utilities;
 
+/* D4.1: the poster faces, bundled locally and served from this same origin
+   at /fonts/* (src/server/router.rs) -- no external font requests, ever.
+   Absolute URLs because this stylesheet is served at /tailwind.css, not
+   from assets/, so a relative "fonts/..." would resolve wrong. Weight
+   ranges (400 600 / 700 900) so every existing font-bold/font-black class
+   in the codebase lands on a real file instead of a faux-bold synthesis. */
+@font-face {
+  font-family: "Nunito";
+  font-style: normal;
+  font-weight: 400 600;
+  font-display: swap;
+  src: url("/fonts/nunito-600-latin.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Nunito";
+  font-style: normal;
+  font-weight: 700 900;
+  font-display: swap;
+  src: url("/fonts/nunito-800-latin.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Baloo 2";
+  font-style: normal;
+  font-weight: 700 900;
+  font-display: swap;
+  src: url("/fonts/baloo2-800-latin.woff2") format("woff2");
+}
+
 html,
 body {
   margin: 0;

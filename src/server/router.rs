@@ -165,6 +165,7 @@ pub fn build_router(config: &FamilyHubConfig) -> Router {
         )
         .nest_service("/uploads", uploads_router(config))
         .nest_service("/assets/screensaver", screensaver_router(config))
+        .nest_service("/fonts", fonts_router())
         .serve_dioxus_application(ServeConfig::new(), App)
 }
 
@@ -203,6 +204,27 @@ fn screensaver_router(config: &FamilyHubConfig) -> Router {
     Router::new()
         .fallback_service(ServeDir::new(config.screensaver_dir()))
         .layer(axum::middleware::from_fn(uploads_security_headers))
+}
+
+/// `/fonts` as its own tiny `Router<()>`, mirroring [`screensaver_router`]'s
+/// shape (D4.1, `docs/design/DESIGN_DIRECTION.md` §4/§5) — the three poster
+/// faces (`assets/fonts/*.woff2`) are, unlike `/uploads` and
+/// `/assets/screensaver`, build-time data baked into this crate rather than
+/// runtime content under `FamilyHubConfig`'s data directory, so this router
+/// takes no config: [`FONTS_DIR`] resolves at compile time, next to this
+/// source file's own crate root, on whichever machine produced this binary
+/// — exactly the same "resolved once, absolutely, never relative to the
+/// process's current working directory" discipline `FamilyHubConfig`
+/// applies to runtime paths (G23/R-14), just fixed at build time instead of
+/// load time since these files never change per-install. No security
+/// headers layer: these are same-origin font binaries the browser is
+/// expected to load and use as fonts, not user-uploaded images that must
+/// never render inline (the `uploads_security_headers` rationale above does
+/// not apply here).
+const FONTS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/fonts");
+
+fn fonts_router() -> Router {
+    Router::new().fallback_service(ServeDir::new(FONTS_DIR))
 }
 
 /// `X-Content-Type-Options: nosniff` + `Content-Disposition: attachment` on

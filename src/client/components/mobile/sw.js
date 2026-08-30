@@ -25,6 +25,11 @@ const SHELL_URLS = [
   '/icons/icon-512.png',
   '/icons/icon-192-maskable.png',
   '/icons/icon-512-maskable.png',
+  // D4.1: the poster faces, same-origin and build-time-fixed (never change
+  // per-install), so they belong in the app shell like the icons above.
+  '/fonts/nunito-600-latin.woff2',
+  '/fonts/nunito-800-latin.woff2',
+  '/fonts/baloo2-800-latin.woff2',
 ];
 
 self.addEventListener('install', (event) => {
