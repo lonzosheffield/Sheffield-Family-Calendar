@@ -135,7 +135,7 @@ pub fn Routine(compact: bool) -> Element {
     });
 
     let mut tasks = use_resource(move || async move {
-        let _version = (bus.routine_version)();
+        let _version = (bus.tasks_version)();
         get_custom_tasks((state.active_user_id)()).await
     });
 
