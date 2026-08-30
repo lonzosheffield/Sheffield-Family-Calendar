@@ -4,7 +4,7 @@ The Sheffield Family Calendar & Routine Hub stack is **Rust whole-stack**, with 
 
 | Component | Purpose | Justification | Notes |
 | --- | --- | --- | --- |
-| `sw.js` | Service Worker (~40 lines) | Served from Rust; offline app shell and network request routing | Included via `include_str!` in Rust server |
+| `sw.js` | Service Worker (~105 lines, 3.3 KB; ≤ 6 KB budget asserted by `tests/pwa_tests.rs`) | Served from Rust at `/sw.js`; app-shell precache, network-first server fns, cache-first `/uploads` + screensaver. No Background Sync (`docs/PWA.md`) | `include_str!`'d from `src/client/components/mobile/sw.js` (T2.2) |
 | `tailwindcss-windows-x64` v3.4.17 | CSS build-time compiler (binary) | Standalone Tailwind CLI for Windows; v4 is incompatible with our config model and has no Rust equivalent | Downloaded as a binary; runs at build time only |
 | Fully Kiosk Browser ≥ 1.61.2 | Kiosk shell on Fire TV (Branch A) | Proprietary launcher; PLUS licence ~€8.90/$10.99 one-off | Fire OS only; one of three runbook branches (A/B/B′); sideloaded via adb |
 | `adb` (Android Debug Bridge) | Fire TV configuration tool | Granting SYSTEM_ALERT_WINDOW and GET_USAGE_STATS permissions; setting sleep timeout; toggling HDMI-CEC | One-time device setup; not in the shipped binary |

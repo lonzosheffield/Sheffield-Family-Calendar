@@ -1109,3 +1109,96 @@ client-side to begin with (every `RequestSnapshot` it sends today is
 Wave 2-a in progress: T2.3 done. T2.1, T2.2, T2.4, T2.5 unaffected — none
 touch `src/server/api/realtime.rs`, `src/server/db.rs`'s whiteboard section,
 or `src/client/components/whiteboard.rs`.
+
+---
+
+## Boss decisions at the wave 2-a close (T2.1, T2.2, T2.3 merged)
+
+Merged in order T2.1 → T2.2 → T2.3 (squash), baseline green after each
+(`cargo fmt --check`, both clippy targets with `-D warnings`,
+`cargo test --features server`). T1.6, T2.4 and T2.5 were not part of this
+closeout; their branches/worktrees are untouched. Note: all three sections
+above reuse the numbers **H-20…H-25** — they are disambiguated by the section
+they sit in ("T2.1 H-23" vs "T2.2 H-23"), not renumbered, because commits and
+code comments already cite them that way.
+
+**Review outcomes (no rejections).** No task weakened a test, added an
+undeclared non-Rust component, or committed a secret. Edits outside the §P4
+ownership table, each ratified:
+
+- **T2.1 H-20 / T2.2 (`src/client/app.rs`, `src/client/components/mod.rs`):
+  ratified.** Neither file has a §P4 row. T2.1 pointed `KioskDashboard` at
+  `TvShell`; T2.2 pointed `Mobile` at `MobileShell` and moved the manifest
+  link to its root URL. The only conflict was the `use` block, which Boss
+  resolved (`Dashboard` and `Routine` imports are now unused there and were
+  dropped). **Owner from here on: `src/client/app.rs` and
+  `src/client/components/mod.rs` are Boss-only** — a wave-2b/3 task that needs
+  a line in either writes the request here.
+- **T2.2 H-20 (`src/server/router.rs`): ratified.** T0.6's own doc comments
+  reserved the two stub bodies for T2.2 (same precedent as H-14/H-16); routes,
+  paths and content types are unchanged, and `router_tests.rs` is untouched.
+  T2.5 will see a three-line conflict in `build_router`'s route chain plus one
+  `use`; Boss resolves it at T2.5's merge.
+- **T2.3 H-20/H-22/H-23 (`db.rs` query shapes, `api/realtime.rs` board store,
+  `tests/realtime_tests.rs`, `api/mod.rs`): ratified.** H-10 and
+  `docs/PROTOCOL.md` both reserved the `realtime` board-store swap for T2.3;
+  the test edits are `.await` on the now-async `reset_board()` plus the
+  `DATABASE_URL`-per-process isolation every sibling suite already uses —
+  mechanical, non-weakening, and T1.2's load test still passes.
+- **T2.3 H-21 (write-behind `record_stroke`): ratified, with one residual.**
+  The 759 ms → <250 ms p99 justification is measured against T1.2's protected
+  test, so the design stands. Residual for T2.6 / the Fable QA loop: the
+  detached inserts can commit out of `seq` order, so a client whose
+  `RequestSnapshot` lands in the milliseconds between the publish of stroke
+  *N* and its commit may bookmark `latest = N+1` and never be sent *N*. Every
+  client connected at publish time already received *N* live, so the window
+  only affects a socket opened inside it; T2.6's cross-surface test should
+  include a draw-then-immediate-snapshot case and, if it bites, `snapshot`
+  should return `latest` as the highest *contiguous* committed seq.
+
+**Applied by Boss in this close:**
+
+- **T2.1 H-21 / T2.2 H-21 — `assets/tailwind.css` rebuilt once** on the
+  merged tree with the pinned 3.4.17 binary (T2.1 had rebuilt on its own
+  branch; T2.2 deliberately had not). Same precedent as 1bc45d9.
+- **T2.1 H-22 — `tv_clock()` moved** to a new `src/server/api/tv.rs`
+  (re-exported from `api/mod.rs` as `api::tv_clock`, endpoint name unchanged).
+  `client::components::tv::clock` keeps `CLOCK_POLL_SECS` and re-exports
+  `tv_clock`/`TvClock`, so `tv::shell` did not change. `api/tv.rs` belongs to
+  T2.1's owner (T3.4 styling-only, like the rest of `tv/**`).
+- **T2.2 H-22 — `assets/manifest.json` deleted.** Nothing referenced it;
+  `tests/pwa_tests.rs` asserts the rendered page does not mention it.
+- **`docs/NON_RUST.md` `sw.js` row corrected** from "~40 lines" to the actual
+  ~105 lines / 3.3 KB, with the 6 KB budget and the no-Background-Sync
+  decision named. `sw.js` remains the only non-Rust component in the PWA.
+
+**Left recorded (not applied), with the reason:**
+
+- **T2.1 H-23 (server broadcasts `ServerMessage::Health` on a tick):
+  scheduled for the 2-b boundary as a T1.2-owner micro-commit.** The wire
+  shape exists but nothing on the server defines what `stale` means (the
+  `/health` body has no such field), so this is a small design decision, not a
+  mechanical apply. Guidance: spawn the 25 s heartbeat from `router::run` (not
+  from `ws_handler`, so `tests/realtime_tests.rs`'s hub-only router stays
+  silent and its "nothing arrives" assertions keep meaning that), with
+  `stale = false` and `last_update = now` until a Google poll exists to be
+  stale about. T2.1's `tv_clock()` poll stays until then.
+- **T2.1 H-24 (setup code on the TV): decided — do not expose it to the
+  kiosk over any endpoint or hydration payload.** The setup code stays in
+  the log and `<data>\setup-code.txt` (T1.4 H-18). The join-QR overlay can
+  gain the code only if T1.4's `parent_setup_code()` is gated to the HTTP
+  kiosk listener; that is a wave-3 hardening item, recorded in
+  `docs/RESIDUAL.md` when T3.2 consolidates.
+- **T2.2 H-23 (the two `record_offline_failure` enqueues in
+  `src/client/components/routine.rs`): deferred to T2.5's merge.** The file
+  is T2.5's in this same wave, so Boss applies the exact patch as part of
+  resolving T2.5's squash (or T2.5 applies it, having read this).
+- **T2.2 H-24 (`web-sys` `Storage` feature): not needed.** The externs work
+  and catch Safari's private-mode exception; no `Cargo.toml` change this
+  wave.
+- **`src/client/components/dashboard.rs` is now unreferenced** (neither
+  `/tv` nor `/m` renders it). Left in the tree until T2.4 and T2.5 land in
+  case either reads its calendar/photo-task panels; Boss deletes it at the
+  2-b close if still unreferenced.
+- **T2.3 → T1.6:** `realtime::compact_board(DEFAULT_BOARD_ID)` exists and is
+  unit-proven; T1.6 registers it with `on_day_rolled` when its branch merges.

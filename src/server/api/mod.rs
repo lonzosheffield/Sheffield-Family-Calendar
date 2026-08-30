@@ -15,6 +15,7 @@
 //! | [`calendar`] | T2.4 (calendar v2) |
 //! | [`screensaver`] | T2.7 (screensaver completion) |
 //! | [`whiteboard`] | T2.3 (whiteboard v2 — new module, undo-own-last-stroke) |
+//! | [`tv`] | T2.1 (kiosk clock; moved here from `client::components::tv::clock` by Boss at the 2-a close) |
 //!
 //! Every server function is re-exported here, so call sites keep using
 //! `crate::server::api::<name>` exactly as before the split.
@@ -25,6 +26,7 @@ pub mod profiles;
 pub mod realtime;
 pub mod routine;
 pub mod screensaver;
+pub mod tv;
 pub mod whiteboard;
 
 pub use calendar::get_today_events;
@@ -37,6 +39,7 @@ pub use routine::{
     toggle_routine_task,
 };
 pub use screensaver::list_screensaver_images;
+pub use tv::tv_clock;
 pub use whiteboard::undo_last_stroke;
 
 /// Shared `sqlx::Error` → `ServerFnError` conversion used by every module in
