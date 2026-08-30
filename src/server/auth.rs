@@ -421,6 +421,19 @@ pub fn require_session(token: &str) -> Result<(), AuthError> {
 mod tests {
     use super::*;
 
+    /// The session store is process-global (`SESSIONS`), and `cargo test`
+    /// runs unit tests in parallel: without this, one test's
+    /// `revoke_all_sessions()` can land between another's `issue_session()`
+    /// and its `require_session` assertion (Boss fix-up at the Recovery
+    /// close - the race was observed once in a full-suite run).
+    static SESSION_STORE_LOCK: Mutex<()> = Mutex::new(());
+
+    fn session_store_guard() -> std::sync::MutexGuard<'static, ()> {
+        SESSION_STORE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     #[test]
     fn pin_format_accepts_exactly_six_digits() {
         assert!(is_valid_pin_format("012345"));
@@ -469,6 +482,7 @@ mod tests {
 
     #[test]
     fn session_store_issue_revoke_and_expiry() {
+        let _guard = session_store_guard();
         revoke_all_sessions();
         let token = issue_session();
         assert!(is_valid_session(&token));
@@ -493,6 +507,7 @@ mod tests {
 
     #[test]
     fn require_session_rejects_empty_and_unknown_tokens() {
+        let _guard = session_store_guard();
         revoke_all_sessions();
         assert!(require_session("").is_err());
         assert!(require_session("not-a-real-token").is_err());
