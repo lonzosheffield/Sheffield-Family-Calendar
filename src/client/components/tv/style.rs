@@ -42,7 +42,7 @@ pub const TV_OVERSCAN_CLASS: &str = "p-[5%]";
 /// itself at `sheffield-sun`, and sun on paper is 1.5:1, so the indicator had
 /// no edge WCAG 1.4.11 would accept. A dark gap gives it two — sun on dark is
 /// 3.4:1 and dark on a white card is 5.1:1. Both are asserted from the hex
-/// values by [`super::palette::NON_TEXT_PAIRS`].
+/// values by [`crate::client::components::palette::NON_TEXT_PAIRS`].
 pub const TV_FOCUSABLE_CLASS: &str = "tv-focusable block w-full text-left rounded-3xl outline-none ring-8 ring-offset-4 ring-offset-sheffield-dark focus:ring-sheffield-sun";
 
 /// Ring colour on the element the remote has focused.

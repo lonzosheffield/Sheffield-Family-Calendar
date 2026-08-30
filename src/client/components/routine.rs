@@ -318,13 +318,13 @@ fn RoutineRow(item: RoutineItemView, on_toggle: EventHandler<bool>) -> Element {
             span {
                 span {
                     class: if completed {
-                        "block text-lg font-semibold text-slate-400 line-through"
+                        "block text-lg font-semibold text-slate-600 line-through"
                     } else {
                         "block text-lg font-semibold"
                     },
                     "{item.title}"
                 }
-                span { class: "block text-sm text-slate-500", "{item.description}" }
+                span { class: "block text-sm text-slate-600", "{item.description}" }
             }
             span { class: "ml-auto text-xs uppercase tracking-wide text-sheffield-light",
                 "{item.icon_name}"
@@ -354,11 +354,11 @@ fn CustomTaskRow(
                     img { class: "h-12 w-12 rounded-lg object-cover", src: "{path}", alt: "{task.title}" }
                 }
                 span {
-                    class: if completed { "font-semibold text-slate-400 line-through" } else { "font-semibold" },
+                    class: if completed { "font-semibold text-slate-600 line-through" } else { "font-semibold" },
                     "{task.title}"
                 }
                 if let Some(due) = task.due_date.clone() {
-                    span { class: "ml-auto text-xs uppercase tracking-wide text-slate-400", "due {due}" }
+                    span { class: "ml-auto text-xs uppercase tracking-wide text-slate-600", "due {due}" }
                 }
             }
             button {
@@ -405,7 +405,7 @@ fn PhotoTaskDialog(on_close: EventHandler<()>, on_created: EventHandler<()>) -> 
                     oninput: move |event| title.set(event.value()),
                 }
 
-                label { class: "block text-sm font-semibold text-slate-500",
+                label { class: "block text-sm font-semibold text-slate-600",
                     "Due date (optional)"
                     input {
                         class: "mt-1 w-full rounded-xl border border-slate-200 p-3 text-lg",
@@ -433,7 +433,7 @@ fn PhotoTaskDialog(on_close: EventHandler<()>, on_created: EventHandler<()>) -> 
 
                 div { class: "flex justify-end gap-2",
                     button {
-                        class: "rounded-xl px-4 py-2 font-semibold text-slate-500",
+                        class: "rounded-xl px-4 py-2 font-semibold text-slate-600",
                         onclick: move |_| on_close.call(()),
                         "Cancel"
                     }

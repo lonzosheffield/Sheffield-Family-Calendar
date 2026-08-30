@@ -1010,8 +1010,12 @@ pub fn try_run_as_service() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+
+    /// The three `tv_probe_*` tests set/remove `FAMILY_HUB_TV_IP`, which is
+    /// process-global; `cargo test` runs them on parallel threads, so they
+    /// take this lock first (Boss, wave 3 close).
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn scratch_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -1355,6 +1359,7 @@ mod tests {
 
     #[test]
     fn tv_probe_reports_unreachable_rather_than_erroring_when_adb_fails() {
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let runner = RecordingCommandRunner {
             fail: true,
             ..Default::default()
@@ -1367,6 +1372,7 @@ mod tests {
 
     #[test]
     fn tv_probe_connects_when_adb_succeeds() {
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let runner = RecordingCommandRunner::default();
         std::env::set_var("FAMILY_HUB_TV_IP", "10.0.0.178");
         let result = tv_probe_with(&runner).expect("tv-probe succeeds");
@@ -1383,6 +1389,7 @@ mod tests {
 
     #[test]
     fn tv_probe_without_any_configured_ip_says_so_rather_than_panicking() {
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::remove_var("FAMILY_HUB_TV_IP");
         // No docs/device.toml relative to CARGO_MANIFEST_DIR-independent
         // cwd in a test binary is not guaranteed either way, so only assert
@@ -1399,10 +1406,5 @@ mod tests {
     fn dispatch_on_an_unknown_subcommand_returns_a_nonzero_exit_code_not_a_panic() {
         assert_eq!(dispatch(&["frobnicate".to_string()]), 2);
         assert_eq!(dispatch(&[]), 2);
-    }
-
-    #[allow(dead_code)]
-    fn silence_unused_atomic_import() -> usize {
-        AtomicUsize::new(0).load(Ordering::SeqCst)
     }
 }

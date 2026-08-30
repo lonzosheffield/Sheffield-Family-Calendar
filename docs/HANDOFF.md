@@ -1929,3 +1929,72 @@ profile discs.
 
 No acceptance test was weakened. `tests/tv_tests.rs` (21 tests, T2.1's whole
 contract) is untouched and green.
+
+---
+
+## Boss close — wave 3 (T3.1, T3.4 merged)
+
+Squash-merged `phase-3/T3.1` (217627c) and `phase-3/T3.4` (4b26734, HANDOFF
+markers fixed in f49187a). Full baseline (fmt, both clippy invocations,
+`cargo test --features server`) green after each merge and again after this
+close.
+
+### Applied here
+
+- **T3.4 request 1 — `palette.rs` moved up a directory.** Now
+  `src/client/components/palette.rs`, declared in `components/mod.rs`;
+  `tv/mod.rs` keeps `pub use super::palette;` so every `tv::palette::` path
+  still resolves. `surface.rs`, `style.rs` docs and `tests/palette_tests.rs`
+  use the new path.
+- **T3.4 request 2, the unambiguous half.** `text-slate-400` / `text-slate-500`
+  → `text-slate-600` in `components/routine.rs` (T2.5) and
+  `components/calendar.rs` (T2.4) — 12 occurrences, the exact substitution
+  T3.4 named (2.56:1 and 4.76:1 → 7.58:1 on white). `whiteboard.rs` had no
+  slate-400/500 left; its `ring-slate-200` hairlines are on the allowlist.
+- **T3.1 tidy-ups.** The three `tv_probe_*` unit tests mutate the
+  process-global `FAMILY_HUB_TV_IP`; they now serialise on a `static
+  ENV_LOCK` so `cargo test`'s parallel threads cannot race them. The unused
+  `AtomicUsize` import and its `#[allow(dead_code)]` shim are gone.
+  `docs/NON_RUST.md`'s `adb` row no longer says "not in the shipped binary":
+  `family-hub.exe tv-probe` shells out to it at runtime (best-effort, never
+  in the service path).
+- **T3.1's direct `Cargo.toml` edit ratified** (`windows-service =0.8.1`,
+  the §P5.4 pin, plus the `[[bin]] family-hub` target with
+  `required-features = ["server"]`). §P4 routes crate additions through Boss;
+  T3.4 was the only wave-mate and touched no manifest, so there was nothing
+  to serialise — same precedent as T1.3/T1.4/T2.4/T2.5.
+
+### Ratified
+
+- **Focus-ring offset `sheffield-paper` → `sheffield-dark`** (`tv/style.rs`,
+  T3.4). D8 fixes the ring at `ring-sheffield-sun` and that, `ring-8` and
+  `focus:ring-sheffield-sun` are untouched; all 21 T2.1 assertions pass. The
+  dark gap gives the indicator two ≥ 3:1 edges where sun-on-paper had none.
+- Mid-tone hues (`sun`, `accent`) as **grounds under `slate-800`** rather
+  than as ink; the `/tv` disconnected badge is that chip too (no more
+  `bg-red-600` on `/tv`). Profile-disc ink is computed by
+  `palette::best_ink_on`.
+- T3.1 registers the service at `std::env::current_exe()`; **the release
+  binary must be at its permanent location before `install`** — T3.2 must
+  say so in `OWNER_CHECKLIST.md` A3.
+
+### Recorded, not applied
+
+- **T3.4 request 2, the rest.** `routine.rs` and `calendar.rs` still carry
+  off-palette *red* tokens (`bg-red-50`, `bg-red-600`, `text-red-500/600/700`,
+  `border-red-500`, `ring-red-200`) and `ring-slate-100` / `bg-slate-50`.
+  T3.4 named no replacement for those, so `surface_sources()` in
+  `tests/palette_tests.rs` still scans `tv/**` and `mobile/**` only. The
+  natural fix is the T3.4 pattern (accent chip under `slate-800`) applied by
+  T2.4/T2.5's tier in the T3.5 QA loop, then widen the scan to
+  `components/**`.
+- **T2.7's phone Settings photo-upload control** stays open (behaviour, not
+  styling — outside T3.4's grant). Still owned by whoever next holds
+  `mobile/**`.
+- T3.1's real elevated `install` / `sc query FamilyHub` / `netsh ... show
+  rule name=FamilyHub*` remain owner step A3 by design (no elevated action
+  in the autonomous run).
+
+**Worktrees:** `.claude/worktrees/wf_d57bfb45-d60-7` (T3.1) and
+`.claude/worktrees/wf_d57bfb45-d60-8` (T3.4) removed after merge. The
+`worktree-*` placeholder branches carry no checkout.

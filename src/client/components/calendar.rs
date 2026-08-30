@@ -202,7 +202,7 @@ pub fn CalendarPanel() -> Element {
 
             match &state {
                 CalendarState::Loading => rsx! {
-                    p { class: "text-slate-400", "Loading the calendar…" }
+                    p { class: "text-slate-600", "Loading the calendar…" }
                 },
                 CalendarState::Error(message) => rsx! {
                     div { class: "rounded-2xl border-l-4 border-red-500 bg-red-50 p-3",
@@ -217,7 +217,7 @@ pub fn CalendarPanel() -> Element {
                     }
                 },
                 CalendarState::Empty => rsx! {
-                    p { class: "text-slate-400",
+                    p { class: "text-slate-600",
                         if mode() == CalendarMode::Week {
                             "Nothing on the calendar this week."
                         } else {
@@ -247,7 +247,7 @@ pub fn CalendarPanel() -> Element {
                                 key: "{day.date}",
                                 class: if day.is_today { "rounded-2xl bg-white p-2 shadow-sm ring-2 ring-sheffield-sun" } else { "rounded-2xl bg-white p-2 shadow-sm" },
                                 "data-day": "{day.date}",
-                                p { class: "text-xs font-semibold uppercase tracking-wide text-slate-500",
+                                p { class: "text-xs font-semibold uppercase tracking-wide text-slate-600",
                                     "{day.weekday} {day.day_of_month}"
                                 }
                                 if day.events.is_empty() {
@@ -259,7 +259,7 @@ pub fn CalendarPanel() -> Element {
                                             key: "{event.id}",
                                             class: "rounded-xl border-l-4 border-sheffield-sun bg-slate-50 px-2 py-1",
                                             p { class: "text-sm font-semibold", "{event.summary}" }
-                                            p { class: "text-xs text-slate-500", "{format_window(event)}" }
+                                            p { class: "text-xs text-slate-600", "{format_window(event)}" }
                                         }
                                     }
                                 }
@@ -281,7 +281,7 @@ pub fn CalendarPanel() -> Element {
                     },
                 }
             } else {
-                p { class: "shrink-0 text-xs text-slate-400",
+                p { class: "shrink-0 text-xs text-slate-600",
                     "Sign in as a parent on the Settings tab to add or remove events."
                 }
             }
@@ -297,7 +297,7 @@ fn EventRow(event: CalendarEvent, deletable: bool, on_deleted: EventHandler<Stri
         li { class: "flex items-start gap-3 rounded-2xl border-l-4 border-sheffield-sun bg-white p-3 shadow-sm",
             div { class: "min-w-0 flex-1",
                 p { class: "font-semibold", "{event.summary}" }
-                p { class: "text-sm text-slate-500", "{format_window(&event)}" }
+                p { class: "text-sm text-slate-600", "{format_window(&event)}" }
             }
             if let Some(id) = row_id {
                 if deletable {

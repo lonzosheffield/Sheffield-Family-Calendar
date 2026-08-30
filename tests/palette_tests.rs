@@ -12,7 +12,7 @@
 //! declarative:
 //!
 //! * **(a) contrast.** The maths and the pair table live in
-//!   `client::components::tv::palette` and are unit-tested there against the
+//!   `client::components::palette` and are unit-tested there against the
 //!   WCAG reference values. Here the *rendered* `/tv` markup is walked with a
 //!   nesting-aware scanner, so every element knows the ground it is actually
 //!   sitting on — inherited through however many wrappers — and every
@@ -39,12 +39,12 @@
 
 use dioxus::prelude::*;
 
-use family_calendar::client::components::tv::fixture::canonical_model;
-use family_calendar::client::components::tv::model::{TvModel, TvOverlay, TvPanel};
-use family_calendar::client::components::tv::palette::{
+use family_calendar::client::components::palette::{
     contrast_ratio, is_colour_name, pair_contrast, resolve, split_token, token, Pair, Rgb,
     COLOURLESS_TOKENS, NON_TEXT_PAIRS, PALETTE_PAIRS, PALETTE_TOKENS,
 };
+use family_calendar::client::components::tv::fixture::canonical_model;
+use family_calendar::client::components::tv::model::{TvModel, TvOverlay, TvPanel};
 use family_calendar::client::components::tv::style::{
     TV_MIN_BODY_PX, TV_MIN_HEADING_PX, TV_OVERSCAN_CLASS, TV_TYPE_SCALE,
 };

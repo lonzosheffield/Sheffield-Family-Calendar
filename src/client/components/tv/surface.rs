@@ -26,11 +26,11 @@ use crate::shared::types::{routine_progress, CalendarEvent, CustomTaskView, Rout
 
 use super::keymap::TV_KEYS;
 use super::model::{current_focus, FocusId, TvModel, TvOverlay, TvPanel, TvProfile};
-use super::palette::{best_ink_on, Rgb, SHEFFIELD_DARK};
 use super::staleness::status_line;
 use super::style::{
     focus_class, TV_BODY_LARGE, TV_BODY_TEXT, TV_HEADING, TV_HEADING_LARGE, TV_OVERSCAN_CLASS,
 };
+use crate::client::components::palette::{best_ink_on, Rgb, SHEFFIELD_DARK};
 
 /// Every full-screen container on the kiosk: paper ground, display face,
 /// 30 px base text, 5 % overscan.
