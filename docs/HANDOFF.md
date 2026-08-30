@@ -2544,3 +2544,80 @@ hub's `/api/session` answers `401`, so the phone shows the sign-in form
 rather than the setup form and `POST /api/setup` 404s. The two halves are
 designed to meet exactly at those two status codes; nothing else couples
 them.
+
+---
+
+## Boss — QA round 2 close (`phase-qa2/*` squash-merges to `main`, 2026-08-30)
+
+Merged, in wave order, each followed by the four gates (`cargo fmt --check`,
+both clippies with `-D warnings`, `cargo test --features server`) green on
+`main`: **T1.4** (`a8d5704`, Q2-01), **T2.2** (`32f5cd5`, Q2-02), **T2.5**
+(`a266cdf`, Q2-03), **T0.7** (`b2aa91b`, Q2-07). Final suite on `main`:
+401 passed, 0 failed across the lib and 27 integration binaries.
+
+### Applied
+
+- **T1.4's two Boss-only requests** (its "Not applied — needs a Boss commit"
+  section above): `docs/PLAN.md` §3 T1.4 row and `docs/reviews/PURPLE_TEAM.md`
+  §P5.5 default 9 / §P3 T1.4 row now say the first-run setup code goes to
+  the log and `<data>\setup-code.txt` and is **not** shown on the TV (the
+  T2.1 H-24 decision, finally written into the plan — PLAN §5.2); and
+  `docs/RESIDUAL.md` now exists with the join-QR item as R-1.
+- **`docs/BLOCKED.md`:** T0.7's round-1 entry marked RESOLVED; new entries
+  for **T3.1** (BLOCKED, harness worktree failure; branch `phase-qa2/T3.1`
+  `efbc749` kept for the re-dispatch) and **T3.3** (REJECTED at review —
+  see below).
+- **`src/server/service.rs` (T3.1's file, Boss edit):**
+  `install_refuses_when_no_wasm_bundle_is_present_beside_the_executable` now
+  holds `ENV_LOCK`. It failed once on `main` after the T0.7 merge because its
+  sibling `install_with_forwards_the_real_running_executable` sets
+  `DIOXUS_PUBLIC_PATH` to a directory that has a wasm file while holding the
+  lock the no-bundle test did not take; 4/4 isolated reruns and the full
+  suite green afterwards (`1f8559d`). T3.1's re-dispatch should carry this
+  edit forward — it is a different hunk from the three Q1-05 tests T3.1's
+  branch drops `ENV_LOCK` from.
+- **T2.2's request → T1.4** is satisfied by the same wave: `POST /api/setup`
+  and the `404` from `GET /api/session` landed in `a8d5704` before
+  `32f5cd5`, so the phone's setup form and the server route meet on `main`.
+
+### Ratified (cross-owner edits named verbatim by the QA solutions)
+
+- T1.4 → T3.2's `docs/OWNER_CHECKLIST.md` step 4 and `docs/RECOVERY.md`
+  mode 7 (the "shown on the television" clauses dropped).
+- T2.2 → T2.4's `src/server/api/calendar.rs` and `tests/calendar_tests.rs`;
+  T2.5's `src/server/api/photos.rs` and `tests/photo_tests.rs` (`t2_5_a`
+  now cookie-only, `t2_5_g` still the no-credential 401, four other `t2_5_*`
+  posts still carry the `auth` field so the bearer path stays covered);
+  T2.7's `src/server/api/screensaver.rs`; T0.1's `docs/NON_RUST.md`
+  `inline_js` row (the second snippet is declared, no new non-Rust
+  component); T3.2's `docs/PWA.md`. H-19 and H-25 CLOSED as T2.2 recorded.
+- T0.7's `Cargo.toml` / `Cargo.lock` edit (Boss-serialised §P4): it was the
+  only branch in the wave touching either; `cargo run -p xtask -- icons`
+  re-run on `main` after the merge produced byte-identical PNGs.
+
+### Rejected — T3.3 (`phase-qa2/T3.3`, `421932c`, not merged)
+
+Q2-06 required the `## Transcripts` section to be pasted from a real run and
+said the Boss would grep every named test against the tree. Done: one
+listed test (`a_dst_week_has_exactly_seven_days_with_correct_boundaries`)
+does not exist, and three blocks (T0.6, T1.6, T2.4) list more names than
+their own `test result:` line counts, padded with tests from other binaries.
+Same failure class as the round-1 rejection. Details and the re-dispatch
+brief (Sonnet, per-binary `Tee-Object` logs pasted verbatim) are in
+`docs/BLOCKED.md`. Q1-16 / Q2-06 therefore stay **OPEN** for round 3.
+
+### Recorded, not applied (carry to QA round 3)
+
+- Q2-04 and Q2-05 (T3.1) — BLOCKED, see `docs/BLOCKED.md`.
+- Q2-06 (T3.3) — rejected, see above.
+- The eight Low observations in `docs/qa/QA_ROUND_2.md` remain untouched by
+  design (not blocking); `/api/logout` without `same_origin_or_absent` is
+  the cheapest of them if a T1.4 branch is opened again.
+
+### Worktrees
+
+Removed: the merged `phase-qa2/{T1.4,T2.2,T2.5,T0.7}` worktrees and the
+locked `worktree-wf_d57bfb45-d60-38` placeholder (branch deleted). Kept:
+`wf_d57bfb45-d60-34` (`phase-qa2/T3.1`, blocked, unmerged),
+`wf_d57bfb45-d60-35` (`phase-qa2/T3.3`, rejected, unmerged),
+`wf_d57bfb45-d60-24` (`phase-qa1/T3.3`, rejected, unmerged).
