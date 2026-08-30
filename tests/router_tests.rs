@@ -22,6 +22,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use family_calendar::server::auth;
 use family_calendar::server::config::FamilyHubConfig;
 use family_calendar::server::db;
 use family_calendar::server::router::build_router;
@@ -358,6 +359,88 @@ async fn tailwind_css_is_served_from_the_binary_at_a_stable_url() {
          palette), got a body of {} bytes",
         body.len()
     );
+}
+
+// ---------------------------------------------------------------------------
+// 10. POST /api/login sets an HttpOnly/Secure/SameSite=Lax session cookie
+//     (QA round 1, Q1-11)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn login_sets_a_well_formed_session_cookie() {
+    let config = test_config();
+    let addr = spawn_router(&config).await;
+    let pool = db::pool().await.expect("test sqlite pool opens");
+
+    // This test binary's only caller of `set_initial_pin`, so it owns the
+    // PIN it sets without racing any other test in this file.
+    let code = auth::ensure_setup_code(pool, &config.data_dir)
+        .await
+        .expect("ensure a setup code exists")
+        .expect("no PIN has been set yet in this fresh test binary");
+    auth::set_initial_pin(pool, &config.data_dir, &code, "482913")
+        .await
+        .expect("the real setup code sets the initial PIN");
+
+    let response = http_client()
+        .post(format!("http://{addr}/api/login"))
+        .json(&serde_json::json!({ "pin": "482913" }))
+        .send()
+        .await
+        .expect("POST /api/login should respond");
+    assert_eq!(response.status().as_u16(), 200);
+
+    let cookie = response
+        .headers()
+        .get("set-cookie")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert!(cookie.starts_with("fh_session="), "cookie: {cookie:?}");
+    assert!(cookie.contains("HttpOnly"), "cookie: {cookie:?}");
+    assert!(cookie.contains("Secure"), "cookie: {cookie:?}");
+    assert!(cookie.contains("SameSite=Lax"), "cookie: {cookie:?}");
+    assert!(cookie.contains("Path=/"), "cookie: {cookie:?}");
+    assert!(cookie.contains("Max-Age=2592000"), "cookie: {cookie:?}");
+
+    // A wrong PIN is rejected and never sets a cookie.
+    let wrong = http_client()
+        .post(format!("http://{addr}/api/login"))
+        .json(&serde_json::json!({ "pin": "000000" }))
+        .send()
+        .await
+        .expect("POST /api/login should respond");
+    assert_eq!(wrong.status().as_u16(), 401);
+    assert!(wrong.headers().get("set-cookie").is_none());
+
+    // Cross-origin login requests are refused outright.
+    let cross_origin = http_client()
+        .post(format!("http://{addr}/api/login"))
+        .header("origin", "http://evil.example")
+        .json(&serde_json::json!({ "pin": "482913" }))
+        .send()
+        .await
+        .expect("POST /api/login should respond");
+    assert_eq!(cross_origin.status().as_u16(), 403);
+
+    // GET /api/session: 401 with no cookie, 204 with the one just minted —
+    // the probe `mobile/session.rs::is_parent()` polls, since JS can never
+    // read an HttpOnly cookie's value itself.
+    let no_cookie = http_client()
+        .get(format!("http://{addr}/api/session"))
+        .send()
+        .await
+        .expect("GET /api/session should respond");
+    assert_eq!(no_cookie.status().as_u16(), 401);
+
+    let cookie_pair = cookie.split(';').next().unwrap_or_default().to_string();
+    let with_cookie = http_client()
+        .get(format!("http://{addr}/api/session"))
+        .header("cookie", cookie_pair)
+        .send()
+        .await
+        .expect("GET /api/session should respond");
+    assert_eq!(with_cookie.status().as_u16(), 204);
 }
 
 // ---------------------------------------------------------------------------

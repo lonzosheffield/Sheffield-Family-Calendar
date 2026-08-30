@@ -114,12 +114,30 @@ async fn recv_matching(socket: &mut WsStream, marker: &str) -> String {
         .unwrap_or_else(|_| panic!("timed out waiting for a message containing {marker:?}"))
 }
 
+/// Serialises every test in this binary that asserts on the *timing* of the
+/// process-global PIN failure counter (`auth::current_pin_failures`,
+/// `auth::PIN_GATE`) against every other one — QA round 1's Q1-02/Q1-03 gate
+/// makes a wrong setup code and a wrong PIN share exactly one counter and one
+/// mutex, so a reset triggered by one test's correct guess (`reset_pin_failures`)
+/// landing mid-sequence in another test's own wrong-guess loop would corrupt
+/// that loop's floor assertions. Every test below that fires more than one
+/// deliberately-wrong attempt in a row takes this guard first (mirrors
+/// `tests/realtime_tests.rs::hub_lock`).
+async fn pin_state_guard() -> tokio::sync::MutexGuard<'static, ()> {
+    static LOCK: tokio::sync::OnceCell<tokio::sync::Mutex<()>> = tokio::sync::OnceCell::const_new();
+    LOCK.get_or_init(|| async { tokio::sync::Mutex::new(()) })
+        .await
+        .lock()
+        .await
+}
+
 /// Runs the real first-run flow exactly once for this process — generate the
 /// setup code, use it to set [`TEST_PIN`] — no matter how many tests call it
 /// concurrently (`tokio::sync::OnceCell::get_or_init` runs its initializer
 /// exactly once even under concurrent callers), and returns a valid parent
 /// session token every caller can use.
 async fn parent_session() -> String {
+    let _guard = pin_state_guard().await;
     static SESSION: tokio::sync::OnceCell<String> = tokio::sync::OnceCell::const_new();
     SESSION
         .get_or_init(|| async {
@@ -253,6 +271,10 @@ async fn a_fifth_and_sixth_profile_can_be_created() {
 #[tokio::test]
 async fn pin_verify_succeeds_once_and_backs_off_over_ten_failures() {
     parent_session().await; // establishes TEST_PIN via the real set-up flow
+                            // Taken *after* `parent_session()` (which briefly takes it itself, to
+                            // serialise its own one-time setup against every other guarded test) —
+                            // `tokio::sync::Mutex` is not reentrant.
+    let _guard = pin_state_guard().await;
 
     // A correct guess succeeds and resets the failure counter — checked
     // directly rather than by wall-clock, since argon2id verification alone
@@ -301,6 +323,56 @@ async fn pin_verify_succeeds_once_and_backs_off_over_ten_failures() {
 }
 
 // ---------------------------------------------------------------------------
+// QA round 1, Q1-03 — the backoff is a gate, not a per-request sleep
+// ---------------------------------------------------------------------------
+
+/// 8 wrong PINs fired concurrently (`tokio::join!`) must still take at least
+/// the schedule's cumulative floor (`Σ 2^n ms, n=1..8 = 510 ms`) of *wall*
+/// time — proving attempts are serialised (`auth::PIN_GATE`), not merely each
+/// individually delayed and then all answered together within roughly one
+/// delay window, which is what let a scripted brute force reach the whole
+/// keyspace in about an hour at argon2's own throughput before this fix.
+#[tokio::test]
+async fn eight_parallel_wrong_pins_are_serialised_not_just_individually_delayed() {
+    parent_session().await; // establishes TEST_PIN via the real set-up flow
+    let _guard = pin_state_guard().await;
+
+    let started = Instant::now();
+    let results = tokio::join!(
+        profiles::verify_parent_pin("000000".to_string()),
+        profiles::verify_parent_pin("000001".to_string()),
+        profiles::verify_parent_pin("000002".to_string()),
+        profiles::verify_parent_pin("000003".to_string()),
+        profiles::verify_parent_pin("000004".to_string()),
+        profiles::verify_parent_pin("000005".to_string()),
+        profiles::verify_parent_pin("000006".to_string()),
+        profiles::verify_parent_pin("000007".to_string()),
+    );
+    let elapsed = started.elapsed();
+
+    let (r0, r1, r2, r3, r4, r5, r6, r7) = results;
+    for result in [r0, r1, r2, r3, r4, r5, r6, r7] {
+        assert!(
+            result.is_err(),
+            "every wrong parallel PIN attempt must fail"
+        );
+    }
+
+    let floor: u64 = (1..=8u32).map(|n| 2u64.pow(n)).sum(); // 510 ms
+    assert!(
+        elapsed >= Duration::from_millis(floor),
+        "8 parallel wrong PINs took only {elapsed:?} of wall-clock time, expected >= {floor} ms \
+         — the backoff gate must serialise attempts (Q1-03), not just delay each request \
+         independently and answer them all together"
+    );
+
+    // No lockout: the correct PIN still verifies immediately afterwards.
+    profiles::verify_parent_pin(TEST_PIN.to_string())
+        .await
+        .expect("no lockout: the correct PIN still verifies after a parallel burst");
+}
+
+// ---------------------------------------------------------------------------
 // 4. server-side enforcement: a privileged fn with no session errors
 // ---------------------------------------------------------------------------
 
@@ -338,6 +410,8 @@ async fn privileged_fn_without_a_session_errors() {
 
 #[tokio::test]
 async fn setting_the_initial_pin_requires_the_real_setup_code() {
+    let _guard = pin_state_guard().await;
+
     init_test_env();
     let pool = db::pool().await.expect("test sqlite pool opens");
     let dir = FamilyHubConfig::load().data_dir;
@@ -353,4 +427,62 @@ async fn setting_the_initial_pin_requires_the_real_setup_code() {
         result.is_err(),
         "an incorrect setup code must not be enough to set the initial PIN"
     );
+
+    // Q1-02: a wrong setup code now shares `verify_pin`'s counter/backoff/gate
+    // — proven here against a *fresh, isolated* database (this binary's
+    // shared `db::pool()` may already have a real PIN set by
+    // `parent_session()`, at which point `set_initial_pin` short-circuits to
+    // `PinAlreadySet` before ever touching the gate, which would make this
+    // assertion meaningless) so it is guaranteed to still be pre-PIN no
+    // matter what order the rest of this binary's tests happen to run in.
+    let scratch = std::env::temp_dir().join(format!(
+        "familyhub-profiles-setupcode-backoff-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&scratch);
+    std::fs::create_dir_all(&scratch).expect("isolated scratch directory is creatable");
+    let scratch_db = scratch.join("family.db");
+    let scratch_url = format!(
+        "sqlite://{}",
+        scratch_db.display().to_string().replace('\\', "/")
+    );
+    let scratch_pool = db::connect(&scratch_url)
+        .await
+        .expect("isolated sqlite pool opens");
+    db::migrate(&scratch_pool)
+        .await
+        .expect("isolated database migrates");
+    auth::ensure_setup_code(&scratch_pool, &scratch)
+        .await
+        .expect("generate a setup code in the isolated database");
+
+    let failures_before = auth::current_pin_failures();
+    let mut cumulative = Duration::from_millis(0);
+    for attempt in 1..=5u32 {
+        let started = Instant::now();
+        let result =
+            auth::set_initial_pin(&scratch_pool, &scratch, "still-not-the-code", "246810").await;
+        let elapsed = started.elapsed();
+        cumulative += elapsed;
+        assert!(
+            result.is_err(),
+            "attempt {attempt}: a wrong setup code must fail"
+        );
+        assert!(
+            elapsed >= Duration::from_millis(2u64.pow(attempt)),
+            "attempt {attempt}: waited only {elapsed:?}, expected >= 2^{attempt} ms — \
+             wrong setup codes must be backed off exactly like wrong PINs"
+        );
+    }
+    let cumulative_floor: u64 = (1..=5u32).map(|n| 2u64.pow(n)).sum();
+    assert!(
+        cumulative >= Duration::from_millis(cumulative_floor),
+        "five attempts took only {cumulative:?} total, expected >= {cumulative_floor} ms"
+    );
+    assert!(
+        auth::current_pin_failures() > failures_before,
+        "a wrong setup code must advance the same shared failure counter a wrong PIN does"
+    );
+
+    let _ = std::fs::remove_dir_all(&scratch);
 }

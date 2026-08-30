@@ -41,6 +41,25 @@ fn to_auth_error(err: crate::server::auth::AuthError) -> ServerFnError {
     ServerFnError::new(err.to_string())
 }
 
+/// Every privileged function below's session check (QA round 1, Q1-11): an
+/// explicit `auth` bearer token still works exactly as it always has — the
+/// PWA's existing `localStorage`-token flow (`docs/HANDOFF.md` H-19) needs no
+/// change — but an **empty** one now falls back to the `fh_session` cookie on
+/// the live HTTP request, via `auth::require_parent`. A direct in-process
+/// call with an empty token (every existing "no session" acceptance test)
+/// has no live request underneath it, so the fallback finds no cookie and
+/// still fails closed.
+#[cfg(feature = "server")]
+async fn require_session_or_cookie(auth: &str) -> Result<(), ServerFnError> {
+    if auth.is_empty() {
+        crate::server::auth::require_parent()
+            .await
+            .map_err(to_auth_error)
+    } else {
+        crate::server::auth::require_session(auth).map_err(to_auth_error)
+    }
+}
+
 #[cfg(feature = "server")]
 async fn data_dir() -> std::path::PathBuf {
     crate::server::config::FamilyHubConfig::load().data_dir
@@ -182,7 +201,7 @@ pub async fn verify_parent_pin(pin: String) -> Result<SessionToken, ServerFnErro
 pub async fn change_parent_pin(auth: SessionToken, new_pin: String) -> Result<(), ServerFnError> {
     #[cfg(feature = "server")]
     {
-        crate::server::auth::require_session(&auth).map_err(to_auth_error)?;
+        require_session_or_cookie(&auth).await?;
         let pool = crate::server::db::pool()
             .await
             .map_err(super::to_server_error)?;
@@ -213,7 +232,7 @@ pub async fn create_profile(
 ) -> Result<Profile, ServerFnError> {
     #[cfg(feature = "server")]
     {
-        crate::server::auth::require_session(&auth).map_err(to_auth_error)?;
+        require_session_or_cookie(&auth).await?;
         let pool = crate::server::db::pool()
             .await
             .map_err(super::to_server_error)?;
@@ -265,7 +284,7 @@ pub async fn rename_profile(
 ) -> Result<(), ServerFnError> {
     #[cfg(feature = "server")]
     {
-        crate::server::auth::require_session(&auth).map_err(to_auth_error)?;
+        require_session_or_cookie(&auth).await?;
         let pool = crate::server::db::pool()
             .await
             .map_err(super::to_server_error)?;
@@ -305,7 +324,7 @@ pub async fn set_profile_color(
 ) -> Result<(), ServerFnError> {
     #[cfg(feature = "server")]
     {
-        crate::server::auth::require_session(&auth).map_err(to_auth_error)?;
+        require_session_or_cookie(&auth).await?;
         let pool = crate::server::db::pool()
             .await
             .map_err(super::to_server_error)?;
@@ -342,7 +361,7 @@ pub async fn set_profile_color(
 pub async fn delete_profile(auth: SessionToken, id: i64) -> Result<(), ServerFnError> {
     #[cfg(feature = "server")]
     {
-        crate::server::auth::require_session(&auth).map_err(to_auth_error)?;
+        require_session_or_cookie(&auth).await?;
         let pool = crate::server::db::pool()
             .await
             .map_err(super::to_server_error)?;

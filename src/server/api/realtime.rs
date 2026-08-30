@@ -26,7 +26,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::response::Response;
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Days, Local, TimeZone};
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::{broadcast, Notify};
@@ -634,9 +635,25 @@ pub fn spawn_midnight_tick() {
 // Connection handling
 // ---------------------------------------------------------------------------
 
-pub async fn ws_handler(upgrade: WebSocketUpgrade) -> Response {
+/// `GET /ws`. Q1-11: cookies are ambient, so — since a valid `fh_session`
+/// cookie now authorises this connection as a parent for its whole
+/// lifetime — a request whose `Origin`/`Sec-Fetch-Site` says it did not come
+/// from this origin is refused outright, the same rule `POST /api/login`
+/// applies (`auth::same_origin_or_absent`). A request with no such header at
+/// all (a non-browser client — `curl`, the `tokio-tungstenite` test harness)
+/// is unaffected: there is no ambient-cookie risk to guard against there.
+pub async fn ws_handler(headers: HeaderMap, upgrade: WebSocketUpgrade) -> Response {
+    if !crate::server::auth::same_origin_or_absent(&headers) {
+        return (
+            StatusCode::FORBIDDEN,
+            "cross-origin websocket upgrades are not allowed",
+        )
+            .into_response();
+    }
     ensure_background_tasks();
-    upgrade.on_upgrade(|socket| handle_socket(socket, new_client_id()))
+    let parent_cookie = crate::server::auth::session_from_headers(&headers)
+        .is_some_and(|token| crate::server::auth::is_valid_session(&token));
+    upgrade.on_upgrade(move |socket| handle_socket(socket, new_client_id(), parent_cookie))
 }
 
 fn hello(client_id: &ClientId) -> ServerMessage {
@@ -649,7 +666,7 @@ fn hello(client_id: &ClientId) -> ServerMessage {
     }
 }
 
-async fn handle_socket(socket: WebSocket, client_id: ClientId) {
+async fn handle_socket(socket: WebSocket, client_id: ClientId, parent_cookie: bool) {
     let (mut sink, mut stream) = socket.split();
     let outbound = Arc::new(Outbound::new(OUTBOUND_QUEUE_CAPACITY));
 
@@ -695,7 +712,7 @@ async fn handle_socket(socket: WebSocket, client_id: ClientId) {
         }
     });
 
-    read_loop(&mut stream, &outbound, &client_id).await;
+    read_loop(&mut stream, &outbound, &client_id, parent_cookie).await;
 
     outbound.close();
     let _ = writer.await;
@@ -710,16 +727,28 @@ struct Connection {
     /// **authorised** `SetActiveProfile`; an unauthenticated client may
     /// therefore only re-assert a profile it already owns (R-23b).
     active_profile: Option<i64>,
+    /// Q1-11: this connection's own upgrade request carried a valid
+    /// `fh_session` cookie. Every `SetView`/`SetActiveProfile` on this
+    /// connection is authorised on that basis alone — the same standing a
+    /// per-message `auth` token gives — without the message needing to repeat
+    /// a bearer token the client may no longer even hold (a cookie is
+    /// exactly the ambient credential PLAN §P5.5 default 31 asks for).
+    parent_cookie: bool,
 }
 
-async fn read_loop<S>(stream: &mut S, outbound: &Outbound, client_id: &ClientId)
-where
+async fn read_loop<S>(
+    stream: &mut S,
+    outbound: &Outbound,
+    client_id: &ClientId,
+    parent_cookie: bool,
+) where
     S: futures_util::Stream<Item = Result<Message, axum::Error>> + Unpin,
 {
     let mut conn = Connection {
         client_id: client_id.clone(),
         limiter: RateLimiter::new(Instant::now()),
         active_profile: None,
+        parent_cookie,
     };
 
     loop {
@@ -847,7 +876,7 @@ async fn handle_client_message(conn: &mut Connection, outbound: &Outbound, messa
             }
         }
         ClientMessage::SetView { view, auth } => {
-            if !authorised(auth.as_deref()) {
+            if !(authorised(auth.as_deref()) || conn.parent_cookie) {
                 tracing::warn!(
                     "client {} sent SetView without a valid parent session; dropped",
                     conn.client_id
@@ -857,7 +886,9 @@ async fn handle_client_message(conn: &mut Connection, outbound: &Outbound, messa
             publish(&ServerMessage::SetView { view });
         }
         ClientMessage::SetActiveProfile { user_id, auth } => {
-            let permitted = authorised(auth.as_deref()) || conn.active_profile == Some(user_id);
+            let permitted = authorised(auth.as_deref())
+                || conn.parent_cookie
+                || conn.active_profile == Some(user_id);
             if !permitted {
                 tracing::warn!(
                     "client {} may not switch to profile {user_id}; dropped",

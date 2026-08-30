@@ -28,11 +28,24 @@
 //! ([`backoff_delay`]), which makes both automated and manual guessing
 //! impractical without ever locking a parent who mistyped their own PIN out
 //! of their own kitchen display.
+//!
+//! **The backoff is a gate, not just a delay (QA round 1, Q1-02/Q1-03).**
+//! [`PIN_GATE`] serialises every [`verify_pin`] and [`set_initial_pin`] call
+//! process-wide — the lock is held across the lookup, the argon2 check
+//! (moved to [`tokio::task::spawn_blocking`] so it never ties up an async
+//! worker) **and** the sleep — so N parallel wrong guesses cannot all be
+//! answered within one delay window; each one queues behind the last. A
+//! wrong first-run setup code now bumps and waits on exactly the same
+//! counter as a wrong PIN: the setup code guards the same secret (it is what
+//! stands between a stranger on the LAN and setting the very first parent
+//! PIN) and deserves the identical schedule, not an unthrottled loop.
 
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime};
+
+use tokio::sync::Mutex as AsyncMutex;
 
 use argon2::password_hash::{phc::PasswordHash, PasswordHasher, PasswordVerifier};
 use argon2::Argon2;
@@ -237,20 +250,32 @@ pub async fn set_initial_pin(
     setup_code: &str,
     pin: &str,
 ) -> Result<String, AuthError> {
+    // Q1-02/Q1-03: the same gate `verify_pin` holds, across the whole
+    // check-and-maybe-sleep — a wrong setup code is exactly as brute-forceable
+    // as a wrong PIN would be without this, and shares the same counter.
+    let _serial = pin_gate().lock().await;
+
     if pin_is_set(pool).await? {
         return Err(AuthError::PinAlreadySet);
     }
     let expected = db::get_setting(pool, SETUP_CODE_SETTING)
         .await?
-        .ok_or(AuthError::InvalidSetupCode)?;
-    if !constant_time_eq(setup_code, &expected) {
+        .unwrap_or_default();
+    let matches = !expected.is_empty() && constant_time_eq(setup_code, &expected);
+    if !matches {
+        let attempt = bump_pin_failures();
+        let delay = backoff_delay(attempt);
+        tokio::time::sleep(delay).await;
         return Err(AuthError::InvalidSetupCode);
     }
     if !is_valid_pin_format(pin) {
         return Err(AuthError::InvalidPinFormat);
     }
 
-    let hash = hash_pin(pin)?;
+    let pin_owned = pin.to_string();
+    let hash = tokio::task::spawn_blocking(move || hash_pin(&pin_owned))
+        .await
+        .map_err(|err| AuthError::Storage(err.to_string()))??;
     db::set_setting(pool, PIN_HASH_SETTING, &hash).await?;
     // The setup code has done its job; clearing it stops it from being
     // reusable and stops `ensure_setup_code` from ever handing it out again.
@@ -269,7 +294,10 @@ pub async fn change_pin(pool: &SqlitePool, new_pin: &str) -> Result<(), AuthErro
     if !is_valid_pin_format(new_pin) {
         return Err(AuthError::InvalidPinFormat);
     }
-    let hash = hash_pin(new_pin)?;
+    let pin_owned = new_pin.to_string();
+    let hash = tokio::task::spawn_blocking(move || hash_pin(&pin_owned))
+        .await
+        .map_err(|err| AuthError::Storage(err.to_string()))??;
     db::set_setting(pool, PIN_HASH_SETTING, &hash).await?;
     reset_pin_failures();
     Ok(())
@@ -306,6 +334,21 @@ pub fn current_pin_failures() -> u32 {
     *pin_failures().lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// Serialises every [`verify_pin`] and [`set_initial_pin`] call, process-wide,
+/// into exactly one at a time (Q1-03). Held across the *whole* body — the
+/// lookup, the (now [`tokio::task::spawn_blocking`]'d) argon2 check, the
+/// counter bump and the sleep — so a burst of parallel wrong guesses cannot
+/// each pay their own delay concurrently and be answered together; attempt
+/// *n* cannot even begin hashing until attempt *n-1*'s full wait has already
+/// elapsed. Without this, guessing throughput was bounded only by argon2's
+/// CPU cost (hundreds of attempts per second in release on a many-core box)
+/// rather than by the backoff schedule at all.
+static PIN_GATE: AsyncMutex<()> = AsyncMutex::const_new(());
+
+fn pin_gate() -> &'static AsyncMutex<()> {
+    &PIN_GATE
+}
+
 /// The delay a caller must wait *before* being told attempt number `attempt`
 /// was wrong: `2^attempt` milliseconds, monotonically increasing, capped at
 /// [`MAX_BACKOFF`] so an arbitrarily long streak still degrades rather than
@@ -323,11 +366,21 @@ pub fn backoff_delay(attempt: u32) -> Duration {
 /// slow to the point of pointlessness without ever refusing a legitimate
 /// parent who is simply retrying.
 pub async fn verify_pin(pool: &SqlitePool, pin: &str) -> Result<String, AuthError> {
+    // Q1-03: hold the gate across the lookup, the (blocking) argon2 check,
+    // the counter bump and the sleep, not just the sleep — see `PIN_GATE`'s
+    // doc comment for why a per-request-only sleep does not actually throttle
+    // parallel guesses.
+    let _serial = pin_gate().lock().await;
+
     let stored_hash = db::get_setting(pool, PIN_HASH_SETTING)
         .await?
         .ok_or(AuthError::PinNotSet)?;
 
-    let correct = is_valid_pin_format(pin) && verify_pin_hash(pin, &stored_hash);
+    let pin_owned = pin.to_string();
+    let correct = is_valid_pin_format(pin)
+        && tokio::task::spawn_blocking(move || verify_pin_hash(&pin_owned, &stored_hash))
+            .await
+            .map_err(|err| AuthError::Storage(err.to_string()))?;
 
     if correct {
         reset_pin_failures();
@@ -414,6 +467,94 @@ pub fn require_session(token: &str) -> Result<(), AuthError> {
         Ok(())
     } else {
         Err(AuthError::NotAuthenticated)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Cookie session (QA round 1, Q1-11)
+// ---------------------------------------------------------------------------
+//
+// PLAN v2 §P5.5 default 31 wants the parent session delivered as an
+// `HttpOnly`/`Secure`/`SameSite=Lax` cookie on the HTTPS origin, not a bearer
+// token the client has to remember to attach. `POST /api/login`
+// (`src/server/router.rs`, the file a `Set-Cookie` can actually be attached
+// from) mints that cookie from [`verify_pin`]; everything below is the
+// server-side half of reading it back.
+
+/// The `Set-Cookie` / `Cookie` name the parent session travels under once
+/// `/api/login` mints one.
+pub const SESSION_COOKIE_NAME: &str = "fh_session";
+
+/// Pull the `fh_session` value out of a request's `Cookie` header, if present.
+/// Does not check validity/expiry — callers combine this with
+/// [`is_valid_session`] or [`require_session`].
+pub fn session_from_headers(headers: &axum::http::HeaderMap) -> Option<String> {
+    let cookie_header = headers.get(axum::http::header::COOKIE)?.to_str().ok()?;
+    cookie_header.split(';').find_map(|pair| {
+        let (name, value) = pair.trim().split_once('=')?;
+        (name == SESSION_COOKIE_NAME).then(|| value.to_string())
+    })
+}
+
+/// Is this request same-origin (by `Origin`, falling back to
+/// `Sec-Fetch-Site`, against the `Host` it was actually sent to), or does it
+/// carry no origin signal at all?
+///
+/// A cookie is ambient — the browser attaches it to *every* request to the
+/// origin that set it, cross-site ones included — which is exactly the
+/// property that made the old bearer-token-in-`localStorage`
+/// (`docs/HANDOFF.md` H-19) safe from CSRF and a cookie is not. Anything that
+/// now trusts `fh_session` (`/ws`, `POST /api/login` re-authenticating an
+/// already-signed-in browser) must refuse a request whose `Origin`/
+/// `Sec-Fetch-Site` header explicitly says it came from somewhere else.
+/// A request with **no** such header (a non-browser client: `curl`, the
+/// `tokio-tungstenite` test harness, the TV's own fetches) is allowed through
+/// — there is no ambient-cookie risk to guard against when nothing is riding
+/// on a browser's cookie jar in the first place, and PURPLE's default 9
+/// ("no lockout") extends to "never refuse a legitimate direct client that
+/// simply does not send a browser header".
+pub fn same_origin_or_absent(headers: &axum::http::HeaderMap) -> bool {
+    if let Some(site) = headers
+        .get("sec-fetch-site")
+        .and_then(|value| value.to_str().ok())
+    {
+        if site != "same-origin" && site != "none" {
+            return false;
+        }
+    }
+
+    let Some(origin) = headers
+        .get(axum::http::header::ORIGIN)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return true;
+    };
+    let origin_authority = origin.split("://").nth(1).unwrap_or(origin);
+    let host = headers
+        .get(axum::http::header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+    origin_authority.eq_ignore_ascii_case(host)
+}
+
+/// The check a server fn falls back to when its explicit `auth: SessionToken`
+/// argument is empty (`src/server/api/profiles.rs`): is the `fh_session`
+/// cookie on the *current* HTTP request a valid parent session?
+///
+/// Reads the request via Dioxus fullstack's own extraction seam
+/// (`FullstackContext::extract`), which is only ever populated while a real
+/// server-fn request is being handled. A direct in-process call (every
+/// existing acceptance test calls these functions this way) has no such
+/// request underneath it, so this always finds no cookie and fails closed —
+/// exactly the "no session" case those tests assert on.
+pub async fn require_parent() -> Result<(), AuthError> {
+    let headers: axum::http::HeaderMap =
+        dioxus::prelude::dioxus_fullstack::FullstackContext::extract()
+            .await
+            .map_err(|err| AuthError::Storage(err.to_string()))?;
+    match session_from_headers(&headers) {
+        Some(token) if is_valid_session(&token) => Ok(()),
+        _ => Err(AuthError::NotAuthenticated),
     }
 }
 
@@ -521,5 +662,58 @@ mod tests {
         assert!(constant_time_eq("123456", "123456"));
         assert!(!constant_time_eq("123456", "123457"));
         assert!(!constant_time_eq("123456", "12345"));
+    }
+
+    fn headers(pairs: &[(&str, &str)]) -> axum::http::HeaderMap {
+        let mut map = axum::http::HeaderMap::new();
+        for (name, value) in pairs {
+            map.insert(
+                axum::http::HeaderName::from_bytes(name.as_bytes()).expect("valid header name"),
+                value.parse().expect("valid header value"),
+            );
+        }
+        map
+    }
+
+    #[test]
+    fn session_from_headers_finds_the_cookie_among_others() {
+        let h = headers(&[("cookie", "other=1; fh_session=abc-123; theme=dark")]);
+        assert_eq!(session_from_headers(&h).as_deref(), Some("abc-123"));
+
+        assert_eq!(session_from_headers(&headers(&[])), None);
+        assert_eq!(
+            session_from_headers(&headers(&[("cookie", "other=1")])),
+            None
+        );
+    }
+
+    #[test]
+    fn same_origin_or_absent_allows_no_origin_and_matching_origin() {
+        // No browser-origin signal at all (curl, the WS test harness): allowed.
+        assert!(same_origin_or_absent(&headers(&[])));
+
+        // Origin matches Host: same-origin.
+        assert!(same_origin_or_absent(&headers(&[
+            ("host", "10.0.0.5:8443"),
+            ("origin", "https://10.0.0.5:8443"),
+        ])));
+
+        // Sec-Fetch-Site says same-origin even without an Origin header.
+        assert!(same_origin_or_absent(&headers(&[(
+            "sec-fetch-site",
+            "same-origin"
+        )])));
+    }
+
+    #[test]
+    fn same_origin_or_absent_rejects_cross_origin() {
+        assert!(!same_origin_or_absent(&headers(&[
+            ("host", "10.0.0.5:8443"),
+            ("origin", "https://evil.example"),
+        ])));
+        assert!(!same_origin_or_absent(&headers(&[(
+            "sec-fetch-site",
+            "cross-site"
+        )])));
     }
 }

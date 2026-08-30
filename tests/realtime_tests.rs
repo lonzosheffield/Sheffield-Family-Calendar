@@ -732,6 +732,109 @@ async fn t1_2_6_set_view_requires_a_parent_session() {
 }
 
 // ---------------------------------------------------------------------------
+// QA round 1, Q1-11 — the cookie half of the parent session
+// ---------------------------------------------------------------------------
+
+/// Build a `ws://addr/ws` upgrade request carrying extra headers — the
+/// `Cookie`/`Origin` a real browser would attach that plain
+/// `tokio_tungstenite::connect_async(url)` never does.
+fn client_request_with_headers(
+    addr: SocketAddr,
+    headers: &[(&str, &str)],
+) -> tokio_tungstenite::tungstenite::handshake::client::Request {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let mut request = format!("ws://{addr}/ws")
+        .into_client_request()
+        .expect("a valid client request");
+    for (name, value) in headers {
+        request.headers_mut().insert(
+            tokio_tungstenite::tungstenite::http::HeaderName::from_bytes(name.as_bytes())
+                .expect("valid header name"),
+            value.parse().expect("valid header value"),
+        );
+    }
+    request
+}
+
+#[tokio::test]
+async fn t1_4_q1_11_set_view_is_delivered_with_a_valid_session_cookie_and_no_bearer_auth() {
+    let _guard = hub_lock().await;
+    realtime::session::revoke_all();
+    let (addr, server) = spawn_hub().await;
+
+    let token = realtime::session::issue();
+    let (phone_socket, phone_response) = tokio_tungstenite::connect_async(
+        client_request_with_headers(addr, &[("cookie", &format!("fh_session={token}"))]),
+    )
+    .await
+    .expect("a same-origin upgrade with a valid session cookie must succeed");
+    assert_eq!(phone_response.status().as_u16(), 101);
+    let mut phone = phone_socket;
+    let mut tv = connect(addr).await;
+    expect_hello(&mut phone).await;
+    expect_hello(&mut tv).await;
+
+    // No `auth` token on the message itself — the connection's own upgrade
+    // cookie is what authorises it (Q1-11).
+    send(
+        &mut phone,
+        &ClientMessage::SetView {
+            view: View::Whiteboard,
+            auth: None,
+        },
+    )
+    .await;
+
+    let delivered = wait_for(&mut tv, Duration::from_secs(5), |message| {
+        matches!(message, ServerMessage::SetView { .. })
+    })
+    .await;
+    assert_eq!(
+        delivered,
+        Some(ServerMessage::SetView {
+            view: View::Whiteboard
+        }),
+        "a connection whose upgrade carried a valid fh_session cookie must be treated \
+         as an authorised parent even when the ClientMessage itself carries no bearer token"
+    );
+
+    realtime::session::revoke(&token);
+    realtime::session::revoke_all();
+    server.abort();
+}
+
+#[tokio::test]
+async fn t1_4_q1_11_a_cross_origin_websocket_upgrade_is_rejected() {
+    let _guard = hub_lock().await;
+    let (addr, server) = spawn_hub().await;
+
+    let request = client_request_with_headers(addr, &[("origin", "http://evil.example")]);
+    let err = tokio_tungstenite::connect_async(request)
+        .await
+        .expect_err("a cross-origin websocket upgrade must be refused, not accepted");
+    match err {
+        tokio_tungstenite::tungstenite::Error::Http(response) => {
+            assert_eq!(
+                response.status().as_u16(),
+                403,
+                "expected 403 Forbidden for a cross-origin Origin header"
+            );
+        }
+        other => panic!("expected an HTTP-level rejection, got {other:?}"),
+    }
+
+    // A same-origin Origin (matching the Host the request was actually sent
+    // to) is unaffected.
+    let same_origin = client_request_with_headers(addr, &[("origin", &format!("http://{addr}"))]);
+    let (_socket, response) = tokio_tungstenite::connect_async(same_origin)
+        .await
+        .expect("a same-origin upgrade must still succeed");
+    assert_eq!(response.status().as_u16(), 101);
+
+    server.abort();
+}
+
+// ---------------------------------------------------------------------------
 // 7 — kill, restart, reconnect with a Snapshot
 // ---------------------------------------------------------------------------
 

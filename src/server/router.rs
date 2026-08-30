@@ -43,11 +43,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use axum::extract::{DefaultBodyLimit, Request};
-use axum::http::{header, HeaderValue, StatusCode, Uri};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode, Uri};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
-use axum::Router;
+use axum::{Json, Router};
 use dioxus::prelude::*;
 use tower_http::services::ServeDir;
 
@@ -126,6 +126,13 @@ pub fn build_router(config: &FamilyHubConfig) -> Router {
             }),
         )
         .route("/ws", get(realtime::ws_handler))
+        // Q1-11 (QA round 1): the cookie half of the parent session — see
+        // this file's `login_handler` doc comment. `/api/session` is the
+        // probe `mobile/session.rs::is_parent()` polls, since a JS client
+        // can never read an `HttpOnly` cookie's value itself.
+        .route("/api/login", post(login_handler))
+        .route("/api/logout", post(logout_handler))
+        .route("/api/session", get(session_probe_handler))
         .route(
             "/tailwind.css",
             get(|| async {
@@ -215,6 +222,107 @@ async fn uploads_security_headers(request: Request, next: Next) -> Response {
         HeaderValue::from_static("attachment"),
     );
     response
+}
+
+// ---------------------------------------------------------------------------
+// Parent session cookie (QA round 1, Q1-11)
+// ---------------------------------------------------------------------------
+//
+// PLAN v2 §3 T1.4 / §P5.5 default 31 want the 30-day parent session delivered
+// as an `HttpOnly`/`Secure`/`SameSite=Lax` cookie. The `Set-Cookie` header can
+// only be attached from a route handler, so — same reasoning `/ca.crt` and
+// `/health` already follow — it lives here, in the one file that owns route
+// registration, rather than in `src/server/auth.rs` (which owns the PIN
+// check and the cookie-parsing/same-origin helpers these handlers call).
+
+#[derive(serde::Deserialize)]
+struct LoginRequest {
+    pin: String,
+}
+
+/// `POST /api/login` — the real, server-enforced PIN check
+/// (`auth::verify_pin`, argon2id + the [Q1-02/03 backoff gate]) plus, on
+/// success, a `Set-Cookie` for the phone. Cookies are ambient (every request
+/// to this origin carries them, cross-site ones included), so — unlike the
+/// old bearer-token flow, where an attacker had to already have the token in
+/// hand — this route refuses a request whose `Origin`/`Sec-Fetch-Site` says
+/// it did not originate same-origin (`auth::same_origin_or_absent`).
+///
+/// [Q1-02/03 backoff gate]: crate::server::auth::verify_pin
+async fn login_handler(headers: HeaderMap, Json(body): Json<LoginRequest>) -> Response {
+    if !crate::server::auth::same_origin_or_absent(&headers) {
+        return (
+            StatusCode::FORBIDDEN,
+            "cross-origin login requests are not allowed",
+        )
+            .into_response();
+    }
+
+    let pool = match crate::server::db::pool().await {
+        Ok(pool) => pool,
+        Err(err) => {
+            tracing::error!(%err, "POST /api/login: database unavailable");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "the hub's database is unavailable",
+            )
+                .into_response();
+        }
+    };
+
+    match crate::server::auth::verify_pin(pool, &body.pin).await {
+        Ok(token) => (
+            StatusCode::OK,
+            [(header::SET_COOKIE, session_cookie(&token))],
+        )
+            .into_response(),
+        Err(err) => (StatusCode::UNAUTHORIZED, err.to_string()).into_response(),
+    }
+}
+
+/// `POST /api/logout` — revokes the session server-side (not just the
+/// client's own copy of the cookie) and expires the cookie.
+async fn logout_handler(headers: HeaderMap) -> Response {
+    if let Some(token) = crate::server::auth::session_from_headers(&headers) {
+        crate::server::auth::revoke_session(&token);
+    }
+    (
+        StatusCode::OK,
+        [(header::SET_COOKIE, expired_session_cookie())],
+    )
+        .into_response()
+}
+
+/// `GET /api/session` — the probe `mobile/session.rs::is_parent()` polls,
+/// since JavaScript can never read an `HttpOnly` cookie's value to check it
+/// itself: `204` for a live parent session, `401` otherwise.
+async fn session_probe_handler(headers: HeaderMap) -> StatusCode {
+    match crate::server::auth::session_from_headers(&headers) {
+        Some(token) if crate::server::auth::is_valid_session(&token) => StatusCode::NO_CONTENT,
+        _ => StatusCode::UNAUTHORIZED,
+    }
+}
+
+/// `Set-Cookie: fh_session=<token>; Path=/; HttpOnly; Secure; SameSite=Lax;
+/// Max-Age=<30 days>` (PLAN v2 §P5.5 default 31).
+fn session_cookie(token: &str) -> HeaderValue {
+    let value = format!(
+        "{}={token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age={}",
+        crate::server::auth::SESSION_COOKIE_NAME,
+        crate::server::auth::SESSION_TTL.as_secs(),
+    );
+    HeaderValue::from_str(&value).unwrap_or_else(|_| HeaderValue::from_static("fh_session=;Path=/"))
+}
+
+/// The same cookie, expired immediately (`Max-Age=0`) — clears it in the
+/// browser on `/api/logout`.
+fn expired_session_cookie() -> HeaderValue {
+    let value = format!(
+        "{}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0",
+        crate::server::auth::SESSION_COOKIE_NAME,
+    );
+    HeaderValue::from_str(&value)
+        .unwrap_or_else(|_| HeaderValue::from_static("fh_session=;Path=/;Max-Age=0"))
 }
 
 /// [`build_router`] wrapped in the plain-HTTP origin's one rule: the phone

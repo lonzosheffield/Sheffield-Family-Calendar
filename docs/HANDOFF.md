@@ -1536,6 +1536,17 @@ Flagging for whoever next owns `tests/whiteboard_tests.rs` / T2.3's
 write-behind insert — not fixed here (out of this task's file ownership and
 out of scope for photo tasks).
 
+**Recurred during `phase-qa1/T1.4`'s own baseline** (QA round 1 fixes:
+Q1-02/Q1-03/Q1-11, none of which touch `src/server/api/realtime.rs`'s stroke
+path, `src/server/db.rs`'s stroke functions, or `src/client/components/
+whiteboard.rs`): two full `cargo test --features server` runs both failed
+`t2_3_a_five_hundred_strokes_persist_and_replay_in_seq_order` (the second run
+also flaked `t2_3_c_undo_removes_only_the_callers_own_last_stroke`), while
+`cargo test --features server --test whiteboard_tests` run alone passed 3/3.
+Still Q1-09's write-behind race (`docs/qa/QA_ROUND_1.md`), still out of T1.4's
+file ownership — noted here rather than fixed, per this task's instruction to
+touch only what Q1-02/Q1-03/Q1-11 flagged.
+
 ---
 
 ## Boss decisions at the wave 2-a rerun close (T2.4, T2.5 merged)
@@ -2178,3 +2189,45 @@ network read, WebSocket confirmed via `/health`, the routine driven by
 - **Minor, no action unless convenient:** `/tv` on the HTTP origin links
   `/manifest.webmanifest`, which 308s to the TLS origin and shows as a failed
   manifest fetch in Chrome on every kiosk load.
+
+---
+
+## From T1.4 (QA round 1 fixes, `phase-qa1/T1.4`) → whoever next touches `src/client/components/mobile/**` (T2.2's file)
+
+### H-25. Migrate the phone off the bearer token now that `/api/login` exists
+
+Q1-02/Q1-03/Q1-11 landed in this branch: `src/server/auth.rs` gained a
+process-wide `PIN_GATE` (Q1-02/Q1-03 — a wrong setup code or PIN is now
+serialised and backed off identically, argon2 runs in `spawn_blocking`) and
+the cookie half of the parent session (Q1-11 — `session_from_headers`,
+`same_origin_or_absent`, `require_parent`); `src/server/router.rs` gained
+`POST /api/login`, `POST /api/logout`, `GET /api/session`; `src/server/api/
+realtime.rs`'s `ws_handler` now reads the `fh_session` cookie off the upgrade
+request and treats a connection that carries a valid one as an authorised
+parent for `SetView`/`SetActiveProfile`, no bearer `auth` on the message
+required, and rejects a cross-origin `Origin`/`Sec-Fetch-Site` on `/ws` with
+403 (a cookie is ambient); every privileged `api::profiles::*` function now
+accepts an **empty** `auth` and falls back to that cookie via
+`auth::require_parent`.
+
+**Not done, out of `src/server/**` scope:** `src/client/components/mobile/
+session.rs` still holds the bearer token in `localStorage`
+(`docs/HANDOFF.md` H-19's original shape) and every caller
+(`mobile/settings.rs`'s sign-in form, `mobile/remote.rs`, `calendar.rs`)
+still threads `session::token()` through every WS send / server-fn call. Both
+mechanisms work side by side today — the server accepts either — so nothing
+is broken, but the PLAN §P5.5 default 31 contract (cookie, not
+`localStorage`) is only half-delivered until the client migrates. Request:
+whichever task next owns `src/client/components/mobile/**`:
+1. `settings.rs`'s sign-in form → `POST /api/login` (JSON `{"pin": ...}`,
+   `credentials: "same-origin"` so the browser stores the `Set-Cookie`); sign
+   out → `POST /api/logout`.
+2. `session.rs::is_parent()` → `GET /api/session` (204/401) via a resource/
+   signal, since a script can never read an `HttpOnly` cookie's value to
+   check it directly; `token()`/`store()`/`clear()` can then go away, and
+   every `auth: session::token()` call site (`mobile/remote.rs`,
+   `calendar.rs`, the WS `SetView`/`SetActiveProfile` sends) can drop the
+   argument entirely — the cookie already rides along.
+3. Tests: `tests/router_tests.rs::login_sets_a_well_formed_session_cookie`
+   and `tests/realtime_tests.rs`'s two Q1-11 tests already cover the server
+   side; add a client-side test that `is_parent()` reflects `/api/session`.
