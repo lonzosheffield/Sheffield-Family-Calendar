@@ -775,3 +775,36 @@ fn t3_2_the_runbooks_cross_reference_each_other() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// T3.3 acceptance tests — Verification pass
+// (`docs/reviews/PURPLE_TEAM.md` §P3, row T3.3).
+//
+// "One row per task ID, none FAIL; screenshots embedded/linked."
+// This test asserts that every task ID from docs/PLAN.md §3 (Phases 0–3,
+// excluding T3.5) appears exactly once in docs/VERIFICATION.md.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn t3_3_every_task_id_appears_exactly_once_in_verification() {
+    let verification_content = read_doc("docs/VERIFICATION.md");
+
+    // All task IDs from PLAN.md §3 (Phases 0–3, excluding T3.5)
+    let expected_tasks = vec![
+        "T0.0", "T0.1", "T0.2", "T0.3", "T0.4", "T0.5", "T0.6", "T0.7", "T0.8",
+        "T1.1", "T1.2", "T1.3", "T1.4", "T1.5", "T1.6", "T1.7",
+        "T2.1", "T2.2", "T2.3", "T2.4", "T2.5", "T2.6", "T2.7",
+        "T3.1", "T3.2", "T3.3", "T3.4",
+    ];
+
+    // Each task ID must appear exactly once in a table row: "| <task_id> | <status> |"
+    for task_id in &expected_tasks {
+        let pattern = format!("| {} |", task_id);
+        let count = verification_content.matches(&pattern).count();
+        assert_eq!(
+            count, 1,
+            "task {} appears {} times in a table row in docs/VERIFICATION.md (as `| {} |`), expected exactly 1",
+            task_id, count, task_id
+        );
+    }
+}
