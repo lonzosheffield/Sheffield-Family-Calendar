@@ -59,6 +59,26 @@ pub const CLIENT_IDLE_TIMEOUT: Duration = Duration::from_secs(90);
 pub const MAX_RETAINED_STROKES: usize = 2_000;
 /// Defensive cap on the points a single batched stroke may carry.
 pub const MAX_STROKE_POINTS: usize = 4_096;
+/// Largest WebSocket message (and single frame) the hub will accept.
+///
+/// QA round 1 finding **Q1-10**: `WebSocketUpgrade` otherwise keeps
+/// `tungstenite`'s 64 MiB default, so any device on the family LAN could push
+/// a multi-megabyte frame that the hub would parse, persist and fan out to the
+/// television's wasm JSON parser — a kiosk freeze with no attacker required.
+/// A legitimate `Draw` is a few kilobytes: [`MAX_STROKE_POINTS`] points of two
+/// `f64`s each is ≈ 190 KiB in the worst case, so 256 KiB is generous.
+pub const MAX_WS_MESSAGE_BYTES: usize = 256 * 1024;
+/// How often the hub publishes `ServerMessage::Health` (QA round 1 **Q1-13**;
+/// `docs/PROTOCOL.md` §"Health"). Comfortably inside D8's 90 s staleness
+/// threshold, so a healthy hub keeps the TV badge off with the socket alone.
+pub const HEALTH_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(25);
+/// Longest `Stroke::color` the hub will accept — `#rrggbbaa` and then some.
+pub const MAX_STROKE_COLOR_LEN: usize = 32;
+/// Accepted stroke widths, in CSS pixels. The phone's slider is 1..=24
+/// (`client/components/whiteboard.rs`); the bounds leave room without letting
+/// `1e308` or a `NaN` through to the canvas.
+pub const MIN_STROKE_WIDTH: f64 = 0.5;
+pub const MAX_STROKE_WIDTH: f64 = 64.0;
 
 /// One already-encoded `ServerMessage`. Encoding once and sharing the `Arc`
 /// keeps fan-out to N clients O(N) pointer copies instead of O(N) `serde_json`
@@ -771,7 +791,38 @@ pub async fn ws_handler(headers: HeaderMap, upgrade: WebSocketUpgrade) -> Respon
     ensure_background_tasks();
     let parent_cookie = crate::server::auth::session_from_headers(&headers)
         .is_some_and(|token| crate::server::auth::is_valid_session(&token));
-    upgrade.on_upgrade(move |socket| handle_socket(socket, new_client_id(), parent_cookie))
+    // Q1-10: bound the frame *before* the upgrade completes, so an oversized
+    // message is refused by the codec and never reaches `serde_json`.
+    upgrade
+        .max_message_size(MAX_WS_MESSAGE_BYTES)
+        .max_frame_size(MAX_WS_MESSAGE_BYTES)
+        .on_upgrade(move |socket| handle_socket(socket, new_client_id(), parent_cookie))
+}
+
+/// The `Health` heartbeat (QA round 1 **Q1-13**).
+///
+/// `ServerMessage::Health` is documented by D5 and `docs/PROTOCOL.md` as the
+/// TV badge's freshness signal, but until this task nothing ever sent one and
+/// the kiosk compensated with an HTTP poll. Deliberately **not** started by
+/// [`ensure_background_tasks`]: `tests/realtime_tests.rs` asserts in several
+/// places that *nothing* arrives on an idle socket, and those assertions must
+/// keep their meaning. `server::router::run` starts it for the real hub.
+pub fn spawn_health_heartbeat(interval: Duration) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(interval);
+        // The first `tick()` completes immediately; skipping a missed tick
+        // keeps a stalled runtime from emitting a burst afterwards.
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tick.tick().await;
+            publish(&ServerMessage::Health {
+                // `stale` is reserved (always `false`) until there is a Google
+                // poll to be stale about — see `docs/PROTOCOL.md` §"Health".
+                stale: false,
+                last_update: Local::now().to_rfc3339(),
+            });
+        }
+    })
 }
 
 fn hello(client_id: &ClientId) -> ServerMessage {
@@ -940,11 +991,13 @@ async fn handle_client_message(conn: &mut Connection, outbound: &Outbound, messa
             if !valid_board(board_id, &conn.client_id) {
                 return;
             }
-            if stroke.points.is_empty() || stroke.points.len() > MAX_STROKE_POINTS {
+            if !valid_stroke(&stroke) {
                 tracing::warn!(
-                    "client {} sent a stroke with {} points; dropped",
+                    "client {} sent an invalid stroke ({} points, color {:?}, width {}); dropped",
                     conn.client_id,
-                    stroke.points.len()
+                    stroke.points.len(),
+                    stroke.color,
+                    stroke.width
                 );
                 return;
             }
@@ -1020,6 +1073,36 @@ async fn handle_client_message(conn: &mut Connection, outbound: &Outbound, messa
     }
 }
 
+/// Is this a stroke the hub is willing to store and fan out? (QA round 1
+/// **Q1-10**.)
+///
+/// Protocol v2 only ever checked the point count, which left `color` an
+/// unbounded `String`, `width` free to be `NaN` or `1e308`, and the points
+/// free to sit outside the normalised `0..=1` space every renderer assumes.
+/// None of that is reachable from this repo's own client, which is exactly why
+/// it has to be rejected here: the hub is the only thing standing between a
+/// hostile or buggy LAN device and the television's canvas.
+///
+/// Pure, so every rejected shape is a unit test rather than a socket test.
+pub fn valid_stroke(stroke: &Stroke) -> bool {
+    let Some(hex) = stroke.color.strip_prefix('#') else {
+        return false;
+    };
+    !stroke.points.is_empty()
+        && stroke.points.len() <= MAX_STROKE_POINTS
+        && stroke.color.len() <= MAX_STROKE_COLOR_LEN
+        && !hex.is_empty()
+        && hex.chars().all(|c| c.is_ascii_hexdigit())
+        && stroke.width.is_finite()
+        && (MIN_STROKE_WIDTH..=MAX_STROKE_WIDTH).contains(&stroke.width)
+        && stroke.points.iter().all(|point| {
+            point.x.is_finite()
+                && point.y.is_finite()
+                && (0.0..=1.0).contains(&point.x)
+                && (0.0..=1.0).contains(&point.y)
+        })
+}
+
 fn valid_board(board_id: i64, client_id: &ClientId) -> bool {
     if board_id == DEFAULT_BOARD_ID {
         true
@@ -1032,6 +1115,7 @@ fn valid_board(board_id: i64, client_id: &ClientId) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::types::StrokePoint;
 
     fn frame(text: &str) -> Frame {
         Arc::from(text)
@@ -1116,5 +1200,142 @@ mod tests {
         assert!(
             serde_json::from_str::<ClientMessage>(r#"{"CalendarUpdated":{"events":[]}}"#).is_err()
         );
+    }
+
+    // -----------------------------------------------------------------
+    // Q1-10 — what a client may put in a stroke
+    // -----------------------------------------------------------------
+
+    fn ok_stroke() -> Stroke {
+        Stroke {
+            points: vec![
+                StrokePoint { x: 0.0, y: 0.0 },
+                StrokePoint { x: 1.0, y: 1.0 },
+            ],
+            color: "#2672B3".to_string(),
+            width: 4.0,
+        }
+    }
+
+    #[test]
+    fn valid_stroke_accepts_what_the_real_client_sends() {
+        assert!(valid_stroke(&ok_stroke()));
+        // Every colour on the phone's palette, upper- and lower-case hex, and
+        // both ends of its width slider.
+        for color in ["#2672B3", "#8bb5da", "#E86A58", "#f4d03f", "#1F2933"] {
+            let mut stroke = ok_stroke();
+            stroke.color = color.to_string();
+            assert!(valid_stroke(&stroke), "palette colour {color} rejected");
+        }
+        for width in [1.0, 24.0, MIN_STROKE_WIDTH, MAX_STROKE_WIDTH] {
+            let mut stroke = ok_stroke();
+            stroke.width = width;
+            assert!(valid_stroke(&stroke), "width {width} rejected");
+        }
+    }
+
+    #[test]
+    fn valid_stroke_rejects_an_empty_or_oversized_point_list() {
+        let mut empty = ok_stroke();
+        empty.points.clear();
+        assert!(
+            !valid_stroke(&empty),
+            "a stroke with no points draws nothing"
+        );
+
+        let mut huge = ok_stroke();
+        huge.points = vec![StrokePoint { x: 0.5, y: 0.5 }; MAX_STROKE_POINTS + 1];
+        assert!(!valid_stroke(&huge));
+    }
+
+    #[test]
+    fn valid_stroke_rejects_an_unbounded_or_non_hex_color() {
+        let too_long = "a".repeat(MAX_STROKE_COLOR_LEN + 1);
+        for color in [
+            too_long.as_str(),
+            "red",
+            "",
+            "#",
+            "#12345g",
+            "#2672B3; drop table",
+            "rgb(1,2,3)",
+        ] {
+            let mut stroke = ok_stroke();
+            stroke.color = color.to_string();
+            assert!(!valid_stroke(&stroke), "colour {color:?} must be rejected");
+        }
+    }
+
+    #[test]
+    fn valid_stroke_rejects_a_nan_infinite_or_out_of_range_width() {
+        for width in [
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            1e308,
+            0.0,
+            -4.0,
+            64.5,
+        ] {
+            let mut stroke = ok_stroke();
+            stroke.width = width;
+            assert!(!valid_stroke(&stroke), "width {width} must be rejected");
+        }
+    }
+
+    #[test]
+    fn valid_stroke_rejects_points_outside_the_normalised_unit_square() {
+        for (x, y) in [
+            (-0.01, 0.5),
+            (1.01, 0.5),
+            (0.5, -0.01),
+            (0.5, 1.01),
+            (f64::NAN, 0.5),
+            (0.5, f64::INFINITY),
+            (1e308, 1e308),
+        ] {
+            let mut stroke = ok_stroke();
+            stroke.points = vec![StrokePoint { x, y }];
+            assert!(!valid_stroke(&stroke), "point ({x}, {y}) must be rejected");
+        }
+    }
+
+    #[test]
+    fn the_websocket_message_cap_leaves_room_for_a_full_stroke() {
+        // A worst-case legitimate stroke must still fit inside the frame cap
+        // the upgrade sets, or Q1-10's fix would break the whiteboard.
+        let stroke = Stroke {
+            points: vec![
+                StrokePoint {
+                    x: 0.123_456_789,
+                    y: 0.987_654_321,
+                };
+                MAX_STROKE_POINTS
+            ],
+            color: "#1F2933".to_string(),
+            width: 24.0,
+        };
+        let encoded = serde_json::to_string(&ClientMessage::Draw {
+            board_id: DEFAULT_BOARD_ID,
+            stroke,
+        })
+        .expect("a Draw serializes");
+        assert!(
+            encoded.len() < MAX_WS_MESSAGE_BYTES,
+            "a {MAX_STROKE_POINTS}-point stroke encodes to {} bytes, over the {MAX_WS_MESSAGE_BYTES} byte cap",
+            encoded.len()
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // Q1-13 — the Health heartbeat
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn the_health_heartbeat_interval_is_inside_the_staleness_threshold() {
+        // D8's badge trips at 90 s of silence; two missed heartbeats must not
+        // be enough to trip it.
+        assert_eq!(HEALTH_HEARTBEAT_INTERVAL, Duration::from_secs(25));
+        assert!(HEALTH_HEARTBEAT_INTERVAL.as_secs() * 3 <= 90);
     }
 }

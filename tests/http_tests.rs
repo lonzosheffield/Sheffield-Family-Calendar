@@ -451,7 +451,9 @@ async fn ws_stroke_from_one_client_fans_out_to_second_client() {
             StrokePoint { x: 0.1, y: 0.2 },
             StrokePoint { x: 0.3, y: 0.4 },
         ],
-        color: "ws-fanout-test-marker".to_string(),
+        // QA round 1 Q1-10: the hub now validates `Stroke::color`, so this
+        // test's marker is a hex colour the server will accept.
+        color: "#fa0007".to_string(),
         width: 2.5,
     };
     let client_a_id = expect_hello(&mut client_a).await;
@@ -466,7 +468,7 @@ async fn ws_stroke_from_one_client_fans_out_to_second_client() {
         .await
         .expect("client A sends a stroke over the socket");
 
-    let received = recv_matching(&mut client_b, "ws-fanout-test-marker").await;
+    let received = recv_matching(&mut client_b, "#fa0007").await;
     let parsed: ServerMessage = serde_json::from_str(&received).expect("valid ServerMessage JSON");
     match parsed {
         ServerMessage::Draw {

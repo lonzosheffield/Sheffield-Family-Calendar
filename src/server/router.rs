@@ -587,6 +587,14 @@ pub async fn run(config: FamilyHubConfig) -> Result<(), RunError> {
     // `OnceLock`-guarded, so this and any later self-start call are both
     // harmless.
     crate::server::api::screensaver::ensure_background_tasks();
+    // QA round 1 Q1-13: `ServerMessage::Health` is documented by D5 and
+    // `docs/PROTOCOL.md` as the TV badge's freshness signal, but nothing ever
+    // sent one. Started here rather than from `realtime::ws_handler` so
+    // `tests/realtime_tests.rs`'s "nothing else arrives on an idle socket"
+    // assertions keep their meaning.
+    crate::server::api::realtime::spawn_health_heartbeat(
+        crate::server::api::realtime::HEALTH_HEARTBEAT_INTERVAL,
+    );
 
     // Certificate source. Only `SelfSignedCa` exists in this wave; an
     // unrecognised `certs.mode` fails here, loudly, rather than at the

@@ -15,6 +15,13 @@
 //! | 9 | A 200 msg/s client is throttled, resynced and closed — alone | `t1_2_9_*` |
 //! | doc | `docs/PROTOCOL.md` names every protocol variant | `t1_2_protocol_doc_*` |
 //!
+//! QA round 1 added two more, from `docs/qa/QA_ROUND_1.md`:
+//!
+//! | # | Assertion | Test |
+//! | --- | --- | --- |
+//! | Q1-10 | A 1 MiB frame closes only the sender; an invalid stroke is dropped | `qa1_10_*` |
+//! | Q1-13 | A connected client receives `Health` within 2× the interval | `qa1_13_*` |
+//!
 //! `realtime::sender()` is one process-wide broadcast channel, so every test
 //! that counts frames takes [`hub_lock`] first.
 
@@ -200,7 +207,14 @@ async fn expect_hello(socket: &mut WsStream) -> ClientId {
     }
 }
 
-fn stroke_with(marker: &str, points: usize) -> Stroke {
+/// A stroke tagged so the test can recognise it again on the far side of the
+/// hub.
+///
+/// QA round 1 **Q1-10** made `Stroke::color` a validated field — `#` plus
+/// ASCII hex, at most 32 bytes — so the marker can no longer be an arbitrary
+/// English string. It is carried as a 24-bit value in the colour instead, and
+/// [`marker_of`] decodes it back.
+fn stroke_with(marker: u32, points: usize) -> Stroke {
     Stroke {
         points: (0..points)
             .map(|i| StrokePoint {
@@ -208,9 +222,49 @@ fn stroke_with(marker: &str, points: usize) -> Stroke {
                 y: (i as f64 / points as f64) * 0.5,
             })
             .collect(),
-        color: marker.to_string(),
+        color: format!("#{:06x}", marker & 0xff_ffff),
         width: 3.0,
     }
+}
+
+/// The load test's per-message stroke, carrying its correlation `key`.
+///
+/// The key used to ride in `points[0].x` as a bare `f64` counter. QA round 1
+/// **Q1-10** made the coordinates a validated `0.0..=1.0` — a stroke that far
+/// off the canvas is exactly what the hub now refuses — so the key moved into
+/// the colour, where `#` plus 8 hex digits is a legal 9 bytes of the 32 the
+/// validator allows. The load itself is unchanged: same message count, same
+/// rate, same per-message timing.
+fn load_stroke(key: u64) -> Stroke {
+    Stroke {
+        points: vec![
+            StrokePoint { x: 0.25, y: 0.0 },
+            StrokePoint { x: 0.5, y: 0.5 },
+        ],
+        color: format!("#{key:08x}"),
+        width: 4.0,
+    }
+}
+
+/// The key [`load_stroke`] encoded, read back off the wire.
+fn load_key_of(stroke: &Stroke) -> u64 {
+    stroke
+        .color
+        .strip_prefix('#')
+        .and_then(|hex| u64::from_str_radix(hex, 16).ok())
+        .unwrap_or_else(|| panic!("load key colour {:?} is not #hex", stroke.color))
+}
+
+/// The marker [`stroke_with`] encoded, read back off the wire.
+fn marker_of(stroke: &Stroke) -> u32 {
+    u32::from_str_radix(
+        stroke
+            .color
+            .strip_prefix('#')
+            .unwrap_or_else(|| panic!("marker colour {:?} is not #rrggbb", stroke.color)),
+        16,
+    )
+    .unwrap_or_else(|err| panic!("marker colour {:?} is not hex: {err}", stroke.color))
 }
 
 /// Working-set size of this process, straight from the Win32 API — no crate,
@@ -324,7 +378,7 @@ async fn t1_2_2_a_lagging_client_is_resynced_and_the_socket_stays_open() {
     });
 
     const TOTAL: i64 = 5_000;
-    let payload = stroke_with("lag-test", 40);
+    let payload = stroke_with(0x1a6_7e5, 40);
     for seq in 1..=TOTAL {
         realtime::publish(&ServerMessage::Draw {
             board_id: DEFAULT_BOARD_ID,
@@ -414,10 +468,12 @@ async fn t1_2_3_eight_clients_at_thirty_messages_per_second_for_thirty_seconds()
                 match read.next().await {
                     Some(Ok(WsFrame::Text(text))) => match parse(&text) {
                         ServerMessage::Draw { stroke, .. } => {
-                            let Some(first) = stroke.points.first() else {
-                                continue;
-                            };
-                            let key = first.x as u64;
+                            // The per-message correlation key rides in the
+                            // colour: QA round 1 Q1-10 made the coordinates a
+                            // validated `0.0..=1.0`, so they can no longer
+                            // carry one. `#` + 8 hex digits is inside
+                            // `realtime::MAX_STROKE_COLOR_LEN`.
+                            let key = load_key_of(&stroke);
                             let start = reader_sent_at.lock().expect("lock").get(&key).copied();
                             if let Some(start) = start {
                                 reader_latencies.lock().expect("lock").push(start.elapsed());
@@ -444,17 +500,7 @@ async fn t1_2_3_eight_clients_at_thirty_messages_per_second_for_thirty_seconds()
             for n in 0..PER_CLIENT {
                 ticker.tick().await;
                 let key = client * 1_000_000 + n + 1;
-                let stroke = Stroke {
-                    points: vec![
-                        StrokePoint {
-                            x: key as f64,
-                            y: 0.0,
-                        },
-                        StrokePoint { x: 0.5, y: 0.5 },
-                    ],
-                    color: "#2672B3".to_string(),
-                    width: 4.0,
-                };
+                let stroke = load_stroke(key);
                 writer_sent_at
                     .lock()
                     .expect("lock")
@@ -547,7 +593,7 @@ async fn t1_2_4_a_draw_is_echoed_to_both_clients_stamped_with_the_sender() {
     let b_id = expect_hello(&mut b).await;
     assert_ne!(a_id, b_id, "each connection gets its own server-minted id");
 
-    let stroke = stroke_with("echo-test", 4);
+    let stroke = stroke_with(0x0ec_407, 4);
     send(
         &mut a,
         &ClientMessage::Draw {
@@ -852,7 +898,7 @@ async fn t1_2_7_a_client_reconnects_and_resnapshots_within_thirty_seconds() {
         &mut client,
         &ClientMessage::Draw {
             board_id: DEFAULT_BOARD_ID,
-            stroke: stroke_with("pre-restart", 3),
+            stroke: stroke_with(0x9e5_7a7, 3),
         },
     )
     .await;
@@ -921,7 +967,7 @@ async fn t1_2_7_a_client_reconnects_and_resnapshots_within_thirty_seconds() {
                 1,
                 "the snapshot replays the stroke drawn before the restart"
             );
-            assert_eq!(strokes[0].color, "pre-restart");
+            assert_eq!(marker_of(&strokes[0]), 0x9e5_7a7);
         }
         other => panic!("expected Snapshot, got {other:?}"),
     }
@@ -1263,7 +1309,7 @@ fn server_variant_name(message: &ServerMessage) -> &'static str {
 }
 
 fn every_client_message() -> Vec<ClientMessage> {
-    let stroke = stroke_with("#000000", 2);
+    let stroke = stroke_with(0x000000, 2);
     vec![
         ClientMessage::Hello { protocol: 2 },
         ClientMessage::Ping { nonce: 0 },
@@ -1303,7 +1349,7 @@ fn every_server_message() -> Vec<ServerMessage> {
             board_id: 1,
             seq: 1,
             origin: ClientId("x".into()),
-            stroke: stroke_with("#000000", 2),
+            stroke: stroke_with(0x000000, 2),
         },
         ServerMessage::BoardCleared {
             board_id: 1,
@@ -1370,19 +1416,222 @@ fn t1_2_protocol_doc_states_the_normative_limits() {
     .expect("docs/PROTOCOL.md exists");
 
     for needle in [
-        "1024",  // broadcast capacity
-        "256",   // outbound queue
-        "40",    // token bucket refill
-        "80",    // burst
-        "30",    // client flush cap / backoff cap
-        "20 s",  // heartbeat
-        "90 s",  // server idle timeout
-        "±20",   // jitter
-        "2,000", // retained strokes
+        "1024",    // broadcast capacity
+        "256",     // outbound queue
+        "40",      // token bucket refill
+        "80",      // burst
+        "30",      // client flush cap / backoff cap
+        "20 s",    // heartbeat
+        "90 s",    // server idle timeout
+        "±20",     // jitter
+        "2,000",   // retained strokes
+        "256 KiB", // Q1-10 max websocket message
+        "25 s",    // Q1-13 Health heartbeat
     ] {
         assert!(
             doc.contains(needle),
             "docs/PROTOCOL.md must state {needle:?}"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// QA round 1 — Q1-10 (bounded frames) and Q1-13 (the Health heartbeat)
+// ---------------------------------------------------------------------------
+
+/// **Q1-10** — an oversized frame closes only the socket that sent it.
+///
+/// `WebSocketUpgrade` used to keep `tungstenite`'s 64 MiB default, so any
+/// device on the family LAN could hand the television's wasm JSON parser a
+/// multi-megabyte message. The upgrade now caps message *and* frame at
+/// `realtime::MAX_WS_MESSAGE_BYTES`; the codec refuses anything larger before
+/// `serde_json` ever sees it, and — as with the rate limiter (§P2c assertion
+/// 9) — the blast radius is the offender's own connection.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn qa1_10_an_oversized_frame_closes_only_the_sender() {
+    let _guard = hub_lock().await;
+    realtime::reset_board().await;
+    let (addr, server) = spawn_hub().await;
+
+    let mut offender = connect(addr).await;
+    let mut bystander = connect(addr).await;
+    expect_hello(&mut offender).await;
+    let bystander_id = expect_hello(&mut bystander).await;
+
+    // The payload has to be over the cap for the test to prove anything, and
+    // a compile-time check says so without waiting for the socket.
+    const OVERSIZED: usize = 1024 * 1024;
+    const _: () = assert!(OVERSIZED > realtime::MAX_WS_MESSAGE_BYTES);
+    send_raw(&mut offender, &"x".repeat(OVERSIZED)).await;
+
+    assert!(
+        next_message(&mut offender, Duration::from_secs(10))
+            .await
+            .is_none(),
+        "the sender's socket must be closed, not fed a reply"
+    );
+
+    // The bystander is untouched: it can still drive the hub and still hear
+    // the answer.
+    send(
+        &mut bystander,
+        &ClientMessage::Draw {
+            board_id: DEFAULT_BOARD_ID,
+            stroke: stroke_with(0xb57a, 4),
+        },
+    )
+    .await;
+    let echoed = wait_for(&mut bystander, Duration::from_secs(5), |message| {
+        matches!(message, ServerMessage::Draw { .. })
+    })
+    .await
+    .expect("the bystander's socket survived the offender's oversized frame");
+    match echoed {
+        ServerMessage::Draw { origin, stroke, .. } => {
+            assert_eq!(origin, bystander_id);
+            assert_eq!(marker_of(&stroke), 0xb57a);
+        }
+        other => panic!("expected Draw, got {other:?}"),
+    }
+
+    server.abort();
+}
+
+/// **Q1-10** — a well-sized frame carrying a hostile stroke is dropped, and
+/// the connection carries on.
+///
+/// The three shapes that used to reach SQLite and the TV canvas unchallenged:
+/// an unbounded `color`, a non-finite `width`, and points outside the
+/// normalised `0..=1` space. `realtime::valid_stroke` is unit-tested
+/// exhaustively; this proves the `Draw` arm actually consults it, over a real
+/// socket, without closing the connection.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn qa1_10_an_invalid_stroke_is_dropped_without_closing_the_connection() {
+    let _guard = hub_lock().await;
+    realtime::reset_board().await;
+    let (addr, server) = spawn_hub().await;
+
+    let mut author = connect(addr).await;
+    let mut watcher = connect(addr).await;
+    expect_hello(&mut author).await;
+    expect_hello(&mut watcher).await;
+
+    let hostile = [
+        ("unbounded colour", {
+            let mut stroke = stroke_with(0x00_0001, 2);
+            stroke.color = "z".repeat(64 * 1024);
+            stroke
+        }),
+        ("NaN width", {
+            let mut stroke = stroke_with(0x00_0002, 2);
+            stroke.width = f64::NAN;
+            stroke
+        }),
+        ("1e308 width", {
+            let mut stroke = stroke_with(0x00_0003, 2);
+            stroke.width = 1e308;
+            stroke
+        }),
+        ("point off the canvas", {
+            let mut stroke = stroke_with(0x00_0004, 2);
+            stroke.points[0] = StrokePoint {
+                x: 4_096.0,
+                y: -1.0,
+            };
+            stroke
+        }),
+    ];
+    for (label, stroke) in hostile {
+        send(
+            &mut author,
+            &ClientMessage::Draw {
+                board_id: DEFAULT_BOARD_ID,
+                stroke,
+            },
+        )
+        .await;
+        assert!(
+            next_message(&mut watcher, Duration::from_millis(400))
+                .await
+                .is_none(),
+            "a stroke with a {label} must not be fanned out"
+        );
+    }
+
+    // …and the author is still connected, still able to draw.
+    send(
+        &mut author,
+        &ClientMessage::Draw {
+            board_id: DEFAULT_BOARD_ID,
+            stroke: stroke_with(0x600d, 4),
+        },
+    )
+    .await;
+    let good = wait_for(&mut watcher, Duration::from_secs(5), |message| {
+        matches!(message, ServerMessage::Draw { .. })
+    })
+    .await
+    .expect("a valid stroke still gets through");
+    match good {
+        ServerMessage::Draw { stroke, .. } => assert_eq!(marker_of(&stroke), 0x600d),
+        other => panic!("expected Draw, got {other:?}"),
+    }
+
+    server.abort();
+}
+
+/// **Q1-13** — a connected client receives `Health` within 2× the interval.
+///
+/// `ServerMessage::Health` is documented by D5 and `docs/PROTOCOL.md` as the
+/// television badge's freshness signal, and until QA round 1 nothing in the
+/// server ever sent one. `spawn_health_heartbeat` is deliberately started by
+/// `server::router::run` rather than by `ws_handler`, so every "nothing else
+/// arrives on an idle socket" assertion above keeps its meaning — which is
+/// also why this test starts the heartbeat itself and aborts it before the
+/// hub lock is released.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn qa1_13_a_connected_client_receives_health_within_two_intervals() {
+    let _guard = hub_lock().await;
+    realtime::reset_board().await;
+    let (addr, server) = spawn_hub().await;
+
+    let mut client = connect(addr).await;
+    expect_hello(&mut client).await;
+
+    // A sped-up copy of the production loop: the same function `router::run`
+    // calls, with the interval the assertion can afford to wait out.
+    const INTERVAL: Duration = Duration::from_secs(1);
+    let heartbeat = realtime::spawn_health_heartbeat(INTERVAL);
+
+    let health = wait_for(&mut client, INTERVAL * 2, |message| {
+        matches!(message, ServerMessage::Health { .. })
+    })
+    .await;
+    heartbeat.abort();
+
+    match health.expect("a connected client receives Health within 2× the interval") {
+        ServerMessage::Health { stale, last_update } => {
+            assert!(
+                !stale,
+                "`stale` is reserved until there is a Google poll to be stale about \
+                 (docs/PROTOCOL.md §4.1)"
+            );
+            let parsed = chrono::DateTime::parse_from_rfc3339(&last_update)
+                .expect("last_update is RFC 3339");
+            let skew = (chrono::Local::now() - parsed.with_timezone(&chrono::Local))
+                .num_seconds()
+                .abs();
+            assert!(
+                skew < 60,
+                "last_update is the hub's own clock, off by {skew}s"
+            );
+        }
+        other => unreachable!("wait_for matched Health, got {other:?}"),
+    }
+
+    // Production runs at 25 s, three of which still fit inside D8's 90 s
+    // staleness threshold.
+    assert_eq!(realtime::HEALTH_HEARTBEAT_INTERVAL, Duration::from_secs(25));
+
+    server.abort();
 }

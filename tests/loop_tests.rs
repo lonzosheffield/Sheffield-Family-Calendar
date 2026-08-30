@@ -171,7 +171,13 @@ async fn expect_hello(socket: &mut WsStream) -> ClientId {
     }
 }
 
-fn stroke_with(marker: &str, points: usize) -> Stroke {
+/// A stroke tagged so the TV can be shown to have received *this* stroke.
+///
+/// QA round 1 **Q1-10** made `Stroke::color` a validated field on the server
+/// (`realtime::valid_stroke`: `#` plus ASCII hex, at most 32 bytes), so the
+/// marker rides in the colour as a 24-bit value and [`marker_of`] reads it
+/// back off the wire.
+fn stroke_with(marker: u32, points: usize) -> Stroke {
     Stroke {
         points: (0..points)
             .map(|i| StrokePoint {
@@ -179,10 +185,25 @@ fn stroke_with(marker: &str, points: usize) -> Stroke {
                 y: (i as f64 / points as f64) * 0.5,
             })
             .collect(),
-        color: marker.to_string(),
+        color: format!("#{:06x}", marker & 0xff_ffff),
         width: 3.0,
     }
 }
+
+/// The marker [`stroke_with`] encoded.
+fn marker_of(stroke: &Stroke) -> u32 {
+    u32::from_str_radix(
+        stroke
+            .color
+            .strip_prefix('#')
+            .unwrap_or_else(|| panic!("marker colour {:?} is not #rrggbb", stroke.color)),
+        16,
+    )
+    .unwrap_or_else(|err| panic!("marker colour {:?} is not hex: {err}", stroke.color))
+}
+
+/// The phone's stroke in `t2_6_*`.
+const PHONE_STROKE: u32 = 0x0_9403;
 
 // ---------------------------------------------------------------------------
 // The loop
@@ -277,7 +298,7 @@ async fn t2_6_phone_drives_the_tv_across_a_server_restart() {
     // ------------------------------------------------------------------
     // 3. The phone's stroke arrives at the TV stamped origin == phone.
     // ------------------------------------------------------------------
-    let stroke = stroke_with("phone-stroke", 6);
+    let stroke = stroke_with(PHONE_STROKE, 6);
     send(
         &mut phone,
         &ClientMessage::Draw {
@@ -299,7 +320,11 @@ async fn t2_6_phone_drives_the_tv_across_a_server_restart() {
                 origin, phone_id,
                 "the stroke the TV receives must be stamped with the phone's ClientId"
             );
-            assert_eq!(s.color, "phone-stroke", "the stroke content round-trips");
+            assert_eq!(
+                marker_of(&s),
+                PHONE_STROKE,
+                "the stroke content round-trips"
+            );
         }
         other => panic!("expected Draw, got {other:?}"),
     }
@@ -383,7 +408,7 @@ async fn t2_6_phone_drives_the_tv_across_a_server_restart() {
             } => {
                 assert_eq!(board_id, DEFAULT_BOARD_ID);
                 assert!(
-                    strokes.iter().any(|s| s.color == "phone-stroke"),
+                    strokes.iter().any(|s| marker_of(s) == PHONE_STROKE),
                     "{tag}'s post-restart Snapshot must still carry the stroke drawn before the restart"
                 );
             }

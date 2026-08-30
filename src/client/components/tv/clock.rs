@@ -27,5 +27,13 @@ pub use crate::server::api::tv::{tv_clock, TvClock};
 
 /// How often the kiosk asks the hub for the time. Comfortably inside the
 /// 90 s staleness threshold so a healthy hub never trips the badge, and
-/// cheap: one small JSON round trip on the LAN, three times a minute.
-pub const CLOCK_POLL_SECS: u64 = 20;
+/// cheap: one small JSON round trip on the LAN, once a minute.
+///
+/// Was 20 s while this poll was the *only* server pulse the kiosk saw. QA
+/// round 1 **Q1-13** gave the hub a real `ServerMessage::Health` heartbeat
+/// every 25 s (`server::api::realtime::HEALTH_HEARTBEAT_INTERVAL`), which the
+/// shell's proof-of-life effect now reads, so this poll is back to its first
+/// job — the displayed "updated HH:MM" — and can run three times less often.
+/// 60 s still leaves a whole missed poll inside the 90 s badge threshold even
+/// if the socket is down.
+pub const CLOCK_POLL_SECS: u64 = 60;

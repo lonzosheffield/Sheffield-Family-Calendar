@@ -123,7 +123,24 @@ granted but can never take one it was not (R-23b).
 | `ServerMessage::DayRolled { date }` | Local midnight passed; `date` is the new today (F29/G4). |
 | `ServerMessage::SetView { view }` | The TV should show this panel. |
 | `ServerMessage::SetActiveProfile { user_id }` | The TV should switch to this profile. |
-| `ServerMessage::Health { stale, last_update }` | Freshness signal for the TV's badge (T1.7). |
+| `ServerMessage::Health { stale, last_update }` | Freshness signal for the TV's badge (T1.7). See §4.1. |
+
+### 4.1 `Health`
+
+`ServerMessage::Health { stale, last_update }` is **sent every 25 s** to every
+connected client by `server::api::realtime::spawn_health_heartbeat`, started
+once from `server::router::run` — not from `ws_handler`, so an idle socket in
+the test harness still receives nothing it was not sent.
+
+- `last_update` is the hub's own local wall clock, RFC 3339. It is what the
+  television's "updated HH:MM" and the D8 staleness badge measure against, and
+  it is why the kiosk needs no HTTP poll to prove the hub is alive: three
+  missed heartbeats are still inside the 90 s badge threshold.
+- `stale` is **reserved** — always `false`. It exists for the freshness of an
+  upstream feed, and there is no Google poll in this build to be stale about
+  (PLAN A4: the service account is optional and no credentials exist). When
+  one lands, the poller sets it; until then a client must not read meaning
+  into it beyond "the hub is answering".
 
 ### What a client does on `Resync`
 
@@ -228,6 +245,29 @@ order. No new message shape was worth adding for something this infrequent.
 | Heartbeat | client `Ping` every **20 s**; dead after **2** missed `Pong`s (≥ 45 s) | `client::realtime::HEARTBEAT_INTERVAL` |
 | Server idle timeout | **90 s** with nothing received | `realtime::CLIENT_IDLE_TIMEOUT` |
 | Retained strokes | **2,000** | `realtime::MAX_RETAINED_STROKES` |
+| Max WebSocket message and frame | **256 KiB** | `realtime::MAX_WS_MESSAGE_BYTES` |
+| `Health` heartbeat | every **25 s** | `realtime::HEALTH_HEARTBEAT_INTERVAL` |
+
+### What the hub accepts in a `Draw`
+
+`tungstenite` defaults to a 64 MiB message, which on this LAN means any device
+could hand the television's wasm JSON parser a multi-megabyte frame. The
+upgrade therefore caps both message and frame at
+`realtime::MAX_WS_MESSAGE_BYTES` (256 KiB — a 4,096-point stroke encodes to
+well under that), and the `Draw` arm validates the stroke itself through
+`realtime::valid_stroke`, dropping it with a `tracing::warn` if any of these
+fails:
+
+| Field | Rule |
+| --- | --- |
+| `points` | 1..=**4,096** (`MAX_STROKE_POINTS`) |
+| `points[i].x`, `.y` | finite and within `0.0..=1.0` — the normalised space §5 defines |
+| `color` | starts `#`, at most **32** bytes, the rest ASCII hex digits |
+| `width` | finite and within **0.5..=64.0** (`MIN_STROKE_WIDTH`/`MAX_STROKE_WIDTH`) |
+
+An oversized *frame* is refused by the codec and closes **only** the sender's
+socket; an invalid *stroke* inside a well-sized frame is dropped and the
+connection continues.
 
 ### `RecvError::Lagged` is never fatal
 

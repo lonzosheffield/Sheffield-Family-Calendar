@@ -152,6 +152,13 @@ pub fn TvShell() -> Element {
         let _ = (bus.profiles_version)();
         let _ = (bus.calendar_version)();
         let _ = (bus.resync_version)();
+        // QA round 1 Q1-13: the hub now publishes `ServerMessage::Health`
+        // every 25 s (`realtime::HEALTH_HEARTBEAT_INTERVAL`), which
+        // `RealtimeBus::apply` lands in `stale`. Reading it here is what makes
+        // the heartbeat a dependency of this effect, so an idle-but-connected
+        // socket is proof of life on its own and the badge no longer depends
+        // on the clock poll alone.
+        let _ = (bus.stale)();
         if (bus.connected)() {
             tracker.write().record_message(now_millis());
         }

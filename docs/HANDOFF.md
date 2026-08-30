@@ -2231,3 +2231,48 @@ whichever task next owns `src/client/components/mobile/**`:
 3. Tests: `tests/router_tests.rs::login_sets_a_well_formed_session_cookie`
    and `tests/realtime_tests.rs`'s two Q1-11 tests already cover the server
    side; add a client-side test that `is_parent()` reflects `/api/session`.
+
+---
+
+## T1.2 — QA round 1 (`phase-qa1/T1.2`, Q1-10 and Q1-13)
+
+**Applied in full.**
+
+- **Q1-10** — `realtime::ws_handler` now caps the upgrade at
+  `MAX_WS_MESSAGE_BYTES` (256 KiB) for both message and frame, and the `Draw`
+  arm calls the new `pub fn realtime::valid_stroke`, which replaces the old
+  point-count-only check: 1..=`MAX_STROKE_POINTS` points, `color` `#` + ASCII
+  hex ≤ 32 bytes, `width` finite in 0.5..=64.0, every point finite in
+  0.0..=1.0. Invalid strokes are dropped with a `tracing::warn`; the
+  connection survives. Six unit tests in `realtime.rs` (one per rejected
+  shape, plus one proving a worst-case legitimate stroke still fits the cap)
+  and two socket tests in `tests/realtime_tests.rs`.
+- **Q1-13** — `realtime::spawn_health_heartbeat(interval)` publishes
+  `ServerMessage::Health { stale: false, last_update }` every
+  `HEALTH_HEARTBEAT_INTERVAL` (25 s), started from `router::run` and
+  deliberately **not** from `ws_handler`, so `realtime_tests`' "nothing else
+  arrives on an idle socket" assertions keep their meaning.
+  `docs/PROTOCOL.md` gains §4.1 and two flow-control rows.
+
+**Files edited outside T1.2's §P4 ownership** (Fable's solutions name each one
+explicitly; kept to the smallest possible diff so the Boss can merge them
+alongside the other qa1 branches):
+
+- `src/server/router.rs` (T0.6 → T1.3 → T2.5) — **one added call** in `run`,
+  after `screensaver::ensure_background_tasks()`, starting the heartbeat.
+  Nothing else in the file is touched. Note Q1-11's solution also edits
+  `router.rs`, in `build_router`, so the two should not collide.
+- `src/client/components/tv/shell.rs` (T2.1) — **one added line**,
+  `let _ = (bus.stale)();` in the proof-of-life `use_effect`, so the
+  heartbeat is a dependency of it. Note Q1-12's solution also edits
+  `shell.rs`, in the `events:` resolution ~90 lines further down.
+- `src/client/components/tv/clock.rs` (T2.1) — `CLOCK_POLL_SECS` 20 → 60, the
+  optional half of Q1-13 ("may then rise to 60"), now that the socket carries
+  a real 25 s server pulse. 60 s still leaves a whole missed poll inside D8's
+  90 s badge threshold.
+- `tests/loop_tests.rs` (T2.6), `tests/whiteboard_tests.rs` (T2.3),
+  `tests/http_tests.rs` (T0.3) — their stroke markers moved out of
+  `Stroke::color` and into `format!("#{:06x}", i)` with a `marker_of` decoder,
+  exactly as Q1-10's solution requires. No assertion was weakened: each one
+  still checks the same identity, ordering or round-trip, through the encoded
+  marker instead of a plain string.

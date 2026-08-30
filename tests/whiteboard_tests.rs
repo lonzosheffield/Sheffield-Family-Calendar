@@ -150,15 +150,33 @@ async fn expect_hello(socket: &mut WsStream) -> ClientId {
     }
 }
 
-fn stroke_marked(marker: &str) -> Stroke {
+/// A stroke tagged so a `Snapshot` can be checked for identity and order.
+///
+/// QA round 1 **Q1-10** made `Stroke::color` a validated field on the server
+/// (`realtime::valid_stroke`: `#` plus ASCII hex, at most 32 bytes), so the
+/// marker rides in the colour as a 24-bit value and [`marker_of`] reads it
+/// back off the wire.
+fn stroke_marked(marker: u32) -> Stroke {
     Stroke {
         points: vec![
             StrokePoint { x: 0.1, y: 0.1 },
             StrokePoint { x: 0.2, y: 0.2 },
         ],
-        color: marker.to_string(),
+        color: format!("#{:06x}", marker & 0xff_ffff),
         width: 3.0,
     }
+}
+
+/// The marker [`stroke_marked`] encoded.
+fn marker_of(stroke: &Stroke) -> u32 {
+    u32::from_str_radix(
+        stroke
+            .color
+            .strip_prefix('#')
+            .unwrap_or_else(|| panic!("marker colour {:?} is not #rrggbb", stroke.color)),
+        16,
+    )
+    .unwrap_or_else(|err| panic!("marker colour {:?} is not hex: {err}", stroke.color))
 }
 
 /// Row count straight from the table, bypassing the server API — proves
@@ -250,7 +268,7 @@ async fn t2_3_a_five_hundred_strokes_persist_and_replay_in_seq_order() {
         ticker.tick().await;
         let payload = serde_json::to_string(&ClientMessage::Draw {
             board_id: DEFAULT_BOARD_ID,
-            stroke: stroke_marked(&i.to_string()),
+            stroke: stroke_marked(i as u32),
         })
         .expect("ClientMessage serializes");
         sink.send(WsFrame::text(payload))
@@ -296,11 +314,8 @@ async fn t2_3_a_five_hundred_strokes_persist_and_replay_in_seq_order() {
                 TOTAL,
                 "the snapshot must replay all 500 persisted strokes"
             );
-            let order: Vec<usize> = strokes
-                .iter()
-                .map(|s| s.color.parse().expect("marker is a plain index"))
-                .collect();
-            let expected: Vec<usize> = (0..TOTAL).collect();
+            let order: Vec<u32> = strokes.iter().map(marker_of).collect();
+            let expected: Vec<u32> = (0..TOTAL as u32).collect();
             assert_eq!(order, expected, "strokes must replay in seq order");
         }
         other => panic!("expected Snapshot, got {other:?}"),
@@ -328,7 +343,7 @@ async fn t2_3_b_clear_moves_the_watermark_then_compaction_removes_the_rows() {
             &mut writer,
             &ClientMessage::Draw {
                 board_id: DEFAULT_BOARD_ID,
-                stroke: stroke_marked(&i.to_string()),
+                stroke: stroke_marked(i as u32),
             },
         )
         .await;
@@ -421,7 +436,7 @@ async fn t2_3_c_undo_removes_only_the_callers_own_last_stroke() {
         &mut a,
         &ClientMessage::Draw {
             board_id: DEFAULT_BOARD_ID,
-            stroke: stroke_marked("a-1"),
+            stroke: stroke_marked(0xa1),
         },
     )
     .await;
@@ -440,7 +455,7 @@ async fn t2_3_c_undo_removes_only_the_callers_own_last_stroke() {
         &mut b,
         &ClientMessage::Draw {
             board_id: DEFAULT_BOARD_ID,
-            stroke: stroke_marked("b-1"),
+            stroke: stroke_marked(0xb1),
         },
     )
     .await;
@@ -487,7 +502,8 @@ async fn t2_3_c_undo_removes_only_the_callers_own_last_stroke() {
         ServerMessage::Snapshot { strokes, .. } => {
             assert_eq!(strokes.len(), 1, "only B's stroke may remain");
             assert_eq!(
-                strokes[0].color, "b-1",
+                marker_of(&strokes[0]),
+                0xb1,
                 "undo must remove A's own stroke, never B's"
             );
         }
