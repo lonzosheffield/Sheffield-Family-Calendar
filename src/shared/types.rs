@@ -8,6 +8,12 @@ pub enum MaximizedView {
     Routine,
     Calendar,
     Whiteboard,
+    /// The ambient screensaver, forced on by T2.7's optional schedule
+    /// (`ServerMessage::SetView { view: MaximizedView::Screensaver }`),
+    /// independent of the idle-timeout that normally drives it
+    /// (`client::components::screensaver`). Not reachable through D-pad
+    /// navigation or the phone's TV Remote tab — only the schedule sends it.
+    Screensaver,
 }
 
 /// Number of family profiles supported by the hub (user ids 1..=4).

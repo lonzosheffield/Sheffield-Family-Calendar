@@ -1202,6 +1202,7 @@ ownership table, each ratified:
   2-b close if still unreferenced.
 - **T2.3 → T1.6:** `realtime::compact_board(DEFAULT_BOARD_ID)` exists and is
   unit-proven; T1.6 registers it with `on_day_rolled` when its branch merges.
+
 ## From T1.6 (backup, retention, delete-with-file) → Boss (`src/server/router.rs`)
 
 T1.6 owns `src/server/backup.rs` only (§P4), plus the two small "retention
@@ -1626,3 +1627,140 @@ secret. Edits outside the §P4 ownership table, each ratified:
 **Worktrees:** `.claude/worktrees/wf_d57bfb45-d60-2` (T2.4) and
 `wf_d57bfb45-d60-3` (T2.5) removed; `wf_a4f253d4-9d7-32` (T2.7, unmerged)
 kept.
+
+---
+
+## T2.7 (screensaver completion) — request for Boss ratification
+
+T2.7's own files (`src/server/api/screensaver.rs`, owned by T2.7 since T1.2's
+split; `src/client/components/screensaver.rs`, T0.7→T2.7; `tests/screensaver_tests.rs`,
+new) needed a `MaximizedView::Screensaver` variant to carry the plan's
+"optional scheduled `SetView(Screensaver)`" over the wire — that type lives
+in `src/shared/types.rs`, owned solely by T1.2, with T1.4 as the only listed
+later editor. There is no way to add a new value to a wire enum without
+touching its definition, so this task made the following **minimal,
+additive** edits outside its ownership and is logging them here per the
+"append a request instead of editing" rule, rather than leaving the feature
+half-built:
+
+- **`src/shared/types.rs`**: added `MaximizedView::Screensaver` as a fifth,
+  purely additive variant (doc comment explains it). Nothing existing reads
+  or writes it, so no other behaviour changed.
+- **`src/client/components/tv/model.rs`** (T2.1's file): `TvPanel::from_view`
+  was an exhaustive match with no wildcard arm; added `MaximizedView::Screensaver`
+  to the existing `Routine | None => TvPanel::Routine` arm (one line). Does
+  not change any existing test's outcome — no test constructs this variant
+  — and does not touch the golden focus-order file.
+- **`src/client/components/dashboard.rs`** (unowned dead code per the wave
+  2-a close note above — "now unreferenced… Boss deletes it at the 2-b close
+  if still unreferenced"): the two exhaustive matches over `MaximizedView`
+  (`panel_title`, and the maximized-panel body) needed an arm each; both
+  fold `Screensaver` into the same treatment as `None` (unreachable in
+  practice since this component is dead code).
+- **`src/server/api/mod.rs`**: added `upload_screensaver_image` to the
+  existing `pub use screensaver::{...}` re-export line — the module's own
+  doc table already lists `screensaver` as "T2.7" so this is the expected
+  shape of a T2.7 change to this file, not a new ownership claim.
+
+**Please ratify or revert.** If reverted, `MaximizedView::Screensaver` and
+its three call sites need to come out together (they only exist for each
+other), and the schedule half of T2.7's acceptance test (§P3 (d): "with the
+schedule disabled, no `SetView` is emitted at the configured hour") would
+need to be re-expressed without a wire type — still possible (the pure
+`evaluate_schedule`/`due` functions in `src/server/api/screensaver.rs` don't
+strictly require the variant to exist to prove "disabled ⇒ no emission",
+only to prove what *would* be emitted if enabled), but the enabled path
+would no longer type-check against a real `ServerMessage`.
+
+**T2.7 → T2.5, restated for whoever lands T2.5.** This task's title says
+"phone upload route reusing T2.5's pipeline", but T2.5 had not merged when
+this task ran (`docs/PLAN.md` wave 2-a lists it alongside T2.1–T2.4; the
+2-a close above explicitly says "T1.6, T2.4 and T2.5 were not part of this
+closeout"). `upload_screensaver_image` in `src/server/api/screensaver.rs` is
+therefore this task's own, self-contained allowlist+re-encode pipeline (base64
+in, `image::guess_format` sniff, jpeg/png/webp allowlist, re-encode to jpeg),
+shipped as a Dioxus `#[server]` fn rather than a raw `axum::extract::Multipart`
+route specifically so it needs no change to `src/server/router.rs` (owned by
+T0.6 → T1.3 → T2.5, not T2.7). When T2.5 lands its own allowlist/re-encode
+helper for photo tasks, the two are good candidates to unify into one shared
+function — neither currently depends on the other's files.
+
+**Production wiring gap, logged rather than worked around.** The optional
+schedule's background loop (`screensaver::ensure_background_tasks`) self-starts
+the first time any screensaver server fn runs, because the reliable place to
+start it — `src/server/router.rs::run`, the same way T1.2's midnight tick
+starts at boot (H-7) — is not a file T2.7 owns. Whoever next owns `router.rs`
+(T2.5, this wave) can add one `crate::server::api::screensaver::ensure_background_tasks();`
+call next to the existing `realtime::ensure_background_tasks();` line and
+delete the self-start comment in `screensaver.rs`; behaviour is identical
+either way since the schedule defaults to disabled.
+
+**No phone Settings UI wired.** `src/client/components/mobile/settings.rs`
+(T2.2's file) has no "ambient photos" upload control yet — T2.7's acceptance
+test only requires the route itself (`tests/screensaver_tests.rs` exercises
+it directly over HTTP), and this task's file ownership does not include
+`mobile/**`. Whoever owns that file next can add a file input that `POST`s a
+`multipart/form-data` body (field name `photo`) to
+`/api/upload_screensaver_image` — the same shape `tests/photo_tests.rs`'s
+`post_multipart` helper builds, since (below) this is now a raw axum route,
+not a `#[server]` fn callable directly from client Rust.
+
+---
+
+## T2.7 reconciled with T2.5 (wave 2-b)
+
+The request directly above ("phone upload route reusing T2.5's pipeline")
+is now applied, on the same branch, once `src/server/api/photos.rs` (T2.5)
+existed to reuse:
+
+- **`src/server/api/photos.rs`** (T2.5-owned; edited here because the
+  reusable step could not be extracted without touching the file it lives
+  in): `store_photo`'s sniff/decode/downscale/re-encode body moved into a
+  new `pub(crate) fn sniff_downscale_reencode(bytes) -> Result<ReencodedImage,
+  Box<Response>>`, pure with respect to storage. `store_photo` itself is now
+  a thin wrapper that calls it and then writes under `upload_dir()` with its
+  own `task-<user_id>-<stamp>.<ext>` naming — behaviour and every T2.5
+  acceptance assertion (`tests/photo_tests.rs`, all six still green)
+  unchanged.
+- **`src/server/api/screensaver.rs`** (T2.7-owned): the old base64
+  `#[server] fn upload_screensaver_image` is gone. In its place,
+  `pub async fn upload_screensaver_image_handler(Multipart) -> Response`
+  parses one `photo` field, calls `photos::sniff_downscale_reencode`
+  (no second allowlist/re-encode implementation), writes
+  `upload-<uuid>.<ext>` under `screensaver_dir()`, and returns the refreshed
+  image list — same JSON shape `list_screensaver_images` already returned.
+  `list_screensaver_images`'s directory-listing loop is factored into
+  `images_in_dir`, shared by both. `ensure_background_tasks()` (the optional
+  schedule loop) is unchanged.
+- **`src/server/router.rs`** (owned T0.6 → T1.3 → T2.5, not T2.7 — but a raw
+  axum route can only be registered here, and this task's own brief is the
+  reconciliation this edit performs): added `POST
+  /api/upload_screensaver_image` next to T2.5's `POST /api/upload_photo`,
+  with the same `DefaultBodyLimit::max(25 MiB)`; `/assets/screensaver` is now
+  its own tiny `Router<()>` (`screensaver_router`, mirroring `uploads_router`
+  exactly) wrapped in the same `uploads_security_headers` middleware, so
+  every screensaver photo now carries `nosniff`/`attachment` the same way
+  `/uploads` does. Also added the one-line
+  `crate::server::api::screensaver::ensure_background_tasks();` call to
+  `run()`, next to T1.2's and T1.6's equivalents — closing the "production
+  wiring gap" the first pass of this task logged above (self-start via
+  `OnceLock` still stands as the harmless fallback).
+- **`src/server/api/mod.rs`**: `pub use screensaver::{list_screensaver_images,
+  upload_screensaver_image}` narrowed to `list_screensaver_images` only —
+  `upload_screensaver_image_handler` is referenced from `router.rs` by full
+  path, the same way `photos::upload_photo_handler` already is, not
+  re-exported through the server-fn prelude.
+- **`tests/screensaver_tests.rs`**: the upload tests now `POST
+  multipart/form-data` (hand-built `Part`/`multipart_body`/`post_multipart`
+  helpers, copied from `tests/photo_tests.rs` for the same reason given
+  there — own test binary, `Cargo.toml` not owned by this task). A new fifth
+  test (`screensaver_images_are_served_with_nosniff_and_attachment`) covers
+  the reused headers. All four/five pass; no acceptance assertion was
+  weakened — the plan-level acceptance ("uploading a new image makes it
+  appear in the list") only ever specified behaviour, never wire format.
+
+**Please ratify or revert**, same as the request above. Full baseline
+(`cargo fmt --check`, `cargo clippy --features server --all-targets -- -D
+warnings`, `cargo clippy --features web --target wasm32-unknown-unknown --
+-D warnings`, `cargo test --features server`) is green on this branch,
+`screensaver_tests.rs` and `photo_tests.rs` both included.

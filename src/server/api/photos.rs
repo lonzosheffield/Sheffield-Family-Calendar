@@ -26,6 +26,19 @@
 //! multipart body) reuses T1.6's `backup::delete_custom_task` verbatim, per
 //! the task brief, after checking `user_id` actually owns `task_id` — the
 //! same ownership rule T1.5 established for `toggle_custom_task` (R-23).
+//!
+//! **Reused by T2.7 (`docs/HANDOFF.md` "T2.7 → T2.5, restated").** T2.7's own
+//! branch originally shipped a second, parallel base64-sniff-and-re-encode
+//! implementation for screensaver photos, built before this file existed.
+//! The reconciliation moved the sniff/decode/downscale/re-encode step into
+//! [`sniff_downscale_reencode`] below — a pure, allowlist-and-re-encode
+//! helper with no opinion on where the bytes end up — so
+//! `super::screensaver::upload_screensaver_image_handler` calls the exact
+//! same allowlist (jpeg/png/webp only, sniffed from magic bytes, R-23c) and
+//! the exact same re-encode instead of maintaining its own copy. Only the
+//! *destination* (directory, file name) still differs between the two
+//! callers, which is why `store_photo` below stays the thin,
+//! task-photo-specific wrapper around it.
 
 use dioxus::prelude::*;
 
@@ -194,43 +207,10 @@ pub async fn upload_photo_handler(mut multipart: Multipart) -> Response {
 /// case, not a loop.
 #[cfg(feature = "server")]
 async fn store_photo(bytes: &[u8], user_id: u32) -> Result<String, Box<Response>> {
-    let sniffed = image::guess_format(bytes).ok().and_then(allowed_format);
-    let Some((ext, format)) = sniffed else {
-        return Err(Box::new(
-            (
-                StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                "unsupported image type: only JPEG, PNG and WebP are accepted",
-            )
-                .into_response(),
-        ));
-    };
-
-    let decoded = image::load_from_memory_with_format(bytes, format).map_err(|err| {
-        tracing::warn!(%err, "upload_photo: sniffed a supported format but failed to decode it");
-        Box::new(
-            (
-                StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                "could not decode image data",
-            )
-                .into_response(),
-        )
-    })?;
-
-    let (width, height) = (decoded.width(), decoded.height());
-    let resized = if width > MAX_DIMENSION || height > MAX_DIMENSION {
-        decoded.resize(
-            MAX_DIMENSION,
-            MAX_DIMENSION,
-            image::imageops::FilterType::Triangle,
-        )
-    } else {
-        decoded
-    };
-
-    let encoded = encode(&resized, format).map_err(|err| {
-        tracing::error!(%err, "upload_photo: failed to re-encode image");
-        Box::new((StatusCode::INTERNAL_SERVER_ERROR, "failed to encode image").into_response())
-    })?;
+    let ReencodedImage {
+        bytes: encoded,
+        ext,
+    } = sniff_downscale_reencode(bytes)?;
 
     let upload_dir = crate::server::db::upload_dir();
     tokio::fs::create_dir_all(&upload_dir)
@@ -253,6 +233,71 @@ async fn store_photo(bytes: &[u8], user_id: u32) -> Result<String, Box<Response>
         })?;
 
     Ok(format!("/uploads/{file_name}"))
+}
+
+/// The result of [`sniff_downscale_reencode`]: the re-encoded bytes plus the
+/// file extension that matches the *sniffed* format (never the caller's
+/// claimed one, R-23c).
+#[cfg(feature = "server")]
+pub(crate) struct ReencodedImage {
+    pub bytes: Vec<u8>,
+    pub ext: &'static str,
+}
+
+/// The shared allowlist-and-re-encode pipeline (R-23c): sniff `bytes`' real
+/// format from its magic bytes (never a claimed filename or `Content-Type`),
+/// reject anything outside jpeg/png/webp, decode, downscale to fit within
+/// [`MAX_DIMENSION`] on either axis if larger, and re-encode through the
+/// `image` crate's own encoder for that sniffed format. Pure with respect to
+/// storage — the caller decides where the bytes end up — so both
+/// [`store_photo`] (task photos, under `/uploads`) and
+/// `super::screensaver::upload_screensaver_image_handler` (ambient
+/// screensaver photos, under `/assets/screensaver`) call this one
+/// implementation instead of each maintaining their own copy of it.
+#[cfg(feature = "server")]
+pub(crate) fn sniff_downscale_reencode(bytes: &[u8]) -> Result<ReencodedImage, Box<Response>> {
+    let sniffed = image::guess_format(bytes).ok().and_then(allowed_format);
+    let Some((ext, format)) = sniffed else {
+        return Err(Box::new(
+            (
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "unsupported image type: only JPEG, PNG and WebP are accepted",
+            )
+                .into_response(),
+        ));
+    };
+
+    let decoded = image::load_from_memory_with_format(bytes, format).map_err(|err| {
+        tracing::warn!(%err, "sniff_downscale_reencode: sniffed a supported format but failed to decode it");
+        Box::new(
+            (
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "could not decode image data",
+            )
+                .into_response(),
+        )
+    })?;
+
+    let (width, height) = (decoded.width(), decoded.height());
+    let resized = if width > MAX_DIMENSION || height > MAX_DIMENSION {
+        decoded.resize(
+            MAX_DIMENSION,
+            MAX_DIMENSION,
+            image::imageops::FilterType::Triangle,
+        )
+    } else {
+        decoded
+    };
+
+    let encoded = encode(&resized, format).map_err(|err| {
+        tracing::error!(%err, "sniff_downscale_reencode: failed to re-encode image");
+        Box::new((StatusCode::INTERNAL_SERVER_ERROR, "failed to encode image").into_response())
+    })?;
+
+    Ok(ReencodedImage {
+        bytes: encoded,
+        ext,
+    })
 }
 
 /// Re-encode `image` in `format`, using an explicit quality for JPEG (the

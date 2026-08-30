@@ -30,7 +30,11 @@ pub fn Dashboard() -> Element {
                         MaximizedView::Routine => rsx! { Routine { compact: false } },
                         MaximizedView::Calendar => rsx! { CalendarPanel {} },
                         MaximizedView::Whiteboard => rsx! { Whiteboard {} },
-                        MaximizedView::None => rsx! {},
+                        // T2.7: this dashboard is desktop/dead code (unreached
+                        // by `/tv` or `/m`, `docs/HANDOFF.md` "T2.2 close");
+                        // nothing here ever sets this variant, but the match
+                        // must stay exhaustive.
+                        MaximizedView::None | MaximizedView::Screensaver => rsx! {},
                     }
                 }
             }
@@ -43,7 +47,7 @@ fn panel_title(view: MaximizedView) -> &'static str {
         MaximizedView::Routine => "Morning Routine",
         MaximizedView::Calendar => "Today",
         MaximizedView::Whiteboard => "Whiteboard",
-        MaximizedView::None => "Sheffield Family Hub",
+        MaximizedView::None | MaximizedView::Screensaver => "Sheffield Family Hub",
     }
 }
 

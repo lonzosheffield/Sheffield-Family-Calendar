@@ -109,7 +109,13 @@ impl TvPanel {
     /// on the routine.
     pub fn from_view(view: MaximizedView) -> Self {
         match view {
-            MaximizedView::Routine | MaximizedView::None => TvPanel::Routine,
+            // T2.7: `Screensaver` is not a panel — the overlay it names is
+            // drawn independently by `client::components::screensaver`, on
+            // top of whatever panel is showing — so it resolves to the same
+            // default as `None` here (`docs/HANDOFF.md` "T2.7 → T2.1").
+            MaximizedView::Routine | MaximizedView::None | MaximizedView::Screensaver => {
+                TvPanel::Routine
+            }
             MaximizedView::Calendar => TvPanel::Calendar,
             MaximizedView::Whiteboard => TvPanel::Whiteboard,
         }

@@ -5,10 +5,18 @@
 //! delegating to [`run`] so it stays under 25 lines and is **frozen**
 //! thereafter (`docs/reviews/PURPLE_TEAM.md` §P4). Later tasks extend this
 //! router in their own waves rather than duplicating it: T1.3 added the
-//! HTTPS listener and a real `/ca.crt`; **T2.5 (this wave)** adds the
-//! multipart photo-upload route (`POST /api/upload_photo`, its own raised
-//! `DefaultBodyLimit` — R-08) and the `nosniff`/`attachment` headers on
-//! `/uploads` (R-23c).
+//! HTTPS listener and a real `/ca.crt`; T2.5 added the multipart photo-upload
+//! route (`POST /api/upload_photo`, its own raised `DefaultBodyLimit` — R-08)
+//! and the `nosniff`/`attachment` headers on `/uploads` (R-23c); **T2.7**
+//! (reconciled with T2.5, `docs/HANDOFF.md` "T2.7 → T2.5, restated") adds the
+//! matching `POST /api/upload_screensaver_image` multipart route — same
+//! raised limit, same shared allowlist/re-encode pipeline
+//! (`api::photos::sniff_downscale_reencode`) — and the same
+//! `nosniff`/`attachment` headers on `/assets/screensaver`, in place of the
+//! self-contained base64 pipeline its first pass shipped before T2.5 existed.
+//! `router.rs` is not a file T2.7 otherwise owns (§P4), but a raw axum route
+//! can only be registered here; this task's own brief ("reuse T2.5's
+//! multipart pipeline") is the reconciliation this edit performs.
 //!
 //! **Split origins (PLAN v2 D3′).** There is one router and two listeners:
 //!
@@ -57,11 +65,13 @@ use crate::server::tls::{install_crypto_provider, TlsListener};
 const RENEWAL_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(6 * 60 * 60);
 
 /// The raised body limit for `POST /api/upload_photo` (T2.5, PURPLE §P3
-/// T2.5 / R-08). Applied to **that route only**, via [`axum::routing::MethodRouter::layer`]
-/// — every other route (including the JSON `#[server]` fn endpoints Dioxus
-/// mounts under `/api`) keeps axum's global 2 MB default, which is exactly
-/// what PURPLE §P3 T2.5(b) proves by demonstrating a 413 on an unraised
-/// route with the same handler.
+/// T2.5 / R-08) **and** `POST /api/upload_screensaver_image` (T2.7, reusing
+/// the same limit as part of reusing the whole pipeline). Applied to those
+/// two routes only, via [`axum::routing::MethodRouter::layer`] — every other
+/// route (including the JSON `#[server]` fn endpoints Dioxus mounts under
+/// `/api`) keeps axum's global 2 MB default, which is exactly what PURPLE
+/// §P3 T2.5(b) proves by demonstrating a 413 on an unraised route with the
+/// same handler.
 const UPLOAD_PHOTO_BODY_LIMIT_BYTES: usize = 25 * 1024 * 1024;
 
 /// Build the production axum router for `config`. Pure and synchronous so
@@ -121,11 +131,13 @@ pub fn build_router(config: &FamilyHubConfig) -> Router {
             post(crate::server::api::photos::upload_photo_handler)
                 .layer(DefaultBodyLimit::max(UPLOAD_PHOTO_BODY_LIMIT_BYTES)),
         )
-        .nest_service("/uploads", uploads_router(config))
-        .nest_service(
-            "/assets/screensaver",
-            ServeDir::new(config.screensaver_dir()),
+        .route(
+            "/api/upload_screensaver_image",
+            post(crate::server::api::screensaver::upload_screensaver_image_handler)
+                .layer(DefaultBodyLimit::max(UPLOAD_PHOTO_BODY_LIMIT_BYTES)),
         )
+        .nest_service("/uploads", uploads_router(config))
+        .nest_service("/assets/screensaver", screensaver_router(config))
         .serve_dioxus_application(ServeConfig::new(), App)
 }
 
@@ -154,15 +166,31 @@ fn uploads_router(config: &FamilyHubConfig) -> Router {
         .layer(axum::middleware::from_fn(uploads_security_headers))
 }
 
+/// `/assets/screensaver` as its own tiny `Router<()>`, mirroring
+/// [`uploads_router`] exactly (T2.7 reusing T2.5's pipeline, including its
+/// headers) — every screensaver photo is this server's own re-encoded JPEG
+/// (T0.7's committed placeholders included, R-31/G8), served with the same
+/// `nosniff`/`attachment` belt-and-braces [`uploads_security_headers`]
+/// already gives `/uploads`.
+fn screensaver_router(config: &FamilyHubConfig) -> Router {
+    Router::new()
+        .fallback_service(ServeDir::new(config.screensaver_dir()))
+        .layer(axum::middleware::from_fn(uploads_security_headers))
+}
+
 /// `X-Content-Type-Options: nosniff` + `Content-Disposition: attachment` on
-/// every `/uploads` response (PURPLE §P3 T2.5(e), R-23c). `upload_photo_handler`
-/// already re-encodes every stored image through the `image` crate, which
-/// strips anything that isn't valid JPEG/PNG/WebP pixel data — these two
-/// headers are the belt to that re-encode's braces: even if a byte sequence
-/// somehow survived re-encoding *and* got served with a browser-guessed
-/// `Content-Type`, `nosniff` stops the browser from sniffing its own MIME
-/// type and `attachment` refuses to render it inline (R-23: "MIME→stored
-/// XSS").
+/// every `/uploads` **and** `/assets/screensaver` response (PURPLE §P3
+/// T2.5(e), R-23c, reused by T2.7). `upload_photo_handler` and
+/// `upload_screensaver_image_handler` both re-encode every stored image
+/// through the `image` crate, which strips anything that isn't valid
+/// JPEG/PNG/WebP pixel data — these two headers are the belt to that
+/// re-encode's braces: even if a byte sequence somehow survived re-encoding
+/// *and* got served with a browser-guessed `Content-Type`, `nosniff` stops
+/// the browser from sniffing its own MIME type and `attachment` refuses to
+/// render it inline (R-23: "MIME→stored XSS"). Neither header affects an
+/// `<img>` tag's own inline rendering (only top-level navigation/"Save
+/// as"), which is how both the TV screensaver and the phone's task photos
+/// already display these files.
 async fn uploads_security_headers(request: Request, next: Next) -> Response {
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
@@ -365,6 +393,13 @@ pub async fn run(config: FamilyHubConfig) {
     // T1.6 H-15: register the nightly backup / retention sweep on the
     // day-rolled hook. Exactly once — each call adds another hook closure.
     crate::server::backup::register_nightly_hooks();
+    // T2.7 (reconciled with T2.5): start the optional screensaver schedule
+    // loop at boot rather than waiting for the first screensaver server fn
+    // or upload to self-start it (same H-7 precedent as the two calls above;
+    // closes the "production wiring gap" the first pass of T2.7 logged).
+    // `OnceLock`-guarded, so this and any later self-start call are both
+    // harmless.
+    crate::server::api::screensaver::ensure_background_tasks();
 
     // Certificate source. Only `SelfSignedCa` exists in this wave; an
     // unrecognised `certs.mode` fails here, loudly, rather than at the
