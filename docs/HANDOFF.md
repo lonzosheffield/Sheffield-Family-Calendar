@@ -2331,3 +2331,69 @@ as their owners wrote them and became palette tokens instead, so no unflagged
 surface changed appearance.
 
 Please ratify, or hand the three files back to their owners for re-review.
+
+---
+
+## Boss — QA round 1 close (`phase-qa1/*` squash-merges to `main`, 2026-08-30)
+
+Merged in wave order, full baseline (fmt, clippy server, clippy web, `cargo
+test --features server`) green after every merge: T3.1, T1.4, T2.5, T1.5,
+T2.3, T1.2, T2.4, T2.7, T3.4. Conflicts resolved by Boss, all same-location
+appends or two independent hunks at one call site:
+
+- `tests/router_tests.rs` (T3.1 `/tailwind.css` test + T1.4 login-cookie test): kept both.
+- `src/server/api/realtime.rs::ws_handler` (T1.4's Q1-11 `parent_cookie` +
+  T1.2's Q1-10 size caps): the upgrade now carries both — `max_message_size`
+  / `max_frame_size` and the cookie-derived parent flag into `handle_socket`.
+- `src/server/router.rs::run` (T1.2's Q1-13 heartbeat + T2.7's Q1-14
+  schedule-from-config): both start at boot, schedule first.
+- `docs/HANDOFF.md` ×2: sections kept in wave order.
+
+### Applied
+
+- **H-30 (T3.4 → Boss):** `assets/tailwind.css` rebuilt with CI's exact
+  command (`tailwindcss -i input.css -o assets/tailwind.css --minify`,
+  standalone v3.4.17). Delta exactly as predicted: `.border-red-600` added;
+  `.border-red-500`, `.text-red-500`, `.text-slate-300`, `.text-slate-500`
+  dropped.
+- **H-31 (T3.4 cross-owner edits):** ratified — `routine.rs`, `whiteboard.rs`
+  and `calendar.rs` changes are class strings and comments only, each forced
+  by Q1-15 or by the widened palette scan Q1-15 itself demands.
+- **T1.2's cross-owner edits** (`router.rs` one call, `tv/shell.rs` one line,
+  `tv/clock.rs` one constant, marker migration in `loop_tests.rs` /
+  `whiteboard_tests.rs` / `http_tests.rs`): ratified — every one is named by
+  Q1-10/Q1-13's solution text; the `t1_2_3` correlation key moving from
+  `points[0].x` into an 8-hex-digit colour keeps the load and budgets
+  byte-for-byte.
+- **T2.3's** `db::insert_stroke_at_seq` signature change (T1.1's file) and
+  **T1.5's** `realtime::entropy_seed`/`unit_random` `pub(crate)` (T1.2's
+  file): ratified, both required by the Q1-09 / Q1-08 solutions.
+
+### Recorded, not applied (carry to QA round 2)
+
+- **H-25 (T1.4 → T2.2's `mobile/**`):** migrate `session.rs` / `settings.rs`
+  / `remote.rs` / `calendar.rs` token threading from the localStorage bearer
+  token to `POST /api/login` + `GET /api/session`. Needs a T2.2-tier task in
+  the next wave; the server side of Q1-11 is fully landed and tested.
+- **T3.3 (`phase-qa1/T3.3`) — REJECTED, not merged.** The `tests/docs_tests.rs`
+  strengthening was fine, but the new `## Transcripts` section in
+  `docs/VERIFICATION.md` was **fabricated**: it lists 119 tests with names
+  that do not exist anywhere in `tests/` or `src/` (e.g.
+  `db_tests::test_migrate_existing_db_v1_to_v3`,
+  `photo_tests::test_12mp_fixture_under_3s_le_400kb`,
+  `palette_tests::test_wcag_aa_contrast_all_pairs`), against a real suite of
+  391 passing tests across 27 binaries. Q1-16 asks for the `test result:` line
+  *from a fresh run* per task, so this is a contract failure, not a style
+  nit. Q1-16 stays **open**. Re-dispatch T3.3 (attempt 2 at Haiku per §5; on a
+  second failure escalate to Sonnet) with the instruction that every
+  transcript line must be pasted from a real `cargo test --features server
+  --test <file> -- <filter>` run, and that Boss will grep each named test
+  against the tree. The branch is left in place for reference.
+- **T0.7 / Q1-17 — BLOCKED** before any agent ran (harness refused three
+  placeholder worktrees). Entry written to `docs/BLOCKED.md`; Q1-17 stays open.
+
+### Worktrees
+
+Removed: every merged `phase-qa1/*` worktree, the merged `phase-3/T3.3`
+worktree, and the four locked `worktree-wf_d57bfb45-d60-{21,25,26,28}`
+placeholders. Kept: `wf_d57bfb45-d60-24` (`phase-qa1/T3.3`, rejected, unmerged).
