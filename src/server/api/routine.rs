@@ -132,41 +132,6 @@ pub async fn toggle_routine_task(
     }
 }
 
-/// Create a custom task, optionally storing a photo captured on a phone.
-#[server(endpoint = "create_photo_task")]
-pub async fn create_photo_task(
-    user_id: u32,
-    title: String,
-    photo_base64: Option<String>,
-) -> Result<(), ServerFnError> {
-    #[cfg(feature = "server")]
-    {
-        let pool = crate::server::db::pool()
-            .await
-            .map_err(super::to_server_error)?;
-        crate::server::db::insert_custom_task(
-            pool,
-            user_id,
-            &title,
-            photo_base64.as_deref(),
-            crate::server::db::upload_dir(),
-        )
-        .await
-        .map_err(super::to_server_error)?;
-
-        super::realtime::publish(&crate::shared::types::ServerMessage::TasksUpdated {
-            user_id: i64::from(user_id),
-            date: chrono::Local::now().format("%Y-%m-%d").to_string(),
-        });
-        Ok(())
-    }
-    #[cfg(not(feature = "server"))]
-    {
-        let _ = (user_id, title, photo_base64);
-        unreachable!("server function bodies only run on the server")
-    }
-}
-
 /// Custom tasks belonging to `user_id`, newest first.
 #[server(endpoint = "get_custom_tasks")]
 pub async fn get_custom_tasks(user_id: u32) -> Result<Vec<CustomTaskView>, ServerFnError> {

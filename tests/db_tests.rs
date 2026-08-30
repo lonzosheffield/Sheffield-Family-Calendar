@@ -100,14 +100,21 @@ async fn full_routine_reaches_one_hundred_percent() {
     assert!((routine_progress(&items) - 100.0).abs() < 1e-9);
 }
 
+/// **Q1-06**: `insert_custom_task` no longer decodes a base64 payload and
+/// writes it to disk itself — it stores whatever already-stored web path it
+/// is given, exactly like [`db::insert_custom_task_with_due_date`]. This test
+/// used to prove the base64 decode-and-write; it now proves the given path is
+/// stored verbatim and the file this test wrote (standing in for a real
+/// upload the multipart route already re-encoded) is left untouched.
 #[tokio::test]
-async fn custom_task_stores_photo_on_disk() {
+async fn custom_task_stores_the_given_path_and_the_file_remains() {
     let pool = memory_pool().await;
     let dir = std::env::temp_dir().join(format!("sheffield-uploads-{}", std::process::id()));
-    // "hello" as base64, wrapped in a data URI like a browser would send.
-    let photo = "data:image/jpeg;base64,aGVsbG8=";
+    std::fs::create_dir_all(&dir).expect("uploads dir is creatable");
+    let stored = dir.join("t.jpg");
+    std::fs::write(&stored, b"hello").expect("fixture photo is writable");
 
-    let id = db::insert_custom_task(&pool, 3, "Feed the dog", Some(photo), &dir)
+    let id = db::insert_custom_task(&pool, 3, "Feed the dog", Some("/uploads/t.jpg"))
         .await
         .expect("insert");
     assert!(id >= 1);
@@ -117,10 +124,12 @@ async fn custom_task_stores_photo_on_disk() {
     assert_eq!(tasks[0].title, "Feed the dog");
     assert!(!tasks[0].is_completed);
 
-    let path = tasks[0].photo_path.clone().expect("photo path");
-    assert!(path.starts_with("/uploads/task-3-"));
-    let stored = dir.join(path.trim_start_matches("/uploads/"));
-    assert_eq!(std::fs::read(&stored).expect("stored photo"), b"hello");
+    assert_eq!(tasks[0].photo_path.as_deref(), Some("/uploads/t.jpg"));
+    assert_eq!(
+        std::fs::read(&stored).expect("stored photo"),
+        b"hello",
+        "insert_custom_task must not touch the file, only record the given path"
+    );
 
     db::set_custom_task_completion(&pool, tasks[0].id, true)
         .await
@@ -134,9 +143,8 @@ async fn custom_task_stores_photo_on_disk() {
 #[tokio::test]
 async fn custom_task_without_photo_has_no_path() {
     let pool = memory_pool().await;
-    let dir = std::env::temp_dir().join("sheffield-uploads-unused");
 
-    db::insert_custom_task(&pool, 1, "Read a chapter", None, &dir)
+    db::insert_custom_task(&pool, 1, "Read a chapter", None)
         .await
         .expect("insert");
 
@@ -182,10 +190,8 @@ async fn set_routine_completion_violates_foreign_key_for_an_unknown_profile() {
 #[tokio::test]
 async fn insert_custom_task_violates_foreign_key_for_an_unknown_profile() {
     let pool = memory_pool().await;
-    let dir =
-        std::env::temp_dir().join(format!("sheffield-uploads-fk-test-{}", std::process::id()));
 
-    let result = db::insert_custom_task(&pool, 9999, "Feed the dog", None, &dir).await;
+    let result = db::insert_custom_task(&pool, 9999, "Feed the dog", None).await;
     let err = result.expect_err("user_id 9999 has no matching profiles row");
     assert!(
         err.to_string().to_lowercase().contains("foreign key"),

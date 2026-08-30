@@ -9,6 +9,7 @@
 //! | d | a valid PNG renamed `.jpg` → stored with the correct extension | `t2_5_d_*` |
 //! | e | `GET /uploads/<f>` carries `nosniff` and `attachment` | `t2_5_e_*` |
 //! | f | `due_date = yesterday` hidden from today's list; delete removes row + file | `t2_5_f_*` |
+//! | g | (Q1-07) an upload with no parent session → 401, nothing written | `t2_5_g_*` |
 //!
 //! Own test binary/process, same reasoning `tests/routine_tests.rs` gives:
 //! integration test binaries cannot share private helpers, and each `cargo
@@ -21,7 +22,16 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use family_calendar::server::auth;
 use family_calendar::server::db;
+
+/// Mint a fresh parent session token for a test that needs one. `auth`'s
+/// session store is process-global, and this test binary's `axum::serve`
+/// runs in-process (`tokio::spawn`), so a token minted here is exactly what
+/// the running server's `auth::require_session` will accept (Q1-07).
+fn parent_token() -> String {
+    auth::issue_session()
+}
 
 // ---------------------------------------------------------------------------
 // Harness (mirrors tests/routine_tests.rs::init_test_env / spawn_test_server)
@@ -222,6 +232,7 @@ async fn t2_5_a_a_real_12mp_photo_uploads_fast_and_small() {
         addr,
         "/api/upload_photo",
         &[
+            text_part("auth", parent_token()),
             text_part("user_id", "1"),
             text_part("title", "Clean your room"),
             file_part("photo", "photo_12mp.jpg", "image/jpeg", fixture),
@@ -271,10 +282,17 @@ async fn t2_5_b_without_the_raised_limit_a_large_upload_413s() {
     // handler ever gets to sniff anything.
     let oversized = vec![0u8; 3 * 1024 * 1024];
 
+    // Q1-07: `require_parent_session` runs the moment the `photo` field is
+    // seen, *before* its bytes are read — so a request lacking `auth`
+    // never reaches the body read this assertion is about at all (it 401s
+    // first, which the test infra would legitimately see as a dropped
+    // connection while a 3 MB body is still mid-flight). A valid session is
+    // what lets the request reach the actual body-size check.
     let response = post_multipart(
         addr,
         "/api/upload_photo",
         &[
+            text_part("auth", parent_token()),
             text_part("user_id", "1"),
             text_part("title", "Too big"),
             file_part("photo", "big.jpg", "image/jpeg", oversized),
@@ -304,6 +322,7 @@ async fn t2_5_c_an_svg_is_rejected_and_nothing_is_written() {
         addr,
         "/api/upload_photo",
         &[
+            text_part("auth", parent_token()),
             text_part("user_id", "2"),
             text_part("title", "Sneaky svg"),
             file_part("photo", "x.svg", "image/svg+xml", svg),
@@ -348,6 +367,7 @@ async fn t2_5_d_a_png_renamed_jpg_is_reencoded_with_the_correct_extension() {
         addr,
         "/api/upload_photo",
         &[
+            text_part("auth", parent_token()),
             text_part("user_id", "3"),
             text_part("title", "Sneaky png"),
             // Filename and Content-Type both claim JPEG; the bytes are a
@@ -383,6 +403,7 @@ async fn t2_5_e_uploads_are_served_with_nosniff_and_attachment() {
         addr,
         "/api/upload_photo",
         &[
+            text_part("auth", parent_token()),
             text_part("user_id", "1"),
             text_part("title", "Headers check"),
             file_part("photo", "photo.jpg", "image/jpeg", tiny_png_bytes()),
@@ -453,10 +474,12 @@ async fn t2_5_f_a_task_due_yesterday_is_hidden_and_delete_removes_row_and_file()
 
     // Upload a real task with a photo, then delete it: the row *and* the
     // file must both go.
+    let token = parent_token();
     let upload = post_multipart(
         addr,
         "/api/upload_photo",
         &[
+            text_part("auth", token.clone()),
             text_part("user_id", user_id.to_string()),
             text_part("title", "Delete me"),
             file_part("photo", "photo.jpg", "image/jpeg", tiny_png_bytes()),
@@ -471,10 +494,14 @@ async fn t2_5_f_a_task_due_yesterday_is_hidden_and_delete_removes_row_and_file()
     let stored = upload_dir.join(file_name);
     assert!(stored.exists(), "the uploaded file exists before delete");
 
+    // Q1-07: delete_custom_task now takes the parent session as its first
+    // argument.
     let delete_response = http_client()
         .post(format!("http://{addr}/api/delete_custom_task"))
         .header("content-type", "application/json")
-        .body(format!(r#"{{"user_id":{user_id},"task_id":{task_id}}}"#))
+        .body(format!(
+            r#"{{"auth":"{token}","user_id":{user_id},"task_id":{task_id}}}"#
+        ))
         .send()
         .await
         .expect("delete_custom_task should respond");
@@ -487,4 +514,43 @@ async fn t2_5_f_a_task_due_yesterday_is_hidden_and_delete_removes_row_and_file()
     let owner_after = db::custom_task_owner(pool, task_id).await.expect("query");
     assert_eq!(owner_after, None, "the row must be gone after delete");
     assert!(!stored.exists(), "the photo file must be gone after delete");
+}
+
+// ---------------------------------------------------------------------------
+// (g) Q1-07: an upload with no parent session is 401 and writes nothing
+// ---------------------------------------------------------------------------
+
+/// PLAN §0.3/§P5.5 default 35: photo capture and task administration live
+/// behind the parent PIN. Before Q1-07, this route accepted uploads from any
+/// LAN client with no credential at all. No `auth` field at all (not merely
+/// an invalid one — `require_session("")` must also reject).
+#[tokio::test]
+async fn t2_5_g_an_upload_without_a_parent_session_is_401_and_writes_nothing() {
+    let (addr, upload_dir) = spawn_test_server().await;
+    let before = count_files(&upload_dir);
+
+    let response = post_multipart(
+        addr,
+        "/api/upload_photo",
+        &[
+            text_part("user_id", "1"),
+            text_part("title", "No session"),
+            file_part("photo", "photo.jpg", "image/jpeg", tiny_png_bytes()),
+        ],
+    )
+    .await;
+
+    assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        count_files(&upload_dir),
+        before,
+        "an unauthenticated upload must not write any file"
+    );
+
+    let pool = db::pool().await.expect("pool");
+    let tasks = db::custom_tasks(pool, 1).await.expect("tasks");
+    assert!(
+        tasks.iter().all(|task| task.title != "No session"),
+        "an unauthenticated upload must not create a custom task row"
+    );
 }

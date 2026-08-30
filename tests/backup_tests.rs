@@ -223,15 +223,9 @@ async fn restore_drill_recreates_the_live_database_from_a_backup() {
                 .expect("log");
         }
     }
-    db::insert_custom_task(
-        &pools.write,
-        2,
-        "Restore-drill task",
-        None,
-        dir.join("uploads"),
-    )
-    .await
-    .expect("custom task");
+    db::insert_custom_task(&pools.write, 2, "Restore-drill task", None)
+        .await
+        .expect("custom task");
 
     let expected_logs = count(&pools.read, "daily_routine_logs")
         .await
@@ -374,8 +368,12 @@ async fn retention_keeps_the_newest_fourteen_and_deletes_the_rest() {
 async fn delete_custom_task_removes_the_row_and_its_photo_file() {
     let pool = migrated_memory_pool().await;
     let dir = scratch_dir("delete-task-uploads");
+    // Q1-06: insert_custom_task no longer writes photo bytes itself — it
+    // stores an already-stored web path, so this stands in for what the
+    // multipart route would have written before calling it.
+    std::fs::write(dir.join("t.jpg"), b"hello").expect("fixture photo is writable");
 
-    let task_id = db::insert_custom_task(&pool, 1, "Clean your room", Some("aGVsbG8="), &dir)
+    let task_id = db::insert_custom_task(&pool, 1, "Clean your room", Some("/uploads/t.jpg"))
         .await
         .expect("insert task with a photo");
 
@@ -426,7 +424,7 @@ async fn delete_custom_task_without_a_photo_just_removes_the_row() {
     let pool = migrated_memory_pool().await;
     let dir = scratch_dir("delete-task-no-photo");
 
-    let task_id = db::insert_custom_task(&pool, 3, "Feed the dog", None, &dir)
+    let task_id = db::insert_custom_task(&pool, 3, "Feed the dog", None)
         .await
         .expect("insert task without a photo");
 
@@ -611,8 +609,9 @@ async fn nightly_backup_never_touches_the_pki_directory() {
 async fn purge_old_photos_removes_stale_files_and_nulls_the_db_reference() {
     let pool = migrated_memory_pool().await;
     let dir = scratch_dir("photo-retention");
+    std::fs::write(dir.join("t.jpg"), b"hello").expect("fixture photo is writable");
 
-    let task_id = db::insert_custom_task(&pool, 1, "Old task", Some("aGVsbG8="), &dir)
+    let task_id = db::insert_custom_task(&pool, 1, "Old task", Some("/uploads/t.jpg"))
         .await
         .expect("insert task with a photo");
     let tasks = db::custom_tasks(&pool, 1).await.expect("tasks");
@@ -661,8 +660,9 @@ async fn purge_old_photos_removes_stale_files_and_nulls_the_db_reference() {
 async fn purge_old_photos_leaves_recent_files_alone() {
     let pool = migrated_memory_pool().await;
     let dir = scratch_dir("photo-retention-fresh");
+    std::fs::write(dir.join("t.jpg"), b"hello").expect("fixture photo is writable");
 
-    db::insert_custom_task(&pool, 1, "Fresh task", Some("aGVsbG8="), &dir)
+    db::insert_custom_task(&pool, 1, "Fresh task", Some("/uploads/t.jpg"))
         .await
         .expect("insert task with a photo");
 

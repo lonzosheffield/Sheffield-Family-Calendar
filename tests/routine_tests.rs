@@ -366,7 +366,7 @@ async fn t1_5_3_the_same_idempotency_key_replayed_produces_one_row_change() {
 
     const USER_ID: u32 = 3;
     let title = format!("t1.5.3 task {}", uuid_ish());
-    let task_id = db::insert_custom_task(pool, USER_ID, &title, None, db::upload_dir())
+    let task_id = db::insert_custom_task(pool, USER_ID, &title, None)
         .await
         .expect("insert task");
 
@@ -420,7 +420,7 @@ async fn t1_5_4_a_profile_cannot_toggle_another_profiles_custom_task() {
     const OWNER: u32 = 3;
     const ATTACKER: u32 = 2;
     let title = format!("t1.5.4 task {}", uuid_ish());
-    let task_id = db::insert_custom_task(pool, OWNER, &title, None, db::upload_dir())
+    let task_id = db::insert_custom_task(pool, OWNER, &title, None)
         .await
         .expect("insert task");
 
@@ -460,7 +460,7 @@ async fn t1_5_5_toggle_custom_task_publishes_tasks_updated() {
 
     const USER_ID: u32 = 4;
     let title = format!("t1.5.5 task {}", uuid_ish());
-    let task_id = db::insert_custom_task(pool, USER_ID, &title, None, db::upload_dir())
+    let task_id = db::insert_custom_task(pool, USER_ID, &title, None)
         .await
         .expect("insert task");
 

@@ -1,13 +1,25 @@
 //! Photo-upload multipart route and delete-with-file server fn (T2.5).
 //!
-//! Replaces the v1 base64-through-a-`#[server]`-fn path
-//! ([`super::routine::create_photo_task`]) for real camera photos: axum's
-//! default body limit is 2 MB (`DefaultBodyLimit`, `axum-core`), so a modern
-//! phone photo 413'd before it ever reached the database (G14/R-08). This
-//! route gets its own raised limit — `DefaultBodyLimit::max(25 MiB)`, applied
-//! **only** to this one route in `router.rs` (T2.5's edit there, PURPLE
-//! §P3 T2.5) — and a real streaming `multipart/form-data` body instead of a
-//! base64 blob inflating the JSON payload by another third.
+//! Replaces the v1 base64-through-a-`#[server]`-fn path (the old
+//! `routine::create_photo_task`, deleted at QA round 1 — Q1-06: it was still
+//! mounted, unauthenticated, and wrote decoded bytes straight to disk with no
+//! sniff, allowlist or re-encode) for real camera photos: axum's default body
+//! limit is 2 MB (`DefaultBodyLimit`, `axum-core`), so a modern phone photo
+//! 413'd before it ever reached the database (G14/R-08). This route gets its
+//! own raised limit — `DefaultBodyLimit::max(25 MiB)`, applied **only** to
+//! this one route in `router.rs` (T2.5's edit there, PURPLE §P3 T2.5) — and a
+//! real streaming `multipart/form-data` body instead of a base64 blob
+//! inflating the JSON payload by another third.
+//!
+//! **Q1-07: every mutating entry point here requires the parent session.**
+//! `upload_photo_handler` and `screensaver::upload_screensaver_image_handler`
+//! read an `auth` multipart text field — which the client sends **before**
+//! `photo` — and reject with 401 before the photo bytes are read if
+//! `auth::require_session` does not accept it; [`delete_custom_task`] takes
+//! `auth: SessionToken` as its first argument and checks it before touching
+//! the database. Calendar CRUD (T2.4) already worked this way; this closes
+//! the gap QA found where any LAN client could create or delete photo tasks
+//! for any child with no credential at all.
 //!
 //! **Server-side re-encode, not just an extension check (R-23c).** The
 //! uploaded bytes' format is *sniffed from its magic bytes*
@@ -76,24 +88,44 @@ fn allowed_format(format: image::ImageFormat) -> Option<(&'static str, image::Im
     }
 }
 
+/// **Q1-07**: 401 unless the caller holds a valid parent session, checked via
+/// `auth::require_session`. Shared by [`upload_photo_handler`] and
+/// `super::screensaver::upload_screensaver_image_handler` — both multipart
+/// routes read the same `auth` text field and gate on the same check, rather
+/// than each carrying its own copy of it. Boxed for the same reason
+/// [`store_photo`]'s `Result` is (`clippy::result_large_err`).
+#[cfg(feature = "server")]
+pub(crate) fn require_parent_session(auth: Option<&str>) -> Result<(), Box<Response>> {
+    crate::server::auth::require_session(auth.unwrap_or_default()).map_err(|_| {
+        Box::new((StatusCode::UNAUTHORIZED, "a parent session is required").into_response())
+    })
+}
+
 /// `POST /api/upload_photo` — axum `Multipart`, wired into `router.rs` with
 /// its own raised `DefaultBodyLimit` (R-08). Multipart fields:
 ///
 /// | Field | Required | Meaning |
 /// | --- | --- | --- |
+/// | `auth` | yes, **first** | the parent session token (Q1-07); rejected with 401 before the `photo` bytes are read |
 /// | `user_id` | yes | the profile the task belongs to |
 /// | `title` | yes, non-empty | the task's title |
 /// | `due_date` | no | `YYYY-MM-DD`; the task auto-hides once this passes |
 /// | `photo` | no | the image file |
 ///
 /// A request with no `photo` field still creates a task (a title-only custom
-/// task, same as the v1 base64 fn with `photo_base64: None`).
+/// task). `auth` must still precede every other field this handler cares
+/// about: it is checked the moment `photo` is seen, and again after the loop
+/// for a request that sends no photo at all, so a title-only task is gated
+/// exactly the same way (R-23, PLAN §0.3/§P5.5 default 35 — photo capture and
+/// task administration live behind the parent PIN).
 #[cfg(feature = "server")]
 pub async fn upload_photo_handler(mut multipart: Multipart) -> Response {
+    let mut auth: Option<String> = None;
     let mut user_id: Option<u32> = None;
     let mut title: Option<String> = None;
     let mut due_date: Option<String> = None;
     let mut photo_bytes: Option<Vec<u8>> = None;
+    let mut session_checked = false;
 
     loop {
         let field = match multipart.next_field().await {
@@ -103,6 +135,11 @@ pub async fn upload_photo_handler(mut multipart: Multipart) -> Response {
         };
         let field_name = field.name().unwrap_or_default().to_string();
         match field_name.as_str() {
+            "auth" => {
+                if let Ok(text) = field.text().await {
+                    auth = Some(text);
+                }
+            }
             "user_id" => {
                 if let Ok(text) = field.text().await {
                     user_id = text.trim().parse().ok();
@@ -124,14 +161,25 @@ pub async fn upload_photo_handler(mut multipart: Multipart) -> Response {
                     }
                 }
             }
-            "photo" => match field.bytes().await {
-                Ok(bytes) => {
-                    if !bytes.is_empty() {
-                        photo_bytes = Some(bytes.to_vec());
+            "photo" => {
+                // Checked here, before the (potentially large) photo bytes
+                // are read off the wire, so an unauthenticated request never
+                // pays for buffering a photo it will be refused for anyway.
+                if !session_checked {
+                    if let Err(response) = require_parent_session(auth.as_deref()) {
+                        return *response;
                     }
+                    session_checked = true;
                 }
-                Err(err) => return err.into_response(),
-            },
+                match field.bytes().await {
+                    Ok(bytes) => {
+                        if !bytes.is_empty() {
+                            photo_bytes = Some(bytes.to_vec());
+                        }
+                    }
+                    Err(err) => return err.into_response(),
+                }
+            }
             _ => {
                 // Unknown field: drain it and move on rather than error, so a
                 // future client can add a field without breaking this server.
@@ -139,6 +187,13 @@ pub async fn upload_photo_handler(mut multipart: Multipart) -> Response {
                     return err.into_response();
                 }
             }
+        }
+    }
+
+    // A title-only request (no `photo` field) never hit the check above.
+    if !session_checked {
+        if let Err(response) = require_parent_session(auth.as_deref()) {
+            return *response;
         }
     }
 
@@ -326,10 +381,21 @@ fn encode(image: &image::DynamicImage, format: image::ImageFormat) -> image::Ima
 /// is the function that already wraps that row-delete with the file removal).
 /// `user_id` must own `task_id` — the same ownership rule T1.5 established for
 /// `toggle_custom_task` (R-23: "user 2 cannot toggle/delete user 3's task").
+///
+/// **Q1-07**: `auth` is checked with `auth::require_session` before anything
+/// else — deletion is parent-only, the same rule the multipart upload route
+/// above enforces, and the one calendar CRUD (`api::calendar`) already had.
 #[server(endpoint = "delete_custom_task")]
-pub async fn delete_custom_task(user_id: u32, task_id: u32) -> Result<(), ServerFnError> {
+pub async fn delete_custom_task(
+    auth: crate::shared::types::SessionToken,
+    user_id: u32,
+    task_id: u32,
+) -> Result<(), ServerFnError> {
     #[cfg(feature = "server")]
     {
+        crate::server::auth::require_session(&auth)
+            .map_err(|err| ServerFnError::new(err.to_string()))?;
+
         // The ownership check only reads (H-9): the read pool, not the write
         // one, exactly like `toggle_custom_task`'s equivalent check.
         let read_pool = crate::server::db::read_pool()
@@ -365,7 +431,7 @@ pub async fn delete_custom_task(user_id: u32, task_id: u32) -> Result<(), Server
     }
     #[cfg(not(feature = "server"))]
     {
-        let _ = (user_id, task_id);
+        let _ = (auth, user_id, task_id);
         unreachable!("server function bodies only run on the server")
     }
 }

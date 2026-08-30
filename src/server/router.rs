@@ -565,7 +565,7 @@ pub async fn run(config: FamilyHubConfig) -> Result<(), RunError> {
     // logged before anything else binds or opens a file.
     config.ensure_dirs_and_log().map_err(RunError::DataDir)?;
     ensure_public_dir_exists();
-    // Downstream server-fn bodies (`db::pool`, `api::create_photo_task`,
+    // Downstream server-fn bodies (`db::pool`, `api::toggle_custom_task`,
     // `api::list_screensaver_images`) each resolve `FamilyHubConfig`
     // independently; pinning `DATABASE_URL` here keeps every one of them,
     // and this process's own `db::pool()` call below, pointed at the exact

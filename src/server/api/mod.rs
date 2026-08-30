@@ -41,8 +41,7 @@ pub use profiles::{
     rename_profile, set_initial_parent_pin, set_profile_color, verify_parent_pin,
 };
 pub use routine::{
-    create_photo_task, get_custom_tasks, get_daily_routine, today, toggle_custom_task,
-    toggle_routine_task,
+    get_custom_tasks, get_daily_routine, today, toggle_custom_task, toggle_routine_task,
 };
 pub use screensaver::list_screensaver_images;
 pub use tv::tv_clock;

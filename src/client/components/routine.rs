@@ -3,6 +3,7 @@ use dioxus::prelude::*;
 
 use crate::client::app::use_app_state;
 use crate::client::components::mobile::queue::{self, QueuedMutation};
+use crate::client::components::mobile::session;
 use crate::client::realtime::use_realtime;
 use crate::server::api::{
     delete_custom_task, get_custom_tasks, get_daily_routine, today, toggle_custom_task,
@@ -241,7 +242,12 @@ pub fn Routine(compact: bool) -> Element {
                                         let id = task.id;
                                         let owner = task.user_id;
                                         async move {
-                                            let _ = delete_custom_task(owner, id).await;
+                                            // Q1-07: deletion is parent-only; the server
+                                            // rejects an empty/invalid token with 401 either
+                                            // way, but this avoids a doomed round trip when
+                                            // this phone was never signed in at all.
+                                            let auth = session::token().unwrap_or_default();
+                                            let _ = delete_custom_task(auth, owner, id).await;
                                             tasks.restart();
                                         }
                                     },
@@ -431,6 +437,15 @@ fn PhotoTaskDialog(on_close: EventHandler<()>, on_created: EventHandler<()>) -> 
                     p { class: "text-sm text-sheffield-dark", "Photo attached" }
                 }
 
+                // Q1-07: task creation (photo or title-only) is parent-only,
+                // same as delete. The server enforces this regardless; this
+                // is the honest UI state for a phone that never signed in.
+                if !session::is_parent() {
+                    p { class: "text-sm font-semibold text-red-600",
+                        "Sign in with the parent PIN under Settings to add tasks"
+                    }
+                }
+
                 div { class: "flex justify-end gap-2",
                     button {
                         class: "rounded-xl px-4 py-2 font-semibold text-slate-600",
@@ -439,14 +454,15 @@ fn PhotoTaskDialog(on_close: EventHandler<()>, on_created: EventHandler<()>) -> 
                     }
                     button {
                         class: "rounded-xl bg-sheffield-dark px-5 py-2 font-bold text-white disabled:opacity-50",
-                        disabled: saving() || title().trim().is_empty(),
+                        disabled: saving() || title().trim().is_empty() || !session::is_parent(),
                         onclick: move |_| async move {
                             saving.set(true);
                             let user_id = (state.active_user_id)();
                             let (mime, bytes) = photo().unwrap_or_else(|| (String::new(), Vec::new()));
                             let due = due_date();
                             let due = if due.trim().is_empty() { None } else { Some(due) };
-                            let ok = upload::submit(bytes, mime, title().trim().to_string(), user_id, due).await;
+                            let auth = session::token();
+                            let ok = upload::submit(bytes, mime, title().trim().to_string(), user_id, due, auth).await;
                             saving.set(false);
                             if ok {
                                 on_created.call(());
@@ -507,14 +523,20 @@ mod upload {
     /// server accepted the task — `false` covers both "the network is down"
     /// and "the server rejected it", the same coarse signal
     /// [`super::PhotoTaskDialog`] already showed for the old base64 path.
+    ///
+    /// **Q1-07**: `auth` (the parent session token, `session::token()`) is
+    /// the first thing appended to the form — the server rejects the whole
+    /// request with 401 before it reads any `photo` bytes if this is missing
+    /// or invalid.
     pub async fn submit(
         bytes: Vec<u8>,
         mime: String,
         title: String,
         user_id: u32,
         due_date: Option<String>,
+        auth: Option<String>,
     ) -> bool {
-        imp::submit(bytes, mime, title, user_id, due_date).await
+        imp::submit(bytes, mime, title, user_id, due_date, auth).await
     }
 
     #[cfg(all(feature = "web", target_arch = "wasm32"))]
@@ -522,9 +544,10 @@ mod upload {
         use wasm_bindgen::prelude::*;
 
         #[wasm_bindgen(inline_js = r#"
-export async function family_hub_submit_task(bytes, mime, title, userId, dueDate) {
+export async function family_hub_submit_task(bytes, mime, title, userId, dueDate, auth) {
     try {
         const form = new FormData();
+        form.append('auth', auth ?? '');
         form.append('title', title);
         form.append('user_id', String(userId));
         if (dueDate) {
@@ -566,6 +589,7 @@ export async function family_hub_submit_task(bytes, mime, title, userId, dueDate
                 title: String,
                 user_id: u32,
                 due_date: Option<String>,
+                auth: Option<String>,
             ) -> bool;
         }
 
@@ -575,8 +599,9 @@ export async function family_hub_submit_task(bytes, mime, title, userId, dueDate
             title: String,
             user_id: u32,
             due_date: Option<String>,
+            auth: Option<String>,
         ) -> bool {
-            family_hub_submit_task(bytes, mime, title, user_id, due_date).await
+            family_hub_submit_task(bytes, mime, title, user_id, due_date, auth).await
         }
     }
 
@@ -592,6 +617,7 @@ export async function family_hub_submit_task(bytes, mime, title, userId, dueDate
             _title: String,
             _user_id: u32,
             _due_date: Option<String>,
+            _auth: Option<String>,
         ) -> bool {
             false
         }

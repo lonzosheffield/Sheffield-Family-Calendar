@@ -10,6 +10,7 @@
 //! - (idle-timeout and schedule assertions live as unit tests in
 //!   `src/client/components/screensaver.rs` and
 //!   `src/server/api/screensaver.rs` — pure state machines, not HTTP.)
+//! - (Q1-07) an upload with no parent session → 401, the list is unchanged.
 //!
 //! **Reconciled with T2.5 (`docs/HANDOFF.md` "T2.7 → T2.5, restated").** The
 //! upload endpoint below is now `axum::extract::Multipart`, the same shape
@@ -25,7 +26,15 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
+use family_calendar::server::auth;
 use family_calendar::server::db;
+
+/// Mint a fresh parent session token for a test that needs one — same
+/// reasoning `tests/photo_tests.rs::parent_token` documents: `auth`'s session
+/// store is process-global and this binary's server runs in-process.
+fn parent_token() -> String {
+    auth::issue_session()
+}
 
 /// Dioxus 0.7 mounts `#[server(endpoint = "...")]` functions under `/api`
 /// (see `tests/http_tests.rs`); `/api/upload_screensaver_image` is a raw
@@ -53,6 +62,14 @@ fn file_part(
         name,
         file: Some((filename, content_type)),
         bytes,
+    }
+}
+
+fn text_part(name: &'static str, value: impl Into<Vec<u8>>) -> Part {
+    Part {
+        name,
+        file: None,
+        bytes: value.into(),
     }
 }
 
@@ -255,7 +272,10 @@ async fn uploading_a_new_image_makes_it_appear_in_the_list() {
     let upload_response = post_multipart(
         addr,
         UPLOAD_ENDPOINT,
-        &[file_part("photo", "photo_12mp.jpg", "image/jpeg", raw)],
+        &[
+            text_part("auth", parent_token()),
+            file_part("photo", "photo_12mp.jpg", "image/jpeg", raw),
+        ],
     )
     .await;
 
@@ -323,12 +343,10 @@ async fn a_non_image_payload_is_rejected_and_nothing_is_added() {
     let upload_response = post_multipart(
         addr,
         UPLOAD_ENDPOINT,
-        &[file_part(
-            "photo",
-            "x.svg",
-            "image/svg+xml",
-            not_an_image.to_vec(),
-        )],
+        &[
+            text_part("auth", parent_token()),
+            file_part("photo", "x.svg", "image/svg+xml", not_an_image.to_vec()),
+        ],
     )
     .await;
 
@@ -399,5 +417,58 @@ async fn screensaver_images_are_served_with_nosniff_and_attachment() {
     assert!(
         disposition.contains("attachment"),
         "Content-Disposition was {disposition:?}"
+    );
+}
+
+/// Q1-07's twin of `tests/photo_tests.rs`'s
+/// `t2_5_g_an_upload_without_a_parent_session_is_401_and_writes_nothing`:
+/// before Q1-07, any LAN client could fill `screensaver/` with unbounded
+/// (up to 25 MiB) unauthenticated posts. With no `auth` field at all, the
+/// upload must 401 and the list must be unchanged.
+#[tokio::test]
+async fn an_upload_without_a_parent_session_is_401_and_writes_nothing() {
+    let addr = spawn_test_server().await;
+    let client = http_client();
+
+    let before_body = client
+        .post(format!("http://{addr}{LIST_ENDPOINT}"))
+        .header("content-type", "application/json")
+        .body("{}")
+        .send()
+        .await
+        .expect("list responds")
+        .text()
+        .await
+        .expect("list body");
+    let before: Vec<String> = serde_json::from_str(&before_body).expect("list is a JSON array");
+
+    let upload_response = post_multipart(
+        addr,
+        UPLOAD_ENDPOINT,
+        &[file_part("photo", "photo.jpg", "image/jpeg", vec![1, 2, 3])],
+    )
+    .await;
+
+    assert_eq!(
+        upload_response.status(),
+        reqwest::StatusCode::UNAUTHORIZED,
+        "an unauthenticated screensaver upload must 401"
+    );
+
+    let after_body = client
+        .post(format!("http://{addr}{LIST_ENDPOINT}"))
+        .header("content-type", "application/json")
+        .body("{}")
+        .send()
+        .await
+        .expect("list responds")
+        .text()
+        .await
+        .expect("list body");
+    let after: Vec<String> = serde_json::from_str(&after_body).expect("list is a JSON array");
+
+    assert_eq!(
+        after, before,
+        "an unauthenticated upload must not change the screensaver list"
     );
 }

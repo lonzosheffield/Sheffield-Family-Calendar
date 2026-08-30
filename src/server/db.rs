@@ -17,11 +17,10 @@
 //!   ([`on_midnight_tick`]) so the `-wal` sidecar cannot grow without bound on
 //!   a box that is never rebooted.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
-use base64::Engine;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeZone};
 use sqlx::migrate::Migrator;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
@@ -464,34 +463,26 @@ pub async fn set_routine_completion(
     Ok(())
 }
 
-/// Insert a custom task, persisting `photo_base64` to disk when supplied.
+/// Insert a custom task. `photo_path` is a **web path that has already been
+/// stored on disk** (`/uploads/<file>`) — never raw bytes to decode and write
+/// here. A thin wrapper over [`insert_custom_task_with_due_date`] with no due
+/// date, kept as its own function because most call sites (routine seeding,
+/// the offline-queue replay) never care about a due date at all.
+///
+/// **Q1-06**: this used to take a base64 payload and decode-and-write it to
+/// disk itself (`write_photo`), with no sniff, allowlist or re-encode — a
+/// direct bypass of R-23c's server-side re-encode. The only real caller of
+/// that path (the v1 `create_photo_task` server fn this replaced) is gone;
+/// the multipart route (`api::photos::upload_photo_handler`) already sniffs,
+/// downscales and re-encodes *before* calling this, via
+/// [`insert_custom_task_with_due_date`] directly.
 pub async fn insert_custom_task(
     pool: &SqlitePool,
     user_id: u32,
     title: &str,
-    photo_base64: Option<&str>,
-    upload_dir: impl AsRef<Path>,
+    photo_path: Option<&str>,
 ) -> Result<u32, sqlx::Error> {
-    let photo_path = match photo_base64 {
-        Some(data) => Some(write_photo(data, upload_dir, user_id).await?),
-        None => None,
-    };
-
-    let id = sqlx::query(
-        r#"
-        INSERT INTO custom_tasks (user_id, title, photo_path, is_completed, created_at)
-        VALUES (?1, ?2, ?3, 0, CURRENT_TIMESTAMP)
-        RETURNING id
-        "#,
-    )
-    .bind(user_id)
-    .bind(title)
-    .bind(photo_path)
-    .fetch_one(pool)
-    .await?
-    .try_get::<i64, _>("id")?;
-
-    Ok(id as u32)
+    insert_custom_task_with_due_date(pool, user_id, title, photo_path, None).await
 }
 
 /// Custom tasks belonging to `user_id`, newest first — **minus** any whose
@@ -538,12 +529,11 @@ pub async fn custom_tasks(
 }
 
 /// Insert a custom task whose photo (if any) has **already been re-encoded
-/// and written to disk** at `photo_path` — used by the multipart upload route
-/// (T2.5, `server::api::photos::upload_photo_handler`), which decodes,
-/// downscales and re-encodes the image itself before this is called, unlike
-/// [`insert_custom_task`]'s base64 decode-and-write. Purely additive: the
-/// existing function and its one call site
-/// (`api::routine::create_photo_task`, T1.5-owned) are untouched.
+/// and written to disk** at `photo_path` — the shared insert body both
+/// [`insert_custom_task`] (no due date) and the multipart upload route
+/// (`api::photos::upload_photo_handler`, which sniffs, downscales and
+/// re-encodes the image itself before calling this) go through. Neither
+/// caller ever hands this function raw bytes to decode.
 pub async fn insert_custom_task_with_due_date(
     pool: &SqlitePool,
     user_id: u32,
@@ -685,40 +675,6 @@ pub async fn delete_custom_task_row(
         Some(row) => Ok(Some(row.try_get::<Option<String>, _>("photo_path")?)),
         None => Ok(None),
     }
-}
-
-/// Decode a (possibly data-URI prefixed) base64 image and store it on disk,
-/// returning the web path the client can load it from.
-async fn write_photo(
-    photo_base64: &str,
-    upload_dir: impl AsRef<Path>,
-    user_id: u32,
-) -> Result<String, sqlx::Error> {
-    let payload = photo_base64
-        .split_once("base64,")
-        .map(|(_, rest)| rest)
-        .unwrap_or(photo_base64);
-
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(payload.trim())
-        .map_err(|err| sqlx::Error::Protocol(format!("invalid photo payload: {err}")))?;
-
-    let dir: PathBuf = upload_dir.as_ref().to_path_buf();
-    tokio::fs::create_dir_all(&dir)
-        .await
-        .map_err(sqlx::Error::Io)?;
-
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or_default();
-    let file_name = format!("task-{user_id}-{stamp}.jpg");
-
-    tokio::fs::write(dir.join(&file_name), bytes)
-        .await
-        .map_err(sqlx::Error::Io)?;
-
-    Ok(format!("/uploads/{file_name}"))
 }
 
 // ---------------------------------------------------------------------------

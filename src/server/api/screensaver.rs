@@ -91,7 +91,8 @@ async fn images_in_dir(dir: &std::path::Path) -> Vec<String> {
 /// `POST /api/upload_screensaver_image` — an `axum::extract::Multipart`
 /// route wired into `src/server/router.rs` alongside T2.5's
 /// `POST /api/upload_photo`, with the same raised `DefaultBodyLimit`. Accepts
-/// one multipart field, `photo`, and adds it to the ambient screensaver's
+/// two multipart fields: `auth` (the parent session token, sent **before**
+/// `photo`) and `photo`, and adds the photo to the ambient screensaver's
 /// runtime directory.
 ///
 /// Allowlist + re-encode is [`super::photos::sniff_downscale_reencode`] —
@@ -105,8 +106,14 @@ async fn images_in_dir(dir: &std::path::Path) -> Vec<String> {
 /// produced. Responds with the refreshed image list (same JSON shape
 /// [`list_screensaver_images`] returns) so a caller can update its UI in one
 /// round trip.
+///
+/// **Q1-07**: gated on [`super::photos::require_parent_session`] — the same
+/// check `upload_photo_handler` uses — before the `photo` bytes are read, so
+/// an unbounded (up to 25 MiB) unauthenticated post can no longer fill
+/// `screensaver/` on any LAN client's say-so.
 #[cfg(feature = "server")]
 pub async fn upload_screensaver_image_handler(mut multipart: Multipart) -> Response {
+    let mut auth: Option<String> = None;
     let mut photo_bytes: Option<Vec<u8>> = None;
 
     loop {
@@ -115,21 +122,32 @@ pub async fn upload_screensaver_image_handler(mut multipart: Multipart) -> Respo
             Ok(None) => break,
             Err(err) => return err.into_response(),
         };
-        if field.name() == Some("photo") {
-            match field.bytes().await {
-                Ok(bytes) => {
-                    if !bytes.is_empty() {
-                        photo_bytes = Some(bytes.to_vec());
-                    }
+        match field.name() {
+            Some("auth") => {
+                if let Ok(text) = field.text().await {
+                    auth = Some(text);
                 }
-                Err(err) => return err.into_response(),
             }
-        } else {
-            // Unknown field: drain it and move on rather than error, so a
-            // future client can add a field without breaking this route —
-            // the same rule T2.5's `upload_photo_handler` follows.
-            if let Err(err) = field.bytes().await {
-                return err.into_response();
+            Some("photo") => {
+                if let Err(response) = super::photos::require_parent_session(auth.as_deref()) {
+                    return *response;
+                }
+                match field.bytes().await {
+                    Ok(bytes) => {
+                        if !bytes.is_empty() {
+                            photo_bytes = Some(bytes.to_vec());
+                        }
+                    }
+                    Err(err) => return err.into_response(),
+                }
+            }
+            _ => {
+                // Unknown field: drain it and move on rather than error, so a
+                // future client can add a field without breaking this route —
+                // the same rule T2.5's `upload_photo_handler` follows.
+                if let Err(err) = field.bytes().await {
+                    return err.into_response();
+                }
             }
         }
     }
