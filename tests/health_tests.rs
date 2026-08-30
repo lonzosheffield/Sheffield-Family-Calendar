@@ -171,10 +171,13 @@ async fn health_returns_200_with_all_eight_keys_correctly_typed() {
         "migration_version must be an integer once the database has migrated, got {:?}",
         body["migration_version"]
     );
+    // T1.1 lands 0001/0002 and T1.4 (same wave as T1.7) lands 0003; this was
+    // `Value::from(2)` on T1.7's branch, bumped by Boss at the wave 1-b merge
+    // exactly as T1.4 bumped `tests/storage_tests.rs`' own constants.
     assert_eq!(
         body["migration_version"],
-        Value::from(2),
-        "T1.1 lands migrations 0001 and 0002"
+        Value::from(3),
+        "T1.1 lands migrations 0001 and 0002, T1.4 lands 0003"
     );
 }
 
