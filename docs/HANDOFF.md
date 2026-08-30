@@ -1202,3 +1202,51 @@ ownership table, each ratified:
   2-b close if still unreferenced.
 - **T2.3 → T1.6:** `realtime::compact_board(DEFAULT_BOARD_ID)` exists and is
   unit-proven; T1.6 registers it with `on_day_rolled` when its branch merges.
+## From T1.6 (backup, retention, delete-with-file) → Boss (`src/server/router.rs`)
+
+T1.6 owns `src/server/backup.rs` only (§P4), plus the two small "retention
+fns" §P4 explicitly allows it to add to `db.rs`
+(`db::delete_custom_task_row`, `db::compact_strokes`). Everything else it
+needed — the nightly backup, stroke compaction, photo retention, log
+rotation — is implemented and unit/integration-tested standalone.
+
+### H-15. Something on the startup path must call `backup::register_nightly_hooks()`
+
+`docs/HANDOFF.md`'s own T1.1→T1.6 note (H-10) says to "register work on the
+midnight tick with `realtime::on_day_rolled(hook)` rather than editing the
+loop", so `backup.rs` does exactly that:
+`backup::register_nightly_hooks()` calls
+`server::api::realtime::on_day_rolled(...)` with a hook that runs the
+nightly backup, then stroke compaction, then photo retention, then log
+rotation, in that order, once per day-roll.
+
+But *registering* the hook is not the same as it ever running: one call to
+`backup::register_nightly_hooks()` has to happen somewhere on the startup
+path, exactly like T1.2's `realtime::ensure_background_tasks()` did (H-7,
+resolved at the wave 1-a close by adding one line to `router::run`).
+`src/server/router.rs` is T0.6/T1.3-owned and T1.6 does not touch it.
+
+Request: add, next to the existing
+`crate::server::api::realtime::ensure_background_tasks();` line in
+`router::run`:
+
+```rust
+crate::server::backup::register_nightly_hooks();
+```
+
+It is idempotent to call more than once (each call adds another hook
+closure, so calling it twice would run the sweep twice per day-roll — call
+it exactly once, same as the existing line). Until this is wired in, the
+retention jobs are fully implemented and tested (see
+`tests/backup_tests.rs`) but do not run automatically; nothing depends on
+them running for T1.6's own acceptance, which drives every function
+directly.
+
+### H-16. Log file path assumption, for T3.1
+
+`backup::rotate_log_if_needed` is generic over any log file path; the
+nightly sweep (`nightly_maintenance` in `backup.rs`) calls it against
+`<data>\logs\familyhub.log`. T3.1 owns the actual service logging setup —
+if the service's log writer uses a different file name, either point it at
+`familyhub.log` or have T3.1 call `backup::rotate_log_if_needed` directly
+with its own path instead of relying on the nightly sweep's hard-coded one.

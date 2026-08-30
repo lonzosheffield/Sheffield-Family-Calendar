@@ -622,6 +622,26 @@ pub async fn claim_mutation(
     Ok(result.rows_affected() == 1)
 }
 
+/// Delete one custom task row, returning its `photo_path` when the task
+/// existed (`Some(None)` for a task with no photo, `None` when there was no
+/// such task at all) — T1.6's `backup::delete_custom_task` is what actually
+/// removes the file from disk; this just does the row half atomically with
+/// the read of the path it needs to do that (R-18).
+pub async fn delete_custom_task_row(
+    pool: &SqlitePool,
+    id: u32,
+) -> Result<Option<Option<String>>, sqlx::Error> {
+    let row = sqlx::query("DELETE FROM custom_tasks WHERE id = ?1 RETURNING photo_path")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+
+    match row {
+        Some(row) => Ok(Some(row.try_get::<Option<String>, _>("photo_path")?)),
+        None => Ok(None),
+    }
+}
+
 /// Decode a (possibly data-URI prefixed) base64 image and store it on disk,
 /// returning the web path the client can load it from.
 async fn write_photo(

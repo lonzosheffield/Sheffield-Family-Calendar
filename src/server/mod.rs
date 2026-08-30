@@ -3,6 +3,9 @@ pub mod api;
 #[cfg(feature = "server")]
 pub mod auth;
 #[cfg(feature = "server")]
+// T1.6 - backup, retention and delete-with-file paths (PLAN v2 R-17/R-18).
+pub mod backup;
+#[cfg(feature = "server")]
 pub mod calendar;
 #[cfg(feature = "server")]
 pub mod config;
