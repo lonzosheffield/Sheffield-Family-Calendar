@@ -182,9 +182,10 @@ async fn stroke_row_count(board_id: i64, only_live: bool) -> i64 {
 /// Poll until `stroke_row_count` reaches `expected` or `within` elapses.
 ///
 /// `record_stroke`'s write-behind design (`server::api::realtime`'s module
-/// doc comment) commits a `Draw`'s row from a detached task so publish never
-/// waits on the write connection — a client that has already seen the
-/// broadcast echo may briefly be ahead of what has actually committed.
+/// doc comment) hands a `Draw`'s row to the single ordered persistence task
+/// so publish never waits on the write connection — a client that has
+/// already seen the broadcast echo may briefly be ahead of what has actually
+/// committed (QA round 1, Q1-09: the batch still commits in `seq` order).
 async fn wait_for_row_count(board_id: i64, expected: i64, within: Duration) -> i64 {
     let deadline = Instant::now() + within;
     loop {

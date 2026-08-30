@@ -30,7 +30,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Days, Local, TimeZone};
 use futures_util::{SinkExt, StreamExt};
-use tokio::sync::{broadcast, Notify};
+use tokio::sync::{broadcast, mpsc, Notify};
 
 use crate::shared::types::{
     ClientId, ClientMessage, ResyncReason, ServerMessage, Stroke, DEFAULT_BOARD_ID,
@@ -353,23 +353,31 @@ impl RateLimiter {
 // `async` and fallible now because a query is, where the old
 // `Mutex<VecDeque<_>>` never could be.
 //
-// `record_stroke` is deliberately **not** `Ok`-gated on the write finishing:
-// T1.2's own load test (t1_2_3, 8 clients × 30 msg/s × 30 s) requires p99
-// fan-out latency under 250 ms, and awaiting a transactional insert on the
-// single write connection before publishing measured **759 ms p99** under
-// that same load — SQLite's single writer cannot durably commit 240
-// transactions/second with room to spare for that budget. The `seq` the
-// server stamps on a `Draw` still has to be minted synchronously (every
-// client needs it *now*, to paint and to order against), so it comes from an
-// in-process counter (`next_seq`) seeded from the database once and never
-// touched by SQLite again; the row itself is written by a detached task that
-// the publish does not wait for. This is a plain write-behind cache: `seq`
-// values are unique and monotonic the instant they are minted (an
-// `AtomicI64`, contended for microseconds, not milliseconds), and every
-// reader (`snapshot`) reports only what has actually committed, so a client
-// only ever sees strokes that are really on disk — it just might see them a
-// few milliseconds after everyone already painted them, which a whiteboard's
-// live fan-out was always going to do anyway (R-06/G20's whole point).
+// `record_stroke` mints `seq` synchronously (every client needs it *now*, to
+// paint and to order against) from an in-process counter (`next_seq`) seeded
+// from the database once and never touched by SQLite again, then hands the
+// row to a single ordered persistence task over an unbounded channel
+// (QA round 1, Q1-09 — the previous design spawned one detached task per
+// stroke, so rows could commit out of `seq` order, land after the broadcast
+// a `RequestSnapshot` raced against, or be lost outright on a crash mid-burst;
+// `loop_tests` and `whiteboard_tests`' flakes were this race).
+//
+// There is exactly **one** writer task (`stroke_writer`, lazily spawned on
+// first use): it `recv()`s the first pending stroke of a burst, then drains
+// every further stroke already queued with `try_recv()` into the same batch,
+// and inserts the whole batch in `seq` order inside one transaction. Because
+// the writer only ever processes one batch at a time, two batches can never
+// interleave their commits — either an entire batch is visible or none of it
+// is. T1.2's own load test (t1_2_3, 8 clients × 30 msg/s × 30 s) requires p99
+// fan-out latency under 250 ms; publishing never waits on this task (it just
+// waits on an unbounded channel `send`, which cannot block), and batching
+// turns ~240 msg/s into a handful of commits per second, so the budget holds
+// without SQLite's single writer being asked to durably commit 240
+// transactions/second. Every reader (`snapshot`) reports only what has
+// actually committed, so a client only ever sees strokes that are really on
+// disk — it just might see them a few milliseconds after everyone already
+// painted them, which a whiteboard's live fan-out was always going to do
+// anyway (R-06/G20's whole point).
 
 static NEXT_SEQ: tokio::sync::OnceCell<std::sync::atomic::AtomicI64> =
     tokio::sync::OnceCell::const_new();
@@ -384,9 +392,124 @@ async fn seq_counter(board_id: i64) -> Result<&'static std::sync::atomic::Atomic
         .await
 }
 
+/// One minted stroke waiting to be written, in the order it was minted.
+struct PendingStroke {
+    board_id: i64,
+    seq: i64,
+    client_id: String,
+    stroke: Stroke,
+}
+
+static STROKE_TX: OnceLock<mpsc::UnboundedSender<PendingStroke>> = OnceLock::new();
+
+/// The batch loop the single ordered persistence task runs for the rest of
+/// the process's life: drain a burst, insert it in `seq` order, repeat.
+///
+/// A batch of more than one row is inserted inside one transaction (one
+/// commit instead of several). A batch of exactly one — the common case for
+/// an isolated stroke with nothing else queued behind it, e.g. a single
+/// D-pad-free-hand stroke with no burst — skips the explicit `BEGIN`/`COMMIT`
+/// round trips and issues the one `INSERT` directly against the pool
+/// (auto-committed), which is strictly faster with no change in behaviour:
+/// ordering here comes from this being the *only* writer processing its
+/// queue strictly in order, not from the transaction wrapper. Shorter time
+/// from `send()` to committed row narrows the write-behind window T2.6's own
+/// restart-and-resnapshot test exercises (Q1-09).
+async fn run_stroke_writer(mut rx: mpsc::UnboundedReceiver<PendingStroke>) {
+    while let Some(first) = rx.recv().await {
+        let mut batch = vec![first];
+        while let Ok(more) = rx.try_recv() {
+            batch.push(more);
+        }
+        let Ok(pool) = crate::server::db::pool().await else {
+            tracing::error!("no write pool available to persist a stroke batch");
+            continue;
+        };
+        if let [only] = batch.as_slice() {
+            let points = crate::server::db::stroke_points_json(&only.stroke);
+            if let Err(err) = crate::server::db::insert_stroke_at_seq(
+                pool,
+                only.board_id,
+                only.seq,
+                &only.client_id,
+                &only.stroke.color,
+                only.stroke.width,
+                &points,
+            )
+            .await
+            {
+                tracing::error!(%err, seq = only.seq, "failed to persist stroke");
+            }
+            continue;
+        }
+        let Ok(mut sql_tx) = pool.begin().await else {
+            tracing::error!("failed to open a transaction for a stroke batch");
+            continue;
+        };
+        for pending in &batch {
+            let points = crate::server::db::stroke_points_json(&pending.stroke);
+            if let Err(err) = crate::server::db::insert_stroke_at_seq(
+                &mut *sql_tx,
+                pending.board_id,
+                pending.seq,
+                &pending.client_id,
+                &pending.stroke.color,
+                pending.stroke.width,
+                &points,
+            )
+            .await
+            {
+                tracing::error!(%err, seq = pending.seq, "failed to persist stroke");
+            }
+        }
+        if let Err(err) = sql_tx.commit().await {
+            tracing::error!(%err, "stroke batch commit failed");
+        }
+    }
+}
+
+/// The single ordered persistence task's send half, spawning the task (on
+/// its own dedicated OS thread, with its own tiny runtime) the first time it
+/// is needed and never again.
+///
+/// `tokio::spawn` ties a task to whichever runtime is current when it is
+/// spawned. Spawning the writer directly onto *the caller's* runtime — the
+/// axum server's in production, but a fresh one per `#[tokio::test]` function
+/// in this crate's own test suite — means the writer dies the moment that
+/// first caller's runtime is torn down, silently, with every later `send()`
+/// from a *different* runtime either landing in a dead channel (rows vanish)
+/// or racing that teardown (a later test can still observe `is_closed() ==
+/// false` for a receiver that is mid-drop, reuse the doomed sender, and lose
+/// only *some* of its rows — both shapes were reproduced against this
+/// module's own test suite before this fix landed). Spawning onto a
+/// dedicated background thread's own runtime — created once, kept forever —
+/// sidesteps the whole class of problem: nothing ever tears that runtime
+/// down while the process is alive, so there is no teardown window to race
+/// and no dead-channel case to fall into.
+///
+/// One task, one write connection, one transaction per drained batch: strokes
+/// commit in the `seq` order they were minted in, never out of order and
+/// never after a batch that started later (Q1-09).
+fn stroke_writer() -> &'static mpsc::UnboundedSender<PendingStroke> {
+    STROKE_TX.get_or_init(|| {
+        let (tx, rx) = mpsc::unbounded_channel::<PendingStroke>();
+        std::thread::Builder::new()
+            .name("stroke-writer".to_string())
+            .spawn(move || {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("build the stroke writer's dedicated runtime");
+                runtime.block_on(run_stroke_writer(rx));
+            })
+            .expect("spawn the stroke writer thread");
+        tx
+    })
+}
+
 /// Append a stroke by `client_id` and return the sequence number the server
-/// stamped on it. The row itself is written by a detached task — see the
-/// module-level comment above for why.
+/// stamped on it. The row itself is written, in `seq` order, by the single
+/// ordered persistence task — see the module-level comment above for why.
 pub async fn record_stroke(
     board_id: i64,
     client_id: &str,
@@ -395,27 +518,11 @@ pub async fn record_stroke(
     let counter = seq_counter(board_id).await?;
     let seq = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
 
-    let client_id = client_id.to_string();
-    let stroke = stroke.clone();
-    tokio::spawn(async move {
-        let points = crate::server::db::stroke_points_json(&stroke);
-        let Ok(pool) = crate::server::db::pool().await else {
-            tracing::error!("no write pool available to persist stroke seq={seq}");
-            return;
-        };
-        if let Err(err) = crate::server::db::insert_stroke_at_seq(
-            pool,
-            board_id,
-            seq,
-            &client_id,
-            &stroke.color,
-            stroke.width,
-            &points,
-        )
-        .await
-        {
-            tracing::error!(%err, "failed to persist stroke seq={seq}");
-        }
+    let _ = stroke_writer().send(PendingStroke {
+        board_id,
+        seq,
+        client_id: client_id.to_string(),
+        stroke: stroke.clone(),
     });
 
     Ok(seq)
@@ -434,22 +541,33 @@ pub async fn clear_board(board_id: i64) -> Result<i64, sqlx::Error> {
 
 /// `(latest_seq, live strokes with seq > since_seq)`, in `seq` order.
 ///
-/// `latest_seq` is the highest `seq` actually present among the returned
-/// rows (or `since_seq` unchanged, if none are) — **not** the in-process
-/// counter, which can be briefly ahead of what has committed. Bookmarking
-/// against a seq nothing has been *delivered* for yet would let a future
-/// `RequestSnapshot { since_seq }` silently skip a stroke still in flight
-/// when this call ran.
+/// `latest_seq` is the highest **contiguous** `seq` reachable from
+/// `since_seq` among the returned rows (or `since_seq` unchanged, if the very
+/// next one is missing) — **not** the highest `seq` present, and **not** the
+/// in-process counter, either of which can be briefly ahead of what has
+/// committed. `strokes` still carries every live row past `since_seq`
+/// regardless of a gap (a joining/reconnecting client always gets the whole
+/// visible board); only the bookmark stays conservative, so a future
+/// `RequestSnapshot { since_seq }` can never skip a stroke that is still
+/// sitting in the ordered persistence task's channel when this call ran
+/// (Q1-09).
 pub async fn snapshot(board_id: i64, since_seq: i64) -> Result<(i64, Vec<Stroke>), sqlx::Error> {
     let pool = crate::server::db::read_pool().await?;
     let rows = crate::server::db::board_snapshot(pool, board_id).await?;
     let mut latest = since_seq;
+    let mut contiguous = true;
     let mut strokes = Vec::with_capacity(rows.len());
     for row in rows {
         if row.seq <= since_seq {
             continue;
         }
-        latest = latest.max(row.seq);
+        if contiguous {
+            if row.seq == latest + 1 {
+                latest = row.seq;
+            } else {
+                contiguous = false;
+            }
+        }
         match row.into_stroke() {
             Ok(stroke) => strokes.push(stroke),
             Err(err) => tracing::error!(%err, "stored stroke has invalid points JSON; skipped"),

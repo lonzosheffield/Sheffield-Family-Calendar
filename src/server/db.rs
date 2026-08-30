@@ -828,17 +828,21 @@ pub async fn insert_stroke(
     Ok(stroke)
 }
 
-/// Insert a stroke at an **already-minted** `seq`, with no `SELECT MAX` and
-/// no explicit transaction — a single `INSERT`.
+/// Insert a stroke at an **already-minted** `seq`, with no `SELECT MAX` — a
+/// single `INSERT`, run against whatever executor the caller hands in.
 ///
 /// T2.3's write-behind design (`server::api::realtime`'s module doc comment)
 /// mints `seq` from an in-process counter so publishing a `Draw` never waits
-/// on the write connection, and persists the row afterwards from a detached
-/// task; this is the write half of that split. `UNIQUE (board_id, seq)`
-/// still catches a real bug (two callers minting the same number) exactly as
-/// it would have for [`insert_stroke`]'s derived one.
+/// on the write connection, then hands the row to the single ordered
+/// persistence task, which inserts a whole drained batch inside one
+/// transaction (Q1-09) — this is the per-row write half of that split, taking
+/// `impl SqliteExecutor` (rather than `&SqlitePool`) precisely so the caller
+/// can pass `&mut *tx` and keep every insert in a burst inside the same
+/// transaction. `UNIQUE (board_id, seq)` still catches a real bug (two
+/// callers minting the same number) exactly as it would have for
+/// [`insert_stroke`]'s derived one.
 pub async fn insert_stroke_at_seq(
-    pool: &SqlitePool,
+    executor: impl sqlx::sqlite::SqliteExecutor<'_>,
     board_id: i64,
     seq: i64,
     client_id: &str,
@@ -858,7 +862,7 @@ pub async fn insert_stroke_at_seq(
     .bind(color)
     .bind(width)
     .bind(points)
-    .execute(pool)
+    .execute(executor)
     .await?;
     Ok(())
 }

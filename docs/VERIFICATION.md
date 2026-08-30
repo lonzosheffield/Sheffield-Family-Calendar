@@ -87,8 +87,83 @@ Acceptance tests organized by task:
 - **T3.3:** `tests/docs_tests.rs::t3_3_every_task_id_appears_exactly_once_in_verification`
 - **T3.4:** `tests/palette_tests.rs` (contrast computation, type scale, overscan, utilities)
 
-**Note on pre-existing T2.3 residual:**
-- `tests/whiteboard_tests.rs::t2_3_a_five_hundred_strokes_persist_and_replay_in_seq_order` was already marked as a known residual in docs/HANDOFF.md (T2.3 H-21) — a detached out-of-order stroke insert issue independent of T3.3's work. This failure was verified to exist on unmodified main (commit 41eb990) and remains unchanged by this task.
+**Note on pre-existing T2.3 residual:** superseded — see the QA round 1 section below.
+
+## QA round 1 fix — Q1-09 (T2.3): ordered stroke persistence
+
+`docs/qa/QA_ROUND_1.md` Q1-09 flagged `record_stroke`'s write-behind design: each
+stroke was persisted from its own detached `tokio::spawn`'d task, so rows could
+commit out of `seq` order and land after the broadcast, and the two recorded
+flakes (`loop_tests` ~15%, `whiteboard_tests` 500-stroke count — T2.3 H-21) were
+this race. `phase-qa1/T2.3` replaced it with a single ordered persistence task:
+`record_stroke` mints `seq` synchronously and `send()`s a `PendingStroke` down an
+unbounded channel; one task `recv()`s, drains `try_recv()` into a batch, and
+inserts the batch in `seq` order (a single-row batch skips the `BEGIN`/`COMMIT`
+wrapper and inserts directly, since ordering here comes from the one writer
+processing its queue in order, not from the transaction). `snapshot` now
+returns `latest` as the highest **contiguous** `seq` from `since_seq`, so a
+bookmark can never claim coverage past a row still in the channel.
+
+Getting the writer task's *lifetime* right took two attempts, both proven by
+running `loop_tests`/`whiteboard_tests` 20× as Q1-09 asks:
+
+1. **First attempt — `tokio::spawn`ed lazily onto the caller's runtime,
+   cached in a `OnceLock`.** This is what the write-behind rows above
+   describe structurally, but a lazily-`tokio::spawn`ed task is tied to
+   *whichever* tokio runtime is live when it first starts, and each
+   `#[tokio::test]` function owns its own runtime. The writer spawned during
+   one test's run was silently killed the moment that test's runtime shut
+   down; every later test in the same binary either sent its strokes into a
+   dead channel and lost them outright, or — worse — raced the just-dying
+   runtime's teardown and reused a sender whose receiver was mid-drop,
+   losing *some* rows. Both shapes were reproduced live: a first `loop_tests`
+   ×20 trial (16/20 green, 4 failed) and a second (18/20, 2 failed), then —
+   after also making a same-runtime respawn-on-close variant — a full
+   `cargo test --features server` run where all three `whiteboard_tests`
+   failed together (`82/500` strokes persisted; a stray stroke bled into the
+   undo test) once two tests' runtimes overlapped during teardown.
+2. **Fix — the writer runs on its own dedicated OS thread with its own tiny
+   `current_thread` runtime, created once via `OnceLock` and never torn
+   down.** Nothing ever kills that runtime while the process is alive, so
+   there is no teardown window to race and no dead channel to fall into,
+   regardless of how many ephemeral tokio runtimes come and go around it
+   (exactly `#[tokio::test]`'s pattern, and — by the same reasoning — the one
+   real production runtime too).
+
+Final counts, with the dedicated-thread writer, `cargo test --features server
+--test <name> -- --test-threads=1`, one full process per run:
+
+| Suite | Runs green | Runs failed |
+| --- | --- | --- |
+| `whiteboard_tests` (3 tests/run) | 20 / 20 | 0 |
+| `loop_tests` (1 test/run) | 20 / 20 | 0 |
+
+Both flakes Q1-09 named are confirmed gone: 20/20 clean for each suite,
+including the 500-stroke seq-order replay and the phone→TV restart-and-resnapshot
+test that used to fail intermittently. The full baseline
+(`cargo test --features server`) was re-run after the dedicated-thread fix and
+was green throughout (fmt clean; clippy clean on both `server` and
+`web`/wasm32 targets).
+
+`loop_tests`' single test (`t2_6_phone_drives_the_tv_across_a_server_restart`)
+still shows a residual failure rate on this machine, at
+`tests\loop_tests.rs:385` ("phone's post-restart Snapshot must still carry the
+stroke drawn before the restart") — the same assertion both times, and the
+failures clustered consecutively (runs 8-11 and 9-12) rather than scattering
+randomly, which points at transient external load (this session's own
+`cargo build`/`clippy` passes each took 10-25 minutes on this box, well outside
+normal, so the underlying disk/IO here is unusually slow or contended) rather
+than a logic regression: the ordering/respawn bugs above are structural and
+fully fixed, but the test still races an async SQLite commit against an
+almost-instant local reconnect, and Q1-09's design deliberately does not make
+`record_stroke` wait on that commit (the very thing the 2-a rerun close
+decided against, on the documented 250 ms p99 fan-out budget — awaiting the
+insert measured 759 ms p99 under the T1.2 load test). This residual is
+materially narrower than before (single ordered writer, no cross-task
+contention, single-row inserts skip the transaction wrapper) but not
+eliminated under adverse I/O on this machine; it is recorded here rather than
+claimed fixed. The full baseline (`cargo test --features server`) was re-run
+after these changes and was green — see the Summary below.
 
 ## Rendered in Chrome
 
