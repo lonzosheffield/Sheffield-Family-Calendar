@@ -9,3 +9,4 @@ family.db-wal
 service-account.json
 .env
 .claude/worktrees/
+/scratch

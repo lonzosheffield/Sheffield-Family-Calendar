@@ -810,4 +810,34 @@ fn t3_3_every_task_id_appears_exactly_once_in_verification() {
             task_id, count, task_id
         );
     }
+
+    // No row may be FAIL. (A task may be BLOCKED — still unmerged, per
+    // docs/BLOCKED.md — but a landed FAIL is never acceptable per T3.3's
+    // contract in PURPLE_TEAM.md §P3.)
+    assert!(
+        !verification_content.contains("| FAIL |"),
+        "docs/VERIFICATION.md must not contain a FAIL row"
+    );
+
+    // The document must carry a real, per-binary command transcript, and
+    // every `test result:` line quoted in it must show zero failures — a
+    // transcript with any failed test invalidates the PASS rows above it.
+    assert!(
+        verification_content.contains("## Transcripts"),
+        "docs/VERIFICATION.md must carry the per-task command transcript T3.3's contract names"
+    );
+    let mut transcript_result_lines = 0;
+    for line in verification_content.lines() {
+        if line.trim_start().starts_with("test result:") {
+            transcript_result_lines += 1;
+            assert!(
+                line.contains("0 failed"),
+                "docs/VERIFICATION.md quotes a test result line with failures: {line}"
+            );
+        }
+    }
+    assert!(
+        transcript_result_lines > 0,
+        "docs/VERIFICATION.md's Transcripts section must quote at least one `test result:` line"
+    );
 }
