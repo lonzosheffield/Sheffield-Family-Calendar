@@ -47,8 +47,8 @@
 use dioxus::prelude::*;
 
 use family_calendar::client::components::palette::{
-    contrast_ratio, is_colour_name, pair_contrast, resolve, split_token, token, Pair, Rgb,
-    COLOURLESS_TOKENS, NON_TEXT_PAIRS, PALETTE_PAIRS, PALETTE_TOKENS,
+    contrast_ratio, is_colour_name, pair_contrast, pair_meets_wcag_aa, resolve, split_token, token,
+    Pair, Rgb, TextSize, COLOURLESS_TOKENS, NON_TEXT_PAIRS, PALETTE_PAIRS, PALETTE_TOKENS,
 };
 use family_calendar::client::components::tv::fixture::canonical_model;
 use family_calendar::client::components::tv::model::{TvModel, TvOverlay, TvPanel};
@@ -292,14 +292,26 @@ fn t3_4_a_every_declared_palette_pair_meets_wcag_aa() {
             pair.ground,
             pair.size
         );
-        // T3.4's own, stricter bar: no pair on either surface leans on the
-        // 3:1 large-text allowance.
         assert!(
-            ratio >= 4.5,
-            "{} on {} is {ratio:.2}:1, under the 4.5:1 body floor",
+            pair_meets_wcag_aa(pair),
+            "{} on {} is {ratio:.2}:1 and fails the checker",
             pair.ink,
             pair.ground
         );
+        // T3.4's own, stricter bar — amended by Phase 4 / D4.4 (§2.2):
+        // `Body` pairs still never lean on the 3:1 large-text allowance.
+        // `Large` pairs are held only to their own AA floor (asserted
+        // above): the wordmark's `text-sheffield-accent` on `bg-white` is
+        // the one declared, deliberate exception. Never below WCAG AA
+        // itself — 4.5:1 body, 3.0:1 large — for either size.
+        if pair.size == TextSize::Body {
+            assert!(
+                ratio >= 4.5,
+                "{} on {} is {ratio:.2}:1, under the 4.5:1 body floor",
+                pair.ink,
+                pair.ground
+            );
+        }
         println!("{:<26} on {:<28} {ratio:>6.2}:1", pair.ink, pair.ground);
     }
     for pair in NON_TEXT_PAIRS {

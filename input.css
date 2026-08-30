@@ -14,3 +14,35 @@ body {
 #main {
   height: 100%;
 }
+
+/* -------------------------------------------------------------------------
+ * Phase 4 / D4.4 — poster utility classes (docs/design/DESIGN_DIRECTION.md
+ * §2.1, §2.4, §2.6). D4.4 owns only this appended block; D4.1's @font-face
+ * rules land elsewhere in this file.
+ * ---------------------------------------------------------------------- */
+
+/* §2.1, §2.6 — the wordmark word "Morning"'s dark outline, replicating the
+ * poster's outlined display red. Text-shadow, not `-webkit-text-stroke`:
+ * stroke centers on the glyph edge and eats thin strokes on old Fire OS
+ * WebViews. Offsets are 2px at the kiosk's native 1920x1080. */
+.poster-outline {
+  text-shadow:
+    2px 2px 0 #1e293b,
+    -2px 2px 0 #1e293b,
+    2px -2px 0 #1e293b,
+    -2px -2px 0 #1e293b;
+}
+
+/* §2.4 — the checked-checkbox "stamp": lands slightly crooked, the way a
+ * kid actually checks a box. The transform applies unconditionally so the
+ * checked state always reads correctly; only the animated transition is
+ * gated behind the reduced-motion guard. */
+.stamp-check {
+  transform: rotate(-4deg) scale(1.06);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .stamp-check {
+    transition: transform 150ms ease-out;
+  }
+}

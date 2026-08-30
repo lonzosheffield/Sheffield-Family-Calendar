@@ -282,10 +282,14 @@ pub struct Pair {
 
 /// Every foreground/background token pair `/tv` and `/m` render.
 ///
-/// Every one of these clears **4.5:1**, the body threshold, even the ones
-/// that only ever carry 30 px+ display text and would be allowed 3:1: the
-/// `size` column records what WCAG would demand, and the tests assert both
-/// that floor and the stricter blanket one.
+/// Almost every one of these clears **4.5:1**, the body threshold, even
+/// though several only ever carry 30 px+ display text and would be allowed
+/// 3:1 — the `size` column records what WCAG would demand. The one
+/// declared exception is the wordmark's `text-sheffield-accent` on
+/// `bg-white`: it is `TextSize::Large` and genuinely leans on the 3:1
+/// allowance (Phase 4 / D4.4). `Body` pairs are still held to the stricter
+/// 4.5:1 bar; `Large` pairs are held to their own AA floor of 3.0:1 —
+/// never anything looser than WCAG AA itself.
 pub const PALETTE_PAIRS: &[Pair] = &[
     // -- the paper ground, both surfaces -----------------------------------
     Pair {
@@ -324,6 +328,17 @@ pub const PALETTE_PAIRS: &[Pair] = &[
         ground: "bg-white",
         size: TextSize::Body,
         used_by: "the active phone tab, remote buttons, `Add a phone`",
+    },
+    // -- the poster wordmark's display red, as ink (Phase 4 / D4.4) --------
+    // Genuinely a Large pair: 3.16:1 clears WCAG AA's large-text floor
+    // (3.0:1) but not the body floor (4.5:1). Legal only because it is
+    // never used below 44px/weight 800 — see palette.rs::tests for the
+    // computed ratio and `docs/design/DESIGN_DIRECTION.md` §2.2.
+    Pair {
+        ink: "text-sheffield-accent",
+        ground: "bg-white",
+        size: TextSize::Large,
+        used_by: "the wordmark word Morning — ≥44px/800 + .poster-outline",
     },
     // -- the primary blue as a ground --------------------------------------
     Pair {
@@ -511,6 +526,22 @@ pub fn pair_contrast(pair: &Pair) -> Option<f64> {
     Some(contrast_ratio(resolve(pair.ink)?, resolve(pair.ground)?))
 }
 
+/// The palette contract's checker: does `pair` clear the WCAG AA floor for
+/// its own declared [`TextSize`] — **4.5:1 for `Body`, 3.0:1 for `Large`**
+/// (Phase 4 / D4.4, `docs/design/DESIGN_DIRECTION.md` §2.2)?
+///
+/// This is the Body/Large rule as one reusable function rather than an
+/// assertion duplicated across `palette.rs`'s own tests and
+/// `tests/palette_tests.rs`: both now call it, so a pair that fails
+/// its size's floor fails identically everywhere, and a pair that does not
+/// resolve at all is treated as failing rather than panicking.
+pub fn pair_meets_wcag_aa(pair: &Pair) -> bool {
+    match pair_contrast(pair) {
+        Some(ratio) => ratio >= pair.size.min_contrast(),
+        None => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -594,23 +625,130 @@ mod tests {
                 pair.size,
                 pair.size.min_contrast()
             );
+            assert!(
+                pair_meets_wcag_aa(pair),
+                "{} on {} ({}) fails the checker even though its raw ratio was {ratio:.2}:1",
+                pair.ink,
+                pair.ground,
+                pair.used_by
+            );
         }
     }
 
     #[test]
-    fn every_palette_pair_clears_the_stricter_body_floor_too() {
-        // T3.4's own bar: nothing on either surface relies on the 3:1 large
-        // allowance, so a later type-size change can never silently drop a
-        // pair below AA.
+    fn every_body_palette_pair_clears_the_stricter_body_floor_too() {
+        // T3.4's own bar, amended by Phase 4 / D4.4: `Body` pairs still
+        // never lean on the 3:1 large-text allowance — held to 4.5:1 here,
+        // on top of the per-size floor already asserted above. `Large`
+        // pairs (the pre-existing heading pairs, plus the wordmark's
+        // `text-sheffield-accent` on `bg-white`, D4.4's one declared
+        // pair that actually *needs* the 3:1 allowance) are exempt from
+        // this stricter bar and are held only to their own AA floor of
+        // 3.0:1, asserted above.
+        let mut body_pairs_checked = 0usize;
+        let mut large_pairs_seen = 0usize;
+        let mut wordmark_pair_seen = false;
         for pair in PALETTE_PAIRS {
-            let ratio = pair_contrast(pair).expect("resolves");
-            assert!(
-                ratio >= 4.5,
-                "{} on {} is {ratio:.2}:1, under 4.5:1",
-                pair.ink,
-                pair.ground
-            );
+            match pair.size {
+                TextSize::Body => {
+                    body_pairs_checked += 1;
+                    let ratio = pair_contrast(pair).expect("resolves");
+                    assert!(
+                        ratio >= 4.5,
+                        "{} on {} is {ratio:.2}:1, under 4.5:1",
+                        pair.ink,
+                        pair.ground
+                    );
+                }
+                TextSize::Large => {
+                    large_pairs_seen += 1;
+                    if pair.ink == "text-sheffield-accent" && pair.ground == "bg-white" {
+                        wordmark_pair_seen = true;
+                    }
+                }
+            }
         }
+        assert!(body_pairs_checked > 0, "no Body pairs were checked");
+        assert!(large_pairs_seen > 0, "no Large pairs were checked");
+        assert!(
+            wordmark_pair_seen,
+            "the wordmark's text-sheffield-accent on bg-white Large pair (D4.4, §2.2) is missing"
+        );
+    }
+
+    /// Phase 4 / D4.4: the wordmark's `text-sheffield-accent` on `bg-white`
+    /// is genuinely a Large pair — this pins its computed ratio so a future
+    /// hex change to either token cannot silently drift it below AA's
+    /// 3.0:1 Large floor (or, just as importantly, cannot silently make it
+    /// look like it clears 4.5:1 when it does not).
+    #[test]
+    fn the_wordmark_accent_on_white_pair_is_large_only_not_body() {
+        let ratio = contrast_ratio(SHEFFIELD_ACCENT, WHITE);
+        assert!(
+            (3.1..=3.3).contains(&ratio),
+            "#E86A58 on #FFFFFF was {ratio:.3}:1, expected it in [3.1, 3.3]"
+        );
+        assert!(
+            ratio >= TextSize::Large.min_contrast(),
+            "must still clear AA Large"
+        );
+        assert!(
+            ratio < TextSize::Body.min_contrast(),
+            "this pair is supposed to be the one that leans on the Large allowance"
+        );
+
+        let pair = Pair {
+            ink: "text-sheffield-accent",
+            ground: "bg-white",
+            size: TextSize::Large,
+            used_by: "the wordmark word Morning — ≥44px/800 + .poster-outline",
+        };
+        assert!(
+            PALETTE_PAIRS
+                .iter()
+                .any(|p| p.ink == pair.ink && p.ground == pair.ground && p.size == pair.size),
+            "the wordmark pair must be declared in PALETTE_PAIRS"
+        );
+        assert!(
+            pair_meets_wcag_aa(&pair),
+            "the declared wordmark pair must pass its own checker"
+        );
+    }
+
+    /// The negative case D4.4 asks for: a `Body` pair that does not clear
+    /// 4.5:1 must fail [`pair_meets_wcag_aa`] — proving the checker still
+    /// enforces AA's *body* floor rather than having quietly loosened to
+    /// 3.0:1 for everything once the Large exception was introduced. This
+    /// pair is constructed here, in the test only, and is never added to
+    /// [`PALETTE_PAIRS`].
+    #[test]
+    fn the_checker_rejects_a_deliberately_sub_aa_body_pair() {
+        // sheffield-light ink on a white ground: ~2.0:1, nowhere near 4.5:1,
+        // and deliberately declared `Body` (not `Large`) so a passing result
+        // here would mean the Body/Large amendment let something below AA
+        // through.
+        let bad_pair = Pair {
+            ink: "text-sheffield-light",
+            ground: "bg-white",
+            size: TextSize::Body,
+            used_by: "TEST ONLY — deliberately sub-AA, must never be a real pair",
+        };
+        let ratio = pair_contrast(&bad_pair).expect("both tokens resolve");
+        assert!(
+            ratio < 4.5,
+            "test fixture is broken: {ratio:.2}:1 is not even under 4.5:1"
+        );
+        assert!(
+            !pair_meets_wcag_aa(&bad_pair),
+            "the checker passed a {ratio:.2}:1 Body pair — it must fail anything under 4.5:1"
+        );
+        // And make sure nobody actually snuck this pair into the real table.
+        assert!(
+            !PALETTE_PAIRS
+                .iter()
+                .any(|p| p.ink == bad_pair.ink && p.ground == bad_pair.ground),
+            "the deliberately-failing test pair leaked into PALETTE_PAIRS"
+        );
     }
 
     #[test]
