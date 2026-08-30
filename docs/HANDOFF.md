@@ -1853,7 +1853,9 @@ PURPLE §P3 T3.1's modified acceptance for this run — **no elevated install
 was performed by this task**; that is owner step A3, and `sc query
 FamilyHub` / `netsh advfirewall firewall show rule name=FamilyHub*` are the
 owner's own verification commands once they run `install` for real.
-=======
+
+---
+
 ## T3.4 — palette-faithful polish (wave 3)
 
 Branch `phase-3/T3.4`. Files touched, all inside T3.4's §P4 grant
@@ -1927,4 +1929,3 @@ profile discs.
 
 No acceptance test was weakened. `tests/tv_tests.rs` (21 tests, T2.1's whole
 contract) is untouched and green.
->>>>>>> phase-3/T3.4
