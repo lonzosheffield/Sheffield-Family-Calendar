@@ -36,6 +36,11 @@ pub const DEFAULT_TLS_ADDR: &str = "0.0.0.0:8443";
 const ENV_DATA_DIR: &str = "FAMILY_HUB_DATA_DIR";
 const ENV_HTTP_ADDR: &str = "FAMILY_HUB_ADDR";
 const ENV_TLS_ADDR: &str = "FAMILY_HUB_TLS_ADDR";
+/// QA round 1, Q1-14: the optional scheduled-screensaver hour. Unset (the
+/// default) leaves `ScreensaverSchedule::default()` — disabled — the only
+/// schedule the process can ever build, which was the bug: there was no
+/// enable path at all. Setting this is that path.
+const ENV_SCREENSAVER_HOUR: &str = "FAMILY_HUB_SCREENSAVER_HOUR";
 
 const CONFIG_FILE_NAME: &str = "familyhub.toml";
 
@@ -46,6 +51,12 @@ pub struct FamilyHubConfig {
     pub data_dir: PathBuf,
     pub http_addr: SocketAddr,
     pub tls_addr: SocketAddr,
+    /// QA round 1, Q1-14: local hour (`0..=23`) the ambient screensaver is
+    /// forced on at, from `FAMILY_HUB_SCREENSAVER_HOUR` or `[screensaver]
+    /// schedule_hour` in `familyhub.toml`. `None` (the default) means the
+    /// schedule stays off, per PURPLE §P5.5 default 20 — a family that never
+    /// sets this sees exactly today's idle-only behaviour, forever.
+    pub screensaver_schedule_hour: Option<u32>,
 }
 
 impl FamilyHubConfig {
@@ -65,11 +76,13 @@ impl FamilyHubConfig {
 
         let http_addr = resolve_addr(env, file, ENV_HTTP_ADDR, "http_addr", DEFAULT_HTTP_ADDR);
         let tls_addr = resolve_addr(env, file, ENV_TLS_ADDR, "tls_addr", DEFAULT_TLS_ADDR);
+        let screensaver_schedule_hour = resolve_screensaver_hour(env, file);
 
         Self {
             data_dir,
             http_addr,
             tls_addr,
+            screensaver_schedule_hour,
         }
     }
 
@@ -127,6 +140,12 @@ impl FamilyHubConfig {
         tracing::info!(log_dir = %self.log_dir().display(), "resolved log directory");
         tracing::info!(http_addr = %self.http_addr, "resolved HTTP bind address");
         tracing::info!(tls_addr = %self.tls_addr, "resolved HTTPS bind address");
+        match self.screensaver_schedule_hour {
+            Some(hour) => {
+                tracing::info!(schedule_hour = hour, "scheduled screensaver enabled")
+            }
+            None => tracing::info!("scheduled screensaver disabled (no schedule_hour configured)"),
+        }
 
         Ok(())
     }
@@ -147,6 +166,30 @@ fn resolve_addr(
     raw.parse().unwrap_or_else(|err| {
         panic!("{env_key} / familyhub.toml [{file_key}] is not a valid host:port address ({raw:?}): {err}")
     })
+}
+
+/// Resolve the optional scheduled-screensaver hour (QA round 1, Q1-14):
+/// `None` unless an owner explicitly opts in via `FAMILY_HUB_SCREENSAVER_HOUR`
+/// or `[screensaver] schedule_hour` in `familyhub.toml`, env taking
+/// precedence over the file exactly like every other key in this module. A
+/// value that does not parse as `0..=23` panics at startup rather than being
+/// silently clamped or ignored — the same fail-loud policy [`resolve_addr`]
+/// uses for a bad bind address.
+fn resolve_screensaver_hour(env: &impl EnvLookup, file: &TomlValues) -> Option<u32> {
+    let raw = env
+        .var(ENV_SCREENSAVER_HOUR)
+        .or_else(|| file.get("screensaver.schedule_hour"))?;
+
+    let hour: u32 = raw.parse().unwrap_or_else(|err| {
+        panic!(
+            "{ENV_SCREENSAVER_HOUR} / familyhub.toml [screensaver] schedule_hour is not a valid hour ({raw:?}): {err}"
+        )
+    });
+    assert!(
+        hour <= 23,
+        "{ENV_SCREENSAVER_HOUR} / familyhub.toml [screensaver] schedule_hour must be 0..=23, got {hour}"
+    );
+    Some(hour)
 }
 
 /// `%ProgramData%\FamilyHub` on Windows (falling back to `C:\ProgramData` if
@@ -297,6 +340,40 @@ mod tests {
         assert_eq!(config.tls_addr, "127.0.0.1:9443".parse().unwrap());
     }
 
+    // QA round 1, Q1-14: the scheduled screensaver had no enable path
+    // because `ScreensaverSchedule::default()` was the only instance ever
+    // constructed. These four tests cover both configuration sources for
+    // the hour that now builds a non-default schedule.
+
+    #[test]
+    fn screensaver_schedule_hour_defaults_to_none() {
+        let config = FamilyHubConfig::from_sources(&TomlValues::default(), &empty_env());
+        assert_eq!(config.screensaver_schedule_hour, None);
+    }
+
+    #[test]
+    fn env_screensaver_schedule_hour_overrides_file_and_default() {
+        let file = TomlValues::parse("[screensaver]\nschedule_hour = 5\n");
+        let env = FakeEnv(BTreeMap::from([(ENV_SCREENSAVER_HOUR, "20")]));
+
+        let config = FamilyHubConfig::from_sources(&file, &env);
+        assert_eq!(config.screensaver_schedule_hour, Some(20));
+    }
+
+    #[test]
+    fn file_screensaver_schedule_hour_is_used_when_env_is_unset() {
+        let file = TomlValues::parse("[screensaver]\nschedule_hour = 21\n");
+        let config = FamilyHubConfig::from_sources(&file, &empty_env());
+        assert_eq!(config.screensaver_schedule_hour, Some(21));
+    }
+
+    #[test]
+    #[should_panic(expected = "must be 0..=23")]
+    fn out_of_range_screensaver_schedule_hour_panics_at_startup() {
+        let env = FakeEnv(BTreeMap::from([(ENV_SCREENSAVER_HOUR, "24")]));
+        let _ = FamilyHubConfig::from_sources(&TomlValues::default(), &env);
+    }
+
     #[test]
     fn every_path_is_absolute_under_data_dir() {
         let data_dir = PathBuf::from("C:/temp/familyhub-unit-test");
@@ -304,6 +381,7 @@ mod tests {
             data_dir: data_dir.clone(),
             http_addr: DEFAULT_HTTP_ADDR.parse().unwrap(),
             tls_addr: DEFAULT_TLS_ADDR.parse().unwrap(),
+            screensaver_schedule_hour: None,
         };
 
         assert_eq!(config.db_path(), data_dir.join("family.db"));
@@ -372,6 +450,7 @@ mod tests {
             data_dir: data_dir.clone(),
             http_addr: DEFAULT_HTTP_ADDR.parse().unwrap(),
             tls_addr: DEFAULT_TLS_ADDR.parse().unwrap(),
+            screensaver_schedule_hour: None,
         };
 
         let counter = Arc::new(AtomicUsize::new(0));

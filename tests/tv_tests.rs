@@ -788,13 +788,18 @@ fn the_kiosk_badge_keeps_the_servers_ninety_second_semantics() {
 // Source-level guards
 // ---------------------------------------------------------------------------
 
-/// Every `.rs` file T2.1 owns, as `(path, source)`.
+/// Every `.rs` file T2.1 owns, as `(path, source)`, **plus**
+/// `src/client/components/screensaver.rs` (QA round 1, Q1-14): `KioskDashboard`
+/// (`src/client/app.rs`) layers `Screensaver {}` full-screen over `TvShell {}`
+/// on `/tv` only — idle-triggered or schedule-forced — so it is exactly as
+/// pointer-free-or-bust as everything under `tv/`, even though the component
+/// itself lives one directory up (it is T2.7's file, not T2.1's).
 fn tv_sources() -> Vec<(String, String)> {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+    let components_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("src")
         .join("client")
-        .join("components")
-        .join("tv");
+        .join("components");
+    let dir = components_dir.join("tv");
     let mut out = Vec::new();
     for entry in std::fs::read_dir(&dir).unwrap_or_else(|err| panic!("reading {dir:?}: {err}")) {
         let path = entry.expect("a dir entry").path();
@@ -804,6 +809,12 @@ fn tv_sources() -> Vec<(String, String)> {
         }
     }
     assert!(out.len() >= 8, "expected the whole tv module, got {out:?}");
+
+    let screensaver_path = components_dir.join("screensaver.rs");
+    let screensaver_source = std::fs::read_to_string(&screensaver_path)
+        .unwrap_or_else(|err| panic!("reading {screensaver_path:?}: {err}"));
+    out.push((screensaver_path.display().to_string(), screensaver_source));
+
     out
 }
 

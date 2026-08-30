@@ -49,6 +49,27 @@ impl IdleTracker {
     }
 }
 
+/// QA round 1, Q1-14: whether an activity event, observed while the
+/// **scheduled** overlay (`MaximizedView::Screensaver`, forced on by
+/// `ScreensaverSchedule` regardless of idleness) is showing, should clear
+/// it back to `MaximizedView::None`.
+///
+/// This is the remote's only way off a scheduled overlay: the two
+/// `onclick`/`onpointerdown` handlers this component used to carry are
+/// gone (the television has no pointer — `tests/tv_tests.rs`'s
+/// `the_kiosk_never_reaches_for_a_pointer_event` now scans this file too),
+/// so a remote key press reaching the window-level `keydown` listener
+/// (`platform::watch_activity`) and bumping the `activity` signal is the
+/// only remaining path. Pure and synchronous so it is unit testable without
+/// wasm or a browser, the same way [`IdleTracker`] is.
+pub fn view_after_activity(current_view: MaximizedView) -> MaximizedView {
+    if current_view == MaximizedView::Screensaver {
+        MaximizedView::None
+    } else {
+        current_view
+    }
+}
+
 #[component]
 pub fn Screensaver() -> Element {
     let mut is_idle = use_signal(|| false);
@@ -89,6 +110,19 @@ pub fn Screensaver() -> Element {
                 if is_idle() {
                     is_idle.set(false);
                 }
+                // QA round 1, Q1-14: real activity (a remote key press,
+                // fed through the window-level `keydown` listener in
+                // `platform::watch_activity`) also dismisses a
+                // schedule-forced overlay, which `is_idle` alone does not
+                // control (`active = is_idle() || scheduled_on` below).
+                // Without this, a family that opted into the schedule had
+                // no way to clear it except another `SetView` from a phone.
+                let mut current_view = state.current_view;
+                let before = current_view.peek().to_owned();
+                let after = view_after_activity(before);
+                if after != before {
+                    current_view.set(after);
+                }
             }
         }
     });
@@ -112,9 +146,16 @@ pub fn Screensaver() -> Element {
 
     rsx! {
         div {
+            // QA round 1, Q1-14: the two `onclick`/`onpointerdown` dismiss
+            // handlers this div used to carry are gone — the television has
+            // no pointer, and they were the only way `active` (`is_idle() ||
+            // scheduled_on`) could be true with no route back for a
+            // schedule-forced overlay from the remote. Dismissal now runs
+            // entirely off the `activity` signal both idle detection and
+            // [`view_after_activity`] already watch: any `keydown` (a
+            // remote press) already resets `is_idle` above, and clears a
+            // scheduled overlay via `state.current_view` in the same tick.
             class: "fixed inset-0 z-50 bg-black",
-            onclick: move |_| is_idle.set(false),
-            onpointerdown: move |_| is_idle.set(false),
             for (index, image) in images.iter().enumerate() {
                 img {
                     key: "{image}",
@@ -227,5 +268,37 @@ mod idle_tracker_tests {
         // A fresh 600 s must elapse again from the reset point.
         assert!(!tracker.tick_idle(IDLE_TIMEOUT_SECS - IDLE_TICK_SECS));
         assert!(tracker.tick_idle(IDLE_TICK_SECS));
+    }
+}
+
+/// QA round 1, Q1-14: "the remote cannot clear [a scheduled overlay]" —
+/// these cover [`view_after_activity`], the pure function that now does,
+/// wired into [`Screensaver`]'s activity-tracking `use_future`.
+#[cfg(test)]
+mod view_after_activity_tests {
+    use super::*;
+
+    #[test]
+    fn activity_clears_a_scheduled_overlay() {
+        assert_eq!(
+            view_after_activity(MaximizedView::Screensaver),
+            MaximizedView::None
+        );
+    }
+
+    #[test]
+    fn activity_leaves_every_other_view_untouched() {
+        for view in [
+            MaximizedView::None,
+            MaximizedView::Routine,
+            MaximizedView::Calendar,
+            MaximizedView::Whiteboard,
+        ] {
+            assert_eq!(
+                view_after_activity(view),
+                view,
+                "activity must not disturb a view the schedule did not set"
+            );
+        }
     }
 }

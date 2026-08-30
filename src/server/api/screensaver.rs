@@ -45,7 +45,7 @@ pub async fn list_screensaver_images() -> Result<Vec<String>, ServerFnError> {
         // image/jpeg") holds the very first time this ever runs, with no
         // separate install step.
         ensure_placeholders_seeded(&dir).await;
-        ensure_background_tasks();
+        ensure_background_tasks(ScreensaverSchedule::default());
         Ok(images_in_dir(&dir).await)
     }
     #[cfg(not(feature = "server"))]
@@ -182,7 +182,7 @@ pub async fn upload_screensaver_image_handler(mut multipart: Multipart) -> Respo
             .into_response();
     }
 
-    ensure_background_tasks();
+    ensure_background_tasks(ScreensaverSchedule::default());
     (StatusCode::OK, axum::Json(images_in_dir(&dir).await)).into_response()
 }
 
@@ -260,6 +260,22 @@ impl ScreensaverSchedule {
     pub fn due(&self, current_hour: u32, last_fired_hour: Option<u32>) -> bool {
         self.enabled && current_hour == self.hour && last_fired_hour != Some(current_hour)
     }
+
+    /// Build a schedule from [`crate::server::config::FamilyHubConfig::screensaver_schedule_hour`]
+    /// (QA round 1, Q1-14). `enabled` follows `hour.is_some()` directly — an
+    /// owner opts in by setting the hour, nothing more — so this is the
+    /// enable path `ScreensaverSchedule::default()` never had: before this,
+    /// `default()` was the *only* instance the codebase ever constructed,
+    /// which made `enabled: true` dead code no caller could ever reach.
+    pub fn from_config_hour(hour: Option<u32>) -> Self {
+        match hour {
+            Some(hour) => Self {
+                enabled: true,
+                hour,
+            },
+            None => Self::default(),
+        }
+    }
 }
 
 /// One evaluation of the schedule: pure and synchronous, so it is unit
@@ -293,13 +309,25 @@ pub fn evaluate_schedule(
 /// `list_screensaver_images` and `upload_screensaver_image_handler` (every
 /// `/tv`/`/m` load, and every upload) stay harmless no-ops after boot has
 /// already started it.
+///
+/// QA round 1, Q1-14: `ensure_background_tasks` now takes the
+/// [`ScreensaverSchedule`] to run rather than always building
+/// `ScreensaverSchedule::default()` itself, which was the actual bug — no
+/// caller anywhere in the tree ever constructed an *enabled* schedule, so
+/// `enabled: true` was unreachable code. `router::run` is the only caller
+/// that can see [`crate::server::config::FamilyHubConfig`], so it is the one
+/// that builds the real schedule via [`ScreensaverSchedule::from_config_hour`]
+/// and wins the `OnceLock` race (it runs at boot, before either self-start
+/// call can fire); the two self-start call sites below keep passing
+/// `ScreensaverSchedule::default()` — disabled — purely as the pre-boot
+/// safety net they always were.
 #[cfg(feature = "server")]
 static SCHEDULE_TASK_STARTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 
 #[cfg(feature = "server")]
-pub fn ensure_background_tasks() {
+pub fn ensure_background_tasks(schedule: ScreensaverSchedule) {
     SCHEDULE_TASK_STARTED.get_or_init(|| {
-        tokio::spawn(schedule_loop(ScreensaverSchedule::default()));
+        tokio::spawn(schedule_loop(schedule));
     });
 }
 
@@ -336,6 +364,28 @@ mod schedule_tests {
             !ScreensaverSchedule::default().enabled,
             "PURPLE §P5.5 default 20: screensaver schedule off by default"
         );
+    }
+
+    /// QA round 1, Q1-14: `from_config_hour(None)` (no `familyhub.toml`
+    /// `[screensaver] schedule_hour` and no `FAMILY_HUB_SCREENSAVER_HOUR`)
+    /// must still land on exactly `ScreensaverSchedule::default()` — the
+    /// off-by-default guarantee must survive the new constructor unchanged.
+    #[test]
+    fn from_config_hour_none_matches_default() {
+        assert_eq!(
+            ScreensaverSchedule::from_config_hour(None),
+            ScreensaverSchedule::default()
+        );
+    }
+
+    /// QA round 1, Q1-14: this is the enable path that did not exist before
+    /// — `Some(hour)` is the only way to ever construct an `enabled: true`
+    /// schedule now, and it must carry the configured hour through exactly.
+    #[test]
+    fn from_config_hour_some_enables_at_that_hour() {
+        let schedule = ScreensaverSchedule::from_config_hour(Some(6));
+        assert!(schedule.enabled);
+        assert_eq!(schedule.hour, 6);
     }
 
     /// T2.7 acceptance (d): "with the schedule disabled, no `SetView` is

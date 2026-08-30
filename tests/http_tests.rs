@@ -93,6 +93,7 @@ async fn spawn_test_server() -> SocketAddr {
         data_dir: base,
         http_addr: "127.0.0.1:0".parse().expect("valid socket address"),
         tls_addr: "127.0.0.1:0".parse().expect("valid socket address"),
+        screensaver_schedule_hour: None,
     };
     let router = family_calendar::server::router::build_router(&config);
 

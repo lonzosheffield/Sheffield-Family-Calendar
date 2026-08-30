@@ -586,7 +586,18 @@ pub async fn run(config: FamilyHubConfig) -> Result<(), RunError> {
     // closes the "production wiring gap" the first pass of T2.7 logged).
     // `OnceLock`-guarded, so this and any later self-start call are both
     // harmless.
-    crate::server::api::screensaver::ensure_background_tasks();
+    //
+    // QA round 1, Q1-14: this is now the one call site that can ever build
+    // an *enabled* schedule — `config.screensaver_schedule_hour` is the
+    // enable path (`FAMILY_HUB_SCREENSAVER_HOUR` / `[screensaver]
+    // schedule_hour`) that did not exist before this fix. It runs here, at
+    // boot, ahead of every self-start call, so it always wins the
+    // `OnceLock` race.
+    crate::server::api::screensaver::ensure_background_tasks(
+        crate::server::api::screensaver::ScreensaverSchedule::from_config_hour(
+            config.screensaver_schedule_hour,
+        ),
+    );
     // QA round 1 Q1-13: `ServerMessage::Health` is documented by D5 and
     // `docs/PROTOCOL.md` as the TV badge's freshness signal, but nothing ever
     // sent one. Started here rather than from `realtime::ws_handler` so
