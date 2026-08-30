@@ -94,11 +94,31 @@ fn allowed_format(format: image::ImageFormat) -> Option<(&'static str, image::Im
 /// routes read the same `auth` text field and gate on the same check, rather
 /// than each carrying its own copy of it. Boxed for the same reason
 /// [`store_photo`]'s `Result` is (`clippy::result_large_err`).
+///
+/// **Q2-02**: the multipart `auth` field is no longer the only credential a
+/// browser can present. The phone's session is now the `fh_session`
+/// `HttpOnly` cookie (PLAN §P5.5 default 31), which rides along on the
+/// same-origin `fetch` these routes are posted with, so a request carrying a
+/// valid cookie and **no** `auth` field is accepted. An explicit `auth`
+/// field, if present and non-empty, is still checked first — a non-browser
+/// caller (and every pre-existing test) keeps working unchanged.
 #[cfg(feature = "server")]
-pub(crate) fn require_parent_session(auth: Option<&str>) -> Result<(), Box<Response>> {
-    crate::server::auth::require_session(auth.unwrap_or_default()).map_err(|_| {
-        Box::new((StatusCode::UNAUTHORIZED, "a parent session is required").into_response())
-    })
+pub(crate) fn require_parent_session(
+    auth: Option<&str>,
+    headers: &axum::http::HeaderMap,
+) -> Result<(), Box<Response>> {
+    let unauthorised =
+        || Box::new((StatusCode::UNAUTHORIZED, "a parent session is required").into_response());
+
+    let field = auth.unwrap_or_default();
+    if !field.is_empty() {
+        return crate::server::auth::require_session(field).map_err(|_| unauthorised());
+    }
+
+    match crate::server::auth::session_from_headers(headers) {
+        Some(token) if crate::server::auth::is_valid_session(&token) => Ok(()),
+        _ => Err(unauthorised()),
+    }
 }
 
 /// `POST /api/upload_photo` — axum `Multipart`, wired into `router.rs` with
@@ -119,7 +139,10 @@ pub(crate) fn require_parent_session(auth: Option<&str>) -> Result<(), Box<Respo
 /// exactly the same way (R-23, PLAN §0.3/§P5.5 default 35 — photo capture and
 /// task administration live behind the parent PIN).
 #[cfg(feature = "server")]
-pub async fn upload_photo_handler(mut multipart: Multipart) -> Response {
+pub async fn upload_photo_handler(
+    headers: axum::http::HeaderMap,
+    mut multipart: Multipart,
+) -> Response {
     let mut auth: Option<String> = None;
     let mut user_id: Option<u32> = None;
     let mut title: Option<String> = None;
@@ -166,7 +189,7 @@ pub async fn upload_photo_handler(mut multipart: Multipart) -> Response {
                 // are read off the wire, so an unauthenticated request never
                 // pays for buffering a photo it will be refused for anyway.
                 if !session_checked {
-                    if let Err(response) = require_parent_session(auth.as_deref()) {
+                    if let Err(response) = require_parent_session(auth.as_deref(), &headers) {
                         return *response;
                     }
                     session_checked = true;
@@ -192,7 +215,7 @@ pub async fn upload_photo_handler(mut multipart: Multipart) -> Response {
 
     // A title-only request (no `photo` field) never hit the check above.
     if !session_checked {
-        if let Err(response) = require_parent_session(auth.as_deref()) {
+        if let Err(response) = require_parent_session(auth.as_deref(), &headers) {
             return *response;
         }
     }
@@ -382,9 +405,12 @@ fn encode(image: &image::DynamicImage, format: image::ImageFormat) -> image::Ima
 /// `user_id` must own `task_id` — the same ownership rule T1.5 established for
 /// `toggle_custom_task` (R-23: "user 2 cannot toggle/delete user 3's task").
 ///
-/// **Q1-07**: `auth` is checked with `auth::require_session` before anything
-/// else — deletion is parent-only, the same rule the multipart upload route
-/// above enforces, and the one calendar CRUD (`api::calendar`) already had.
+/// **Q1-07**: `auth` is checked before anything else — deletion is
+/// parent-only, the same rule the multipart upload route above enforces, and
+/// the one calendar CRUD (`api::calendar`) already had. **Q2-02**: an empty
+/// `auth` falls back to the `fh_session` cookie on the current request
+/// (`auth::require_parent`), because the phone has no bearer token any more;
+/// off a request that fallback finds no headers and fails closed.
 #[server(endpoint = "delete_custom_task")]
 pub async fn delete_custom_task(
     auth: crate::shared::types::SessionToken,
@@ -393,8 +419,14 @@ pub async fn delete_custom_task(
 ) -> Result<(), ServerFnError> {
     #[cfg(feature = "server")]
     {
-        crate::server::auth::require_session(&auth)
-            .map_err(|err| ServerFnError::new(err.to_string()))?;
+        if auth.is_empty() {
+            crate::server::auth::require_parent()
+                .await
+                .map_err(|err| ServerFnError::new(err.to_string()))?;
+        } else {
+            crate::server::auth::require_session(&auth)
+                .map_err(|err| ServerFnError::new(err.to_string()))?;
+        }
 
         // The ownership check only reads (H-9): the read pool, not the write
         // one, exactly like `toggle_custom_task`'s equivalent check.

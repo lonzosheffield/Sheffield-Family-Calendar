@@ -588,6 +588,9 @@ T1.4-owned file.
 
 ### H-19. Session tokens are bearer values, not cookies, for this wave
 
+> **CLOSED** by `phase-qa2/T2.2` (QA round 2, Q2-02) — see "T2.2 — QA
+> round 2" at the end of this file.
+
 PLAN v2 §2 D3′/PURPLE §P5.5 default 31 describe the parent session as an
 `HttpOnly`/`Secure`/`SameSite=Lax` cookie. `src/server/router.rs` (where
 `serve_dioxus_application` mounts every `#[server]` fn) is T0.6→T1.3→T2.5
@@ -2196,6 +2199,9 @@ network read, WebSocket confirmed via `/health`, the routine driven by
 
 ### H-25. Migrate the phone off the bearer token now that `/api/login` exists
 
+> **CLOSED** by `phase-qa2/T2.2` (QA round 2, Q2-02) — see "T2.2 — QA
+> round 2" at the end of this file.
+
 Q1-02/Q1-03/Q1-11 landed in this branch: `src/server/auth.rs` gained a
 process-wide `PIN_GATE` (Q1-02/Q1-03 — a wrong setup code or PIN is now
 serialised and backed off identically, argon2 runs in `spawn_blocking`) and
@@ -2467,3 +2473,74 @@ acceptance criterion requires a Boss commit... recorded in
    editing/administration off the TV to phone-only. Recorded here rather
    than invented by this task, which owns `auth.rs`/`router.rs`, not the QR
    overlay (T2.1's/T2.2's files).
+
+---
+
+## T2.2 — QA round 2 (`phase-qa2/T2.2`, Q2-02)
+
+### H-19 and H-25 — CLOSED
+
+Both requests asked for the same thing from two directions: H-19 (T1.4, wave
+1-b) asked whoever built the phone login flow to move the parent session off
+a bearer value, and H-25 (T1.4, QA round 1) restated it once `POST /api/login`
+/ `POST /api/logout` / `GET /api/session` existed. **Done in this branch**, as
+Q2-02's solution specifies:
+
+- `src/client/components/mobile/session.rs` no longer stores anything. It is
+  `SessionState { FirstRun, SignedOut, Parent }` plus four calls —
+  `probe()` (`GET /api/session`: 204 → `Parent`, 404 → `FirstRun`, anything
+  else → `SignedOut`), `login()`, `setup()`, `logout()` — over a
+  `wasm_bindgen(inline_js)` `fetch(url, { credentials: 'same-origin' })`
+  snippet declared on `docs/NON_RUST.md`'s existing `inline_js` row.
+  `SESSION_STORAGE_KEY`, `token()`, `store()` and `clear()` are gone; `is_parent()`
+  now reads a `Signal<Option<SessionState>>` that `MobileShell` provides
+  through context and probes once on mount.
+- `src/client/components/mobile/settings.rs` renders one of three branches
+  from that signal: **FirstRun** → the setup form (setup code + new PIN +
+  confirm → `POST /api/setup`), **SignedOut** → the PIN form → `POST
+  /api/login`, **Parent** → **Sign out** → `POST /api/logout`. This is the
+  half of Q2-02 that closes `docs/OWNER_CHECKLIST.md` step 4: before it there
+  was no UI anywhere that could set a first PIN.
+- Call sites: `mobile/remote.rs` sends `auth: None` on `SetView` /
+  `SetActiveProfile` (the cookie authorised the upgrade — `api::realtime`,
+  Q1-11); `calendar.rs` passes `None` to `create_local_event` /
+  `delete_local_event`; `routine.rs` passes `String::new()` to
+  `delete_custom_task` and `upload::submit` dropped its `auth` parameter and
+  the `form.append('auth', …)` line, adding `credentials: 'same-origin'` to
+  its own `fetch`.
+
+### Cross-owner edits in this branch (for Boss ratification, as in round 1)
+
+Each is named verbatim by Q2-02's solution text:
+
+- `src/server/api/calendar.rs::require_parent` is now `async` and falls back
+  to `auth::require_parent()` on an empty token (T2.4's file).
+- `src/server/api/photos.rs`: `delete_custom_task` gains the same fallback;
+  `require_parent_session` takes a `&HeaderMap` and accepts a valid
+  `fh_session` cookie when the `auth` field is absent or empty (the field
+  still wins when present); `upload_photo_handler` takes a `HeaderMap`
+  (T2.5's file).
+- `src/server/api/screensaver.rs::upload_screensaver_image_handler` takes a
+  `HeaderMap` and threads it into the shared check (T2.7's file).
+- `tests/photo_tests.rs::t2_5_a` now posts with the cookie **only** — the
+  credential a real phone sends — while `t2_5_g` keeps proving that a request
+  with neither credential is 401 (T2.5's file).
+- `tests/calendar_tests.rs` gains one HTTP test: `create_local_event` with
+  `auth: null` and an `fh_session` cookie → 200, and the identical request
+  without the cookie → not 200 (T2.4's file).
+- `docs/NON_RUST.md`'s `inline_js` row now names `mobile/session.rs` as well
+  as `routine.rs` (T0.1's file) — required by Q2-02's "declared on
+  `NON_RUST`'s existing `inline_js` row".
+- `docs/PWA.md`'s "The five tabs" paragraph (T3.2 consolidated this file;
+  the sentence is named by Q2-02's solution).
+
+### Request → T1.4 (Q2-01, same wave)
+
+This branch's `session::setup()` posts to **`POST /api/setup`**, and
+`probe()` reads **`404` from `GET /api/session`** as "no PIN has ever been
+set". Both are Q2-01's deliverables and are **not** implemented here —
+`src/server/router.rs` is not a T2.2-owned file. Until Q2-01 lands, a fresh
+hub's `/api/session` answers `401`, so the phone shows the sign-in form
+rather than the setup form and `POST /api/setup` 404s. The two halves are
+designed to meet exactly at those two status codes; nothing else couples
+them.

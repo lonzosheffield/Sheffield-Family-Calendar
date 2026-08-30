@@ -14,7 +14,7 @@
 //! | `sw.js` | the service worker itself (declared in `docs/NON_RUST.md`) |
 //! | `queue.rs` | the offline mutation queue — date + idempotency key, 48 h |
 //! | `storage.rs` | `localStorage` shim, fallible everywhere |
-//! | `session.rs` | the parent session token (`docs/HANDOFF.md` H-19) |
+//! | `session.rs` | the parent session cookie — probe, sign in, first-run setup, sign out (Q2-02, closing `docs/HANDOFF.md` H-19/H-25) |
 //! | `remote.rs` | the TV Remote tab — `SetView` / `SetActiveProfile` |
 //! | `settings.rs` | parent sign-in, queue state, the offline promise |
 //!
@@ -33,6 +33,7 @@ use dioxus::prelude::*;
 use crate::client::components::calendar::CalendarPanel;
 use crate::client::components::mobile::queue::{OfflineQueue, QueueToast};
 use crate::client::components::mobile::remote::TvRemote;
+use crate::client::components::mobile::session::SessionState;
 use crate::client::components::mobile::settings::MobileSettings;
 use crate::client::components::routine::Routine;
 use crate::client::components::whiteboard::Whiteboard;
@@ -102,6 +103,20 @@ impl MobileTab {
 #[component]
 pub fn MobileShell() -> Element {
     let (bus, _sender) = use_realtime();
+
+    // Q2-02: the parent session is an `HttpOnly` cookie the page can never
+    // read, so "is this phone signed in, and has this hub ever been set up?"
+    // is a question only the server can answer. One probe on mount, cached in
+    // a context signal every tab reads through `session::state()` /
+    // `session::is_parent()`, and re-written by the Settings tab after a
+    // sign-in, a first-run setup or a sign-out.
+    let mut session = use_context_provider(|| Signal::new(Option::<SessionState>::None));
+    use_future(move || async move {
+        if let Some(state) = session::probe().await {
+            session.set(Some(state));
+        }
+    });
+
     let mut tab = use_signal(MobileTab::default);
     let mut toast = use_signal(|| Option::<String>::None);
     let mut queue_version = use_signal(|| 0u64);

@@ -86,10 +86,28 @@ fn to_error(err: crate::server::calendar::CalendarError) -> ServerFnError {
     ServerFnError::new(err.to_string())
 }
 
+/// **Q2-02**: an *empty* (or absent) `auth` falls back to the `fh_session`
+/// cookie on the current request, exactly as `api::profiles`'s
+/// `require_session_or_cookie` already did. The phone stopped carrying a
+/// bearer token when the session became the `HttpOnly` cookie PLAN §P5.5
+/// default 31 asks for; a non-browser caller can still pass one explicitly,
+/// and it is still checked first.
+///
+/// Fails closed off a request: `auth::require_parent` reads the headers
+/// through Dioxus fullstack's extraction seam, which finds nothing at all
+/// for a direct in-process call, so a test that passes no token still gets
+/// `Err`.
 #[cfg(feature = "server")]
-fn require_parent(auth: Option<SessionToken>) -> Result<(), ServerFnError> {
+async fn require_parent(auth: Option<SessionToken>) -> Result<(), ServerFnError> {
     let token = auth.unwrap_or_default();
-    crate::server::auth::require_session(&token).map_err(|err| ServerFnError::new(err.to_string()))
+    if token.is_empty() {
+        crate::server::auth::require_parent()
+            .await
+            .map_err(|err| ServerFnError::new(err.to_string()))
+    } else {
+        crate::server::auth::require_session(&token)
+            .map_err(|err| ServerFnError::new(err.to_string()))
+    }
 }
 
 /// Turn a [`LocalEventInput`] into the validated draft storage takes.
@@ -283,7 +301,7 @@ pub async fn create_local_event(
     {
         use crate::server::calendar as cal;
 
-        require_parent(auth)?;
+        require_parent(auth).await?;
         let draft = draft_from(&input)?;
         let pool = crate::server::db::pool()
             .await
@@ -312,7 +330,7 @@ pub async fn update_local_event(
     {
         use crate::server::calendar as cal;
 
-        require_parent(auth)?;
+        require_parent(auth).await?;
         let draft = draft_from(&input)?;
         let pool = crate::server::db::pool()
             .await
@@ -349,7 +367,7 @@ pub async fn delete_local_event(id: i64, auth: Option<SessionToken>) -> Result<(
     {
         use crate::server::calendar as cal;
 
-        require_parent(auth)?;
+        require_parent(auth).await?;
         let pool = crate::server::db::pool()
             .await
             .map_err(super::to_server_error)?;

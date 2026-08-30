@@ -1,10 +1,12 @@
 //! The phone surface's `localStorage` shim.
 //!
-//! Two things outlive a page load on a phone: the offline mutation queue
-//! ([`super::queue`]) and the parent session token ([`super::session`]).
-//! Both are small strings, both must survive the PWA being swiped away, and
-//! neither may ever reach the TV origin — which is exactly `localStorage`'s
-//! shape.
+//! One thing outlives a page load on a phone through this shim: the offline
+//! mutation queue ([`super::queue`]). It is a small string, it must survive
+//! the PWA being swiped away, and it may never reach the TV origin — which
+//! is exactly `localStorage`'s shape. (The parent session used to live here
+//! too; QA round 2's Q2-02 moved it to the server's `HttpOnly` cookie, which
+//! outlives the page load on its own and is out of reach of any script —
+//! see [`super::session`].)
 //!
 //! **Why hand-written `wasm_bindgen` imports rather than `web_sys::Storage`:**
 //! `Storage` is not in `Cargo.toml`'s `web-sys` feature list and `Cargo.toml`

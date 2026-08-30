@@ -110,9 +110,14 @@ async fn images_in_dir(dir: &std::path::Path) -> Vec<String> {
 /// **Q1-07**: gated on [`super::photos::require_parent_session`] — the same
 /// check `upload_photo_handler` uses — before the `photo` bytes are read, so
 /// an unbounded (up to 25 MiB) unauthenticated post can no longer fill
-/// `screensaver/` on any LAN client's say-so.
+/// `screensaver/` on any LAN client's say-so. **Q2-02**: that check now
+/// accepts the `fh_session` cookie as well as the `auth` field, which is why
+/// this handler takes a `HeaderMap`.
 #[cfg(feature = "server")]
-pub async fn upload_screensaver_image_handler(mut multipart: Multipart) -> Response {
+pub async fn upload_screensaver_image_handler(
+    headers: axum::http::HeaderMap,
+    mut multipart: Multipart,
+) -> Response {
     let mut auth: Option<String> = None;
     let mut photo_bytes: Option<Vec<u8>> = None;
 
@@ -129,7 +134,9 @@ pub async fn upload_screensaver_image_handler(mut multipart: Multipart) -> Respo
                 }
             }
             Some("photo") => {
-                if let Err(response) = super::photos::require_parent_session(auth.as_deref()) {
+                if let Err(response) =
+                    super::photos::require_parent_session(auth.as_deref(), &headers)
+                {
                     return *response;
                 }
                 match field.bytes().await {

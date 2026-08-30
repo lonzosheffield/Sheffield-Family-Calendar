@@ -323,7 +323,11 @@ fn EventRow(event: CalendarEvent, deletable: bool, on_deleted: EventHandler<Stri
                         class: "shrink-0 rounded-2xl px-3 py-2 text-sm font-semibold text-red-600 ring-1 ring-red-200",
                         "aria-label": "Delete {event.summary}",
                         onclick: move |_| async move {
-                            let message = match delete_local_event(id, session::token()).await {
+                            // Q2-02: `auth: None` — the `fh_session` cookie
+                            // rides on the same-origin request and
+                            // `api::calendar::require_parent` falls back to
+                            // it when the field is empty.
+                            let message = match delete_local_event(id, None).await {
                                 Ok(()) => "Event deleted.".to_string(),
                                 Err(err) => format!("Could not delete that event: {err}"),
                             };
@@ -363,7 +367,9 @@ fn EventComposer(on_saved: EventHandler<String>) -> Element {
                     rrule: Some(repeat()).filter(|value| !value.trim().is_empty()),
                     ..LocalEventInput::default()
                 };
-                let message = match create_local_event(input, session::token()).await {
+                // Q2-02: `auth: None`, as above — the cookie is the
+                // session now, not a value this page can read.
+                let message = match create_local_event(input, None).await {
                     Ok(_) => {
                         title.set(String::new());
                         starts_at.set(String::new());

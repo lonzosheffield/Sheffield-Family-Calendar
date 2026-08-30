@@ -9,7 +9,10 @@
 //! | e | Deleting the last event of a day makes the panel render `Empty`, not the stale event | [`t2_4_e_deleting_the_last_event_of_a_day_renders_empty_not_the_stale_event`] |
 //!
 //! Plus W4, which the task line calls out separately: the midnight tick forces
-//! a poll ([`t2_4_the_midnight_tick_forces_a_calendar_poll`]).
+//! a poll ([`t2_4_the_midnight_tick_forces_a_calendar_poll`]), and QA round 2's
+//! Q2-02: a `create_local_event` over real HTTP with `auth: null` and only the
+//! `fh_session` cookie is authorised
+//! ([`q2_02_a_create_with_no_auth_field_is_authorised_by_the_session_cookie`]).
 //!
 //! No service account and no network anywhere in this file (§P5.5 default 24 /
 //! H-24): the Google path is driven by the two committed fixtures in
@@ -810,4 +813,107 @@ fn rfc3339_local_is_deterministic_and_never_relabels_local_as_utc() {
         );
         assert_eq!(resolved.naive_local().second(), value.second());
     }
+}
+
+// ---------------------------------------------------------------------------
+// Q2-02 — the cookie is a credential for calendar CRUD too
+// ---------------------------------------------------------------------------
+
+/// The phone's calendar tab used to thread `session::token()` into every
+/// `create_local_event` / `delete_local_event` call. Since Q2-02 it passes
+/// `auth: None` and lets the browser attach the `fh_session` cookie to the
+/// same-origin request, so `api::calendar::require_parent` falls back to
+/// `auth::require_parent()` whenever the field is empty.
+///
+/// Driven over **real HTTP** against `build_router`, not in-process: the
+/// cookie only exists on a request, and an in-process call would prove
+/// nothing about the fallback.
+#[tokio::test]
+async fn q2_02_a_create_with_no_auth_field_is_authorised_by_the_session_cookie() {
+    let _guard = calendar_lock().await;
+    let _pool = fresh_pool().await;
+    let addr = spawn_http_server().await;
+    let token = family_calendar::server::auth::issue_session();
+
+    let body = serde_json::json!({
+        "input": {
+            "title": "Cookie-authorised event",
+            "description": null,
+            "location": null,
+            "starts_at": "2026-09-01T09:00:00",
+            "ends_at": null,
+            "all_day": false,
+            "tzid": null,
+            "rrule": null,
+            "user_id": null,
+            "color": null,
+        },
+        "auth": null,
+    })
+    .to_string();
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .expect("reqwest client builds");
+
+    // Without the cookie the very same request must still be refused.
+    let refused = client
+        .post(format!("http://{addr}/api/create_local_event"))
+        .header("content-type", "application/json")
+        .body(body.clone())
+        .send()
+        .await
+        .expect("create_local_event responds");
+    assert_ne!(
+        refused.status().as_u16(),
+        200,
+        "a create with neither an auth field nor a cookie must not succeed"
+    );
+
+    let accepted = client
+        .post(format!("http://{addr}/api/create_local_event"))
+        .header("content-type", "application/json")
+        .header("cookie", format!("fh_session={token}"))
+        .body(body)
+        .send()
+        .await
+        .expect("create_local_event responds");
+    let status = accepted.status().as_u16();
+    let text = accepted.text().await.unwrap_or_default();
+    assert_eq!(
+        status, 200,
+        "a create with auth: null and a valid fh_session cookie must be accepted; body was {text:?}"
+    );
+
+    let created: i64 = serde_json::from_str(&text).expect("the new event id comes back as JSON");
+    assert!(created > 0, "expected a real row id, got {created}");
+}
+
+/// `build_router` on an ephemeral port, so a test can send a real `Cookie`
+/// header. Mirrors `tests/photo_tests.rs::spawn_test_server`.
+async fn spawn_http_server() -> std::net::SocketAddr {
+    init_test_env();
+    let base =
+        std::env::temp_dir().join(format!("familyhub-calendar-tests-{}", std::process::id()));
+    let public = base.join("public");
+    std::fs::create_dir_all(&public).expect("test public directory is creatable");
+    std::env::set_var("DIOXUS_PUBLIC_PATH", &public);
+
+    let config = family_calendar::server::config::FamilyHubConfig {
+        data_dir: base,
+        http_addr: "127.0.0.1:0".parse().expect("valid socket address"),
+        tls_addr: "127.0.0.1:0".parse().expect("valid socket address"),
+        screensaver_schedule_hour: None,
+    };
+    let router = family_calendar::server::router::build_router(&config);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind an ephemeral port");
+    let addr = listener.local_addr().expect("listener has a local address");
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, router.into_make_service()).await;
+    });
+    addr
 }

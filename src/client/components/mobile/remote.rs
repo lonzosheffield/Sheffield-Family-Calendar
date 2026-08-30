@@ -2,11 +2,15 @@
 //!
 //! Both messages this sends are the ones §P2c gates on authorisation:
 //! `SetView` and `SetActiveProfile` are broadcast by the server *only* after
-//! it has checked a valid parent session token, or that the sender is asking
-//! for its own profile (R-23b). The token is passed as
-//! `auth: Option<SessionToken>` exactly as the protocol defines — see
-//! `session.rs` and `docs/HANDOFF.md` H-19 for why it is a bearer value on
-//! this surface for now.
+//! it has checked a valid parent session, or that the sender is asking for
+//! its own profile (R-23b).
+//!
+//! **Q2-02**: `auth` is now always `None`. The protocol field stays — it is
+//! how a client that is not a browser could still authenticate — but this
+//! phone has no bearer token to put in it any more: the `fh_session` cookie
+//! rode along on the WebSocket *upgrade* request, and `api::realtime`'s
+//! `ws_handler` has treated a connection carrying a valid one as an
+//! authorised parent since QA round 1 (Q1-11). See `session.rs`.
 //!
 //! The phone never mutates the TV's state locally and never assumes the send
 //! worked: the kiosk applies the change when the *server* re-emits it, and
@@ -51,7 +55,7 @@ pub fn TvRemote() -> Element {
                                 sender
                                     .send(ClientMessage::SetView {
                                         view,
-                                        auth: session::token(),
+                                        auth: None,
                                     });
                             },
                             "{label}"
@@ -75,7 +79,7 @@ pub fn TvRemote() -> Element {
                                 sender
                                     .send(ClientMessage::SetActiveProfile {
                                         user_id: i64::from(user_id),
-                                        auth: session::token(),
+                                        auth: None,
                                     });
                             },
                             "{profile_name(user_id)}"

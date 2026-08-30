@@ -114,8 +114,17 @@ Two other iOS specifics worth knowing:
 | **Settings** | Parent sign-in, what is queued offline, install help |
 
 The TV Remote needs a parent session: sign in with the six-digit PIN under
-Settings first. The hub enforces that itself — an unsigned phone's remote
-button reaches the server and is dropped there, never applied.
+Settings first (the very first time, enter the setup code and choose the PIN
+there). The hub enforces that itself — an unsigned phone's remote button
+reaches the server and is dropped there, never applied.
+
+The setup code is printed in the hub's log and written to
+`%ProgramData%\FamilyHub\setup-code.txt` on the hub PC; it is never served
+over the network, so setting the family's first PIN needs someone standing at
+the PC. Once the PIN is set, Settings shows the ordinary sign-in form, and a
+signed-in phone shows **Sign out** instead. The session itself is a 30-day
+`HttpOnly` cookie the hub sets — nothing on the phone stores a token, so
+signing out revokes it on the hub rather than merely forgetting it here.
 
 ---
 

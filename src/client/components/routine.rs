@@ -273,12 +273,12 @@ pub fn Routine(compact: bool) -> Element {
                                         let id = task.id;
                                         let owner = task.user_id;
                                         async move {
-                                            // Q1-07: deletion is parent-only; the server
-                                            // rejects an empty/invalid token with 401 either
-                                            // way, but this avoids a doomed round trip when
-                                            // this phone was never signed in at all.
-                                            let auth = session::token().unwrap_or_default();
-                                            let _ = delete_custom_task(auth, owner, id).await;
+                                            // Q1-07: deletion is parent-only. Q2-02: the
+                                            // token is empty because there is no bearer
+                                            // token any more — `delete_custom_task` falls
+                                            // back to the `fh_session` cookie the
+                                            // same-origin request already carries.
+                                            let _ = delete_custom_task(String::new(), owner, id).await;
                                             tasks.restart();
                                         }
                                     },
@@ -500,8 +500,7 @@ fn PhotoTaskDialog(on_close: EventHandler<()>, on_created: EventHandler<()>) -> 
                             let (mime, bytes) = photo().unwrap_or_else(|| (String::new(), Vec::new()));
                             let due = due_date();
                             let due = if due.trim().is_empty() { None } else { Some(due) };
-                            let auth = session::token();
-                            let ok = upload::submit(bytes, mime, title().trim().to_string(), user_id, due, auth).await;
+                            let ok = upload::submit(bytes, mime, title().trim().to_string(), user_id, due).await;
                             saving.set(false);
                             if ok {
                                 on_created.call(());
@@ -563,19 +562,20 @@ mod upload {
     /// and "the server rejected it", the same coarse signal
     /// [`super::PhotoTaskDialog`] already showed for the old base64 path.
     ///
-    /// **Q1-07**: `auth` (the parent session token, `session::token()`) is
-    /// the first thing appended to the form — the server rejects the whole
-    /// request with 401 before it reads any `photo` bytes if this is missing
-    /// or invalid.
+    /// **Q1-07**: the upload is parent-only — the server rejects the whole
+    /// request with 401 before it reads any `photo` bytes unless the caller
+    /// holds a parent session. **Q2-02**: that session is the `fh_session`
+    /// cookie, which the browser attaches to this same-origin `fetch` on its
+    /// own, so there is no `auth` field on the form any more and nothing for
+    /// this function to thread through.
     pub async fn submit(
         bytes: Vec<u8>,
         mime: String,
         title: String,
         user_id: u32,
         due_date: Option<String>,
-        auth: Option<String>,
     ) -> bool {
-        imp::submit(bytes, mime, title, user_id, due_date, auth).await
+        imp::submit(bytes, mime, title, user_id, due_date).await
     }
 
     #[cfg(all(feature = "web", target_arch = "wasm32"))]
@@ -583,10 +583,9 @@ mod upload {
         use wasm_bindgen::prelude::*;
 
         #[wasm_bindgen(inline_js = r#"
-export async function family_hub_submit_task(bytes, mime, title, userId, dueDate, auth) {
+export async function family_hub_submit_task(bytes, mime, title, userId, dueDate) {
     try {
         const form = new FormData();
-        form.append('auth', auth ?? '');
         form.append('title', title);
         form.append('user_id', String(userId));
         if (dueDate) {
@@ -613,7 +612,7 @@ export async function family_hub_submit_task(bytes, mime, title, userId, dueDate
                 form.append('photo', outBlob, 'photo.jpg');
             }
         }
-        const response = await fetch('/api/upload_photo', { method: 'POST', body: form });
+        const response = await fetch('/api/upload_photo', { method: 'POST', credentials: 'same-origin', body: form });
         return response.ok;
     } catch (err) {
         console.error('family hub photo upload failed', err);
@@ -628,7 +627,6 @@ export async function family_hub_submit_task(bytes, mime, title, userId, dueDate
                 title: String,
                 user_id: u32,
                 due_date: Option<String>,
-                auth: Option<String>,
             ) -> bool;
         }
 
@@ -638,9 +636,8 @@ export async function family_hub_submit_task(bytes, mime, title, userId, dueDate
             title: String,
             user_id: u32,
             due_date: Option<String>,
-            auth: Option<String>,
         ) -> bool {
-            family_hub_submit_task(bytes, mime, title, user_id, due_date, auth).await
+            family_hub_submit_task(bytes, mime, title, user_id, due_date).await
         }
     }
 
@@ -656,7 +653,6 @@ export async function family_hub_submit_task(bytes, mime, title, userId, dueDate
             _title: String,
             _user_id: u32,
             _due_date: Option<String>,
-            _auth: Option<String>,
         ) -> bool {
             false
         }

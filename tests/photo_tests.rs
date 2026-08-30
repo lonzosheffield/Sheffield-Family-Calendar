@@ -11,6 +11,10 @@
 //! | f | `due_date = yesterday` hidden from today's list; delete removes row + file | `t2_5_f_*` |
 //! | g | (Q1-07) an upload with no parent session → 401, nothing written | `t2_5_g_*` |
 //!
+//! (a) posts with the **cookie only** since QA round 2's Q2-02 — that is what
+//! the phone sends now — while (g) keeps proving that a request with neither
+//! credential is refused.
+//!
 //! Own test binary/process, same reasoning `tests/routine_tests.rs` gives:
 //! integration test binaries cannot share private helpers, and each `cargo
 //! test` target is its own process so `DATABASE_URL`/`FAMILY_HUB_DATA_DIR`
@@ -185,14 +189,32 @@ fn multipart_body(boundary: &str, parts: &[Part]) -> Vec<u8> {
 }
 
 async fn post_multipart(addr: SocketAddr, path: &str, parts: &[Part]) -> reqwest::Response {
+    post_multipart_with_cookie(addr, path, None, parts).await
+}
+
+/// The same POST, optionally carrying an `fh_session` cookie instead of (or
+/// as well as) an `auth` form field.
+///
+/// **Q2-02**: the phone no longer has a bearer token to append to the form —
+/// its session is the `HttpOnly` cookie the browser attaches to the
+/// same-origin `fetch` on its own — so `require_parent_session` accepts the
+/// cookie too. This is the only credential a real phone sends now.
+async fn post_multipart_with_cookie(
+    addr: SocketAddr,
+    path: &str,
+    session_cookie: Option<&str>,
+    parts: &[Part],
+) -> reqwest::Response {
     const BOUNDARY: &str = "familyhub-t2-5-test-boundary";
     let body = multipart_body(BOUNDARY, parts);
-    http_client()
-        .post(format!("http://{addr}{path}"))
-        .header(
-            "content-type",
-            format!("multipart/form-data; boundary={BOUNDARY}"),
-        )
+    let mut request = http_client().post(format!("http://{addr}{path}")).header(
+        "content-type",
+        format!("multipart/form-data; boundary={BOUNDARY}"),
+    );
+    if let Some(token) = session_cookie {
+        request = request.header("cookie", format!("fh_session={token}"));
+    }
+    request
         .body(body)
         .send()
         .await
@@ -228,12 +250,15 @@ async fn t2_5_a_a_real_12mp_photo_uploads_fast_and_small() {
         "sanity: the fixture should be a real photo, not a stub"
     );
 
+    // Q2-02: **only** the `fh_session` cookie — no `auth` form field at all.
+    // This is byte-for-byte the credential the phone now sends, since the
+    // session stopped being a bearer value the page could read.
     let started = Instant::now();
-    let response = post_multipart(
+    let response = post_multipart_with_cookie(
         addr,
         "/api/upload_photo",
+        Some(&parent_token()),
         &[
-            text_part("auth", parent_token()),
             text_part("user_id", "1"),
             text_part("title", "Clean your room"),
             file_part("photo", "photo_12mp.jpg", "image/jpeg", fixture),
