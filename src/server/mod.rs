@@ -8,6 +8,9 @@ pub mod calendar;
 pub mod config;
 #[cfg(feature = "server")]
 pub mod db;
+// T1.7 - /health JSON + the TV staleness badge state machine.
+#[cfg(feature = "server")]
+pub mod health;
 // T1.3 - TLS + PKI + mDNS for the split-origin deployment (PLAN v2 D3').
 #[cfg(feature = "server")]
 pub mod mdns;

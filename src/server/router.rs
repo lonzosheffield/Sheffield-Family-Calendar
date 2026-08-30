@@ -74,6 +74,7 @@ const RENEWAL_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_se
 /// isn't its call to make; `Route::Mobile` in `client/app.rs` is unchanged.
 pub fn build_router(config: &FamilyHubConfig) -> Router {
     let pki_dir = config.pki_dir();
+    let health_config = config.clone();
 
     Router::new()
         .route("/", get(redirect_root_to_tv))
@@ -86,7 +87,13 @@ pub fn build_router(config: &FamilyHubConfig) -> Router {
                 async move { ca_cert(pki_dir).await }
             }),
         )
-        .route("/health", get(health_stub))
+        .route(
+            "/health",
+            get(move || {
+                let health_config = health_config.clone();
+                async move { crate::server::health::health_handler(health_config).await }
+            }),
+        )
         .route("/ws", get(realtime::ws_handler))
         .nest_service("/uploads", ServeDir::new(config.upload_dir()))
         .nest_service(
@@ -203,17 +210,6 @@ async fn ca_cert(pki_dir: PathBuf) -> Response {
     }
 }
 
-/// T0.6 stub. T1.7 replaces the body with the real health JSON (db
-/// reachability, last poll, cert expiry, disk free, WS client count,
-/// uptime, migration version) but keeps this route and its `application/json`
-/// content type.
-async fn health_stub() -> impl IntoResponse {
-    (
-        [(header::CONTENT_TYPE, "application/json")],
-        r#"{"status":"stub"}"#,
-    )
-}
-
 /// Process-wide cache of opened PKI directories.
 ///
 /// [`build_router`] takes a `&FamilyHubConfig`, not a certificate provider,
@@ -222,7 +218,15 @@ async fn health_stub() -> impl IntoResponse {
 /// answering with the *same* CA the HTTPS listener is using (both resolve
 /// `config.pki_dir()`), while still letting each test binary point at its
 /// own throwaway directory.
-fn pki_for(dir: &std::path::Path) -> Result<Arc<SelfSignedCa>, crate::server::pki::PkiError> {
+///
+/// `pub(crate)` rather than private: `server::health::health_handler` (T1.7)
+/// resolves the exact same cached `Arc<SelfSignedCa>` for `/health`'s
+/// `cert_not_after`/`days_to_expiry` fields, so they can never drift from the
+/// certificate the HTTPS listener is actually serving (`docs/HANDOFF.md`
+/// "H-14. For T1.7 — `/health` cert fields").
+pub(crate) fn pki_for(
+    dir: &std::path::Path,
+) -> Result<Arc<SelfSignedCa>, crate::server::pki::PkiError> {
     use std::collections::HashMap;
     use std::sync::Mutex;
     use std::sync::OnceLock;
@@ -279,6 +283,9 @@ pub async fn run(config: FamilyHubConfig) {
     // `main.rs` is frozen by §P4's ownership table, and `run` is the first
     // thing it calls, so this is that line — see `docs/HANDOFF.md` H-7.
     install_crypto_provider();
+    // T1.7: `/health`'s `uptime_seconds` measures from here — as close to the
+    // real process start as `main.rs` being frozen (T0.6) allows T1.7 to get.
+    crate::server::health::mark_started();
 
     // T0.5: every path this process touches (DB, uploads, screensaver, PKI,
     // logs) is resolved once here, absolutely, from `FamilyHubConfig` —

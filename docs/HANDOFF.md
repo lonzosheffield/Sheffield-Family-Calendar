@@ -648,3 +648,65 @@ renders an explicit "can't reach the hub" panel instead of the routine list —
 this branch to include `date`/`idempotency_key` in their JSON bodies — they
 predate T1.5 and would otherwise fail to deserialize. T1.5's own acceptance
 suite is `tests/routine_tests.rs`.
+
+## T1.7 — `/health` JSON + the TV staleness badge state machine
+
+`src/server/health.rs` is T1.7's sole file (`docs/reviews/PURPLE_TEAM.md`
+§P4). Resolving H-14 above: `router::health_stub` is gone, `/health` now
+calls `health::health_handler(config)`, and `router::pki_for` is `pub(crate)`
+so the handler reads the exact `Arc<SelfSignedCa>` the HTTPS listener is
+serving (one line of `router.rs`, plus one call to
+`health::mark_started()` at the top of `router::run` for an accurate
+`uptime_seconds` — both inside the edit `docs/HANDOFF.md`'s own T1.3 H-14
+note already told this task to expect).
+
+### Requests for files T1.7 does not own
+
+- **For T2.4 (`src/server/calendar.rs`): call `health::record_google_poll_success`.**
+  `/health`'s `last_google_poll` is a process-wide `Option<String>` T1.7
+  exposes a setter for (`crate::server::health::record_google_poll_success(chrono::Local::now())`)
+  but cannot call itself — `calendar.rs` is T2.4's file. Call it once per
+  successful poll, inside `store_events` (or right after `fetch_today` returns
+  `Ok`) in `spawn_polling_task`'s loop. Until T2.4 lands this, `/health`
+  honestly reports `last_google_poll: null` — which is also *correct* today,
+  since PURPLE §P5.5 default 24 ("no Google service account assumed") means
+  `spawn_polling_task` returns immediately without ever polling in this run
+  (A4: no credentials exist).
+- **For T2.1 (`src/client/components/tv/**`): consume `health::StalenessTracker`
+  for the disconnected badge.** D8's "permanent 'updated HH:MM' + red
+  disconnected badge after 90 s of silence" is two conditions ORed together —
+  "the socket is down" (already `RealtimeBus::connected`, T1.2) and "data is
+  older than 90 s" (new: `health::StalenessTracker`, pure and unit-tested in
+  `src/server/health.rs`, no socket/clock/Dioxus dependency). `health.rs` is
+  `#[cfg(feature = "server")]`-gated (`server/mod.rs`), so it does not compile
+  for the `web`/wasm32 target the TV kiosk view actually runs on — T2.1 should
+  either port `StalenessTracker` verbatim into its own client-side module (it
+  is ~15 lines, two methods, no dependencies beyond `std::time::Instant`) or,
+  if Boss would rather there be exactly one copy, move it into
+  `src/shared/types.rs` (T1.2's file, later edited by T1.4 — a third owner
+  would need a Boss decision) using `web_time::Instant` in place of
+  `std::time::Instant` for wasm portability (`web_time` is not yet in
+  `Cargo.toml`). T1.7 did not make that call unprompted since it touches a
+  file it does not own either way.
+
+### Deviations / notes
+
+- **Disk free via a direct `GetDiskFreeSpaceExW` FFI call, not a new crate or
+  a shelled-out command.** Same reasoning Boss ratified for T1.3's
+  `icacls.exe` (H-12 above: an OS built-in invoked at runtime is a declared
+  exception, not an undeclared non-Rust component) — except this is a raw
+  `extern "system"` call into `kernel32.dll`, not even a spawned process, so
+  it is arguably *more* clearly "the OS's own API" than icacls was. No
+  `docs/NON_RUST.md` row requested for the same reason T1.3's wasn't: it's an
+  OS API call, not a component of the stack. Boss may still want a row for
+  symmetry with the icacls/netsh precedent — flagging it here rather than
+  deciding it, since `docs/NON_RUST.md` is T0.1-owned.
+- **`/health`'s HTTP status doubles as the `db` signal**: 200 when the
+  database answered a real `SELECT 1` against `db::read_pool()`, 503
+  otherwise, so a monitor that only reads the status line still sees the hub
+  is unwell. Every other key stays populated and typed even when `db` is
+  false — a dead database does not blank the rest of the report.
+- **`tests/health_pool_closed_tests.rs` is a separate test binary** from
+  `tests/health_tests.rs`, solely to close the process-wide `db::pools()`
+  `OnceCell` (H-9) without taking down any other test that shares a binary —
+  see that file's own doc comment.
