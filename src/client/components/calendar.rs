@@ -63,6 +63,19 @@ impl<T> CalendarState<T> {
         }
     }
 
+    /// The payload, but only when the hub has actually answered with content.
+    ///
+    /// `Loading`, `Error` and `Empty` all yield `None`, which is what lets a
+    /// caller that only needs "how many things are there" (the kiosk's
+    /// [`crate::client::components::tv::model::TvLayout`]) stay honest
+    /// without matching all four arms.
+    pub fn ready(&self) -> Option<&T> {
+        match self {
+            CalendarState::Ready(payload) => Some(payload),
+            _ => None,
+        }
+    }
+
     /// The state's name, used by the tests and by the `data-calendar-state`
     /// attribute the surfaces carry so a failure is diagnosable from the DOM.
     pub fn name(&self) -> &'static str {

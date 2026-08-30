@@ -31,6 +31,7 @@
 //! Left/Right-vs-profile-selector clash this way). `Enter` crosses from the
 //! rail into the list; `Backspace` crosses back.
 
+use crate::client::components::calendar::CalendarState;
 use crate::shared::types::{
     CalendarEvent, CustomTaskView, MaximizedView, RoutineItemView, ServerMessage,
 };
@@ -218,7 +219,11 @@ pub struct TvModel {
     pub profiles: Vec<TvProfile>,
     pub routine: Vec<RoutineItemView>,
     pub tasks: Vec<CustomTaskView>,
-    pub events: Vec<CalendarEvent>,
+    /// Today's calendar as a **state**, not a bare list (W3): a failed
+    /// `get_today_events` must not reach the television looking like a day
+    /// with nothing on it. The four arms are rendered separately by
+    /// [`super::surface`].
+    pub events: CalendarState<Vec<CalendarEvent>>,
     pub state: TvState,
     /// Is the WebSocket up? Drives half of the disconnected badge (D8).
     pub connected: bool,
@@ -242,7 +247,7 @@ impl TvModel {
             profiles: Vec::new(),
             routine: Vec::new(),
             tasks: Vec::new(),
-            events: Vec::new(),
+            events: CalendarState::Loading,
             state: TvState::default(),
             connected: false,
             stale: false,
@@ -365,7 +370,9 @@ impl TvLayout {
             rail_len: model.profiles.len() + 1,
             body_lens: [
                 model.routine.len() + model.tasks.len(),
-                model.events.len(),
+                // Only a `Ready` calendar has rows to focus: Loading, Error
+                // and Empty each render one unfocusable sentence (W3).
+                model.events.ready().map_or(0, Vec::len),
                 // Drawing is phone-only (PURPLE §P5.5 default 35): the
                 // television shows the board, it does not edit it, so the
                 // panel has nothing focusable.
@@ -421,9 +428,14 @@ pub fn body_order(model: &TvModel) -> Vec<FocusId> {
             .collect(),
         TvPanel::Calendar => model
             .events
-            .iter()
-            .map(|event| FocusId::Event(event.id.clone()))
-            .collect(),
+            .ready()
+            .map(|events| {
+                events
+                    .iter()
+                    .map(|event| FocusId::Event(event.id.clone()))
+                    .collect()
+            })
+            .unwrap_or_default(),
         TvPanel::Whiteboard => Vec::new(),
     }
 }

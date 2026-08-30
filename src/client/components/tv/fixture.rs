@@ -15,6 +15,7 @@
 //! Compiled only for tests and for the server build (which is what runs
 //! `cargo test`); it is never part of the wasm bundle the television loads.
 
+use crate::client::components::calendar::CalendarState;
 use crate::shared::types::{CalendarEvent, CustomTaskView, RoutineItemView};
 
 use super::model::{TvModel, TvProfile, TvState};
@@ -118,7 +119,7 @@ pub fn canonical_model() -> TvModel {
         profiles,
         routine,
         tasks,
-        events,
+        events: CalendarState::Ready(events),
         state: TvState::initial(),
         connected: true,
         stale: false,

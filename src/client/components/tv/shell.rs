@@ -30,6 +30,7 @@
 use dioxus::prelude::*;
 
 use crate::client::app::use_app_state;
+use crate::client::components::calendar::CalendarState;
 use crate::client::components::qr::{phone_join_url, DEFAULT_PHONE_PORT};
 use crate::client::components::routine::{new_idempotency_key, RoutineDateState};
 use crate::client::components::whiteboard::Whiteboard;
@@ -249,10 +250,16 @@ pub fn TvShell() -> Element {
         Some(Ok(tasks)) => tasks.clone(),
         _ => Vec::new(),
     };
-    let events = match &*events_resource.read_unchecked() {
-        Some(Ok(events)) => events.clone(),
-        _ => Vec::new(),
-    };
+    // W3: the television must be able to tell "the hub did not answer" from
+    // "there is nothing on today", so the resource is folded into the same
+    // four-state machine the phone uses rather than into a bare `Vec`.
+    let events = CalendarState::resolve(
+        events_resource
+            .read_unchecked()
+            .clone()
+            .map(|result| result.map_err(|error| error.to_string())),
+        Vec::is_empty,
+    );
 
     let rail: Vec<TvProfile> = profiles.read().clone();
     let mut current = state.read().to_owned();

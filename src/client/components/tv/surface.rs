@@ -21,6 +21,7 @@
 
 use dioxus::prelude::*;
 
+use crate::client::components::calendar::CalendarState;
 use crate::client::components::qr::qr_svg;
 use crate::shared::types::{routine_progress, CalendarEvent, CustomTaskView, RoutineItemView};
 
@@ -297,14 +298,33 @@ fn task_row(task: &CustomTaskView, focused: bool) -> Element {
     }
 }
 
+/// The four calendar states, each rendered as itself (W3).
+///
+/// The three non-`Ready` arms are one unfocusable sentence apiece, so the
+/// golden focus order is unchanged by them: a hub that cannot be reached
+/// says so, and never borrows the empty day's words.
 fn calendar_panel(model: &TvModel, focused: Option<&FocusId>) -> Element {
-    let events: Vec<CalendarEvent> = model.events.clone();
-
-    if events.is_empty() {
-        return rsx! {
-            p { class: "{TV_HEADING} text-slate-600", "Nothing on the calendar today." }
-        };
-    }
+    let events: Vec<CalendarEvent> = match &model.events {
+        CalendarState::Loading => {
+            return rsx! {
+                p { class: "{TV_HEADING} text-slate-600", "Loading the calendar…" }
+            };
+        }
+        CalendarState::Error(_) => {
+            return rsx! {
+                p {
+                    class: "{TV_HEADING} text-slate-600",
+                    "Can't reach the hub's calendar — check the hub"
+                }
+            };
+        }
+        CalendarState::Empty => {
+            return rsx! {
+                p { class: "{TV_HEADING} text-slate-600", "Nothing on the calendar today." }
+            };
+        }
+        CalendarState::Ready(events) => events.clone(),
+    };
 
     rsx! {
         ul { class: "flex min-h-0 flex-1 flex-col gap-5 overflow-auto",

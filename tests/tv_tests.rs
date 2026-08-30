@@ -27,12 +27,13 @@
 
 use dioxus::prelude::*;
 
+use family_calendar::client::components::calendar::CalendarState;
 use family_calendar::client::components::tv::fixture::{canonical_model, CANONICAL_ROUTINE};
 use family_calendar::client::components::tv::keymap::{
     keys_debug_enabled, KeyLogEntry, TvKey, TV_KEYS,
 };
 use family_calendar::client::components::tv::model::{
-    current_focus, focus_order, FocusId, TvModel, TvOverlay, TvPanel, TvState, TvZone,
+    current_focus, focus_order, FocusId, TvLayout, TvModel, TvOverlay, TvPanel, TvState, TvZone,
 };
 use family_calendar::client::components::tv::nav::{on_key_for, presses_to_reach, TvAction};
 use family_calendar::client::components::tv::staleness::{
@@ -45,7 +46,7 @@ use family_calendar::client::components::tv::style::{
 use family_calendar::client::components::tv::surface::TvSurface;
 use family_calendar::server::db::SHEFFIELD_MORNING_ROUTINE;
 use family_calendar::server::health::STALENESS_THRESHOLD;
-use family_calendar::shared::types::{MaximizedView, ServerMessage};
+use family_calendar::shared::types::{CalendarEvent, MaximizedView, ServerMessage};
 
 // ---------------------------------------------------------------------------
 // A very small HTML tag scanner
@@ -819,4 +820,103 @@ fn the_kiosk_never_reaches_for_a_pointer_event() {
             );
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// T2.4 (e) on the television — a failed fetch is not an empty day (W3, Q1-12)
+// ---------------------------------------------------------------------------
+
+/// The kiosk is the primary display, so the W3 states have to reach it too.
+///
+/// Before this, `TvModel.events` was a bare `Vec` and `tv/shell.rs` folded
+/// `Some(Err(_))` and `None` into `Vec::new()`: a hub that could not be
+/// reached rendered "Nothing on the calendar today." — the family reads a
+/// broken hub as a free morning. Each of the four states must now render as
+/// itself, and only `Ready` may contribute focusable rows.
+#[test]
+fn t2_4_e_a_failed_calendar_fetch_is_not_rendered_as_an_empty_day() {
+    const EMPTY_SENTENCE: &str = "Nothing on the calendar today.";
+
+    fn calendar_model(events: CalendarState<Vec<CalendarEvent>>) -> TvModel {
+        let mut model = canonical_model();
+        model.state.panel = TvPanel::Calendar;
+        model.events = events;
+        model
+    }
+
+    // The state the bug produced: the hub answered with an error.
+    let failed = calendar_model(CalendarState::Error("pool closed".to_string()));
+    let html = render(&failed);
+    assert!(
+        !html.contains(EMPTY_SENTENCE),
+        "an unreachable hub still renders the empty day's words:\n{html}"
+    );
+    assert!(
+        html.contains("reach the hub"),
+        "the error state says nothing about the hub:\n{html}"
+    );
+    assert_eq!(
+        TvLayout::of(&failed).body_len(TvPanel::Calendar),
+        0,
+        "the error sentence must not be focusable"
+    );
+    assert!(
+        rendered_focus_ids(&html)
+            .iter()
+            .all(|id| !id.starts_with("tv-event-")),
+        "an error state rendered event rows: {html}"
+    );
+
+    // The first paint, before the hub has answered at all.
+    let loading = calendar_model(CalendarState::Loading);
+    let html = render(&loading);
+    assert!(
+        !html.contains(EMPTY_SENTENCE),
+        "the first paint borrows the empty day's words:\n{html}"
+    );
+    assert!(
+        html.contains("Loading the calendar"),
+        "the loading state does not say it is loading:\n{html}"
+    );
+    assert_eq!(TvLayout::of(&loading).body_len(TvPanel::Calendar), 0);
+
+    // A genuinely empty day keeps the sentence it has always had.
+    let empty = calendar_model(CalendarState::Empty);
+    let html = render(&empty);
+    assert!(
+        html.contains(EMPTY_SENTENCE),
+        "a real empty day lost its sentence:\n{html}"
+    );
+    assert_eq!(TvLayout::of(&empty).body_len(TvPanel::Calendar), 0);
+
+    // ...and a day with events still lists them, focusably.
+    let fixture = canonical_model();
+    let events = fixture
+        .events
+        .ready()
+        .expect("the fixture calendar is Ready")
+        .clone();
+    assert!(!events.is_empty(), "the fixture has no events to list");
+    let ready = calendar_model(CalendarState::Ready(events.clone()));
+    let html = render(&ready);
+    assert!(!html.contains(EMPTY_SENTENCE));
+    assert_eq!(
+        TvLayout::of(&ready).body_len(TvPanel::Calendar),
+        events.len()
+    );
+    for event in &events {
+        assert!(
+            html.contains(&event.summary),
+            "`{}` is missing from the Ready calendar:\n{html}",
+            event.summary
+        );
+    }
+
+    // All four states name themselves, which is what the `data-calendar-state`
+    // diagnostics rely on and what makes the three failures distinguishable.
+    let names: Vec<&str> = [failed.events, loading.events, empty.events, ready.events]
+        .iter()
+        .map(CalendarState::name)
+        .collect();
+    assert_eq!(names, vec!["error", "loading", "empty", "ready"]);
 }
