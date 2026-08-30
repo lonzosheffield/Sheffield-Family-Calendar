@@ -38,14 +38,14 @@ pub fn TvRemote() -> Element {
         div { class: "flex flex-col gap-6",
             section {
                 h2 { class: "mb-1 text-lg font-bold text-sheffield-dark", "Show on the TV" }
-                p { class: "mb-3 text-sm text-slate-500",
+                p { class: "mb-3 text-sm text-slate-600",
                     "Changes what the whole family sees on the television."
                 }
                 div { class: "grid grid-cols-2 gap-3",
                     for (view , label) in VIEWS {
                         button {
                             key: "{label}",
-                            class: "rounded-2xl bg-white px-4 py-4 text-base font-semibold text-sheffield-dark shadow ring-1 ring-slate-200 active:bg-sheffield-light/30 disabled:opacity-40",
+                            class: "rounded-2xl bg-white px-4 py-4 text-base font-semibold text-sheffield-dark shadow ring-1 ring-slate-200 active:ring-4 active:ring-sheffield-dark disabled:opacity-40",
                             disabled: !connected,
                             onclick: move |_| {
                                 sender
@@ -62,14 +62,14 @@ pub fn TvRemote() -> Element {
 
             section {
                 h2 { class: "mb-1 text-lg font-bold text-sheffield-dark", "Whose routine" }
-                p { class: "mb-3 text-sm text-slate-500",
+                p { class: "mb-3 text-sm text-slate-600",
                     "Switches the profile shown on the television."
                 }
                 div { class: "grid grid-cols-2 gap-3",
                     for user_id in 1..=FAMILY_PROFILE_COUNT {
                         button {
                             key: "{user_id}",
-                            class: "rounded-2xl bg-white px-4 py-4 text-base font-semibold text-sheffield-dark shadow ring-1 ring-slate-200 active:bg-sheffield-light/30 disabled:opacity-40",
+                            class: "rounded-2xl bg-white px-4 py-4 text-base font-semibold text-sheffield-dark shadow ring-1 ring-slate-200 active:ring-4 active:ring-sheffield-dark disabled:opacity-40",
                             disabled: !connected,
                             onclick: move |_| {
                                 sender
@@ -85,11 +85,11 @@ pub fn TvRemote() -> Element {
             }
 
             if !connected {
-                p { class: "rounded-2xl bg-sheffield-accent/10 p-4 text-sm font-semibold text-sheffield-accent",
+                p { class: "rounded-2xl border-l-4 border-sheffield-accent bg-sheffield-accent/10 p-4 text-sm font-semibold text-slate-800",
                     "Not connected to the hub — the remote will work again as soon as the phone is back on the home Wi-Fi."
                 }
             } else if !signed_in {
-                p { class: "rounded-2xl bg-sheffield-sun/20 p-4 text-sm font-semibold text-slate-700",
+                p { class: "rounded-2xl border-l-4 border-sheffield-sun bg-sheffield-sun/20 p-4 text-sm font-semibold text-slate-800",
                     "Sign in with the parent PIN under Settings to control the TV. Without it the hub ignores these buttons."
                 }
             }

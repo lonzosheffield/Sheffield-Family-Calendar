@@ -26,6 +26,7 @@ use crate::shared::types::{routine_progress, CalendarEvent, CustomTaskView, Rout
 
 use super::keymap::TV_KEYS;
 use super::model::{current_focus, FocusId, TvModel, TvOverlay, TvPanel, TvProfile};
+use super::palette::{best_ink_on, Rgb, SHEFFIELD_DARK};
 use super::staleness::status_line;
 use super::style::{
     focus_class, TV_BODY_LARGE, TV_BODY_TEXT, TV_HEADING, TV_HEADING_LARGE, TV_OVERSCAN_CLASS,
@@ -92,19 +93,19 @@ fn header(model: &TvModel) -> Element {
                     "{model.state.panel.title()}"
                 }
                 if model.state.panel == TvPanel::Routine {
-                    p { class: "{TV_HEADING} text-slate-500", "{profile}" }
+                    p { class: "{TV_HEADING} text-slate-600", "{profile}" }
                 }
             }
             div { class: "flex shrink-0 items-center gap-6",
                 p {
                     id: "tv-updated-at",
-                    class: "{TV_BODY_TEXT} font-semibold text-slate-500",
+                    class: "{TV_BODY_TEXT} font-semibold text-slate-600",
                     "{status_line(model.updated_at.as_deref())}"
                 }
                 if badge_lit {
                     p {
                         id: "tv-disconnected-badge",
-                        class: "{TV_BODY_TEXT} rounded-full bg-red-600 px-6 py-2 font-bold text-white",
+                        class: "{TV_BODY_TEXT} rounded-full bg-sheffield-accent px-6 py-2 font-bold text-slate-800",
                         role: "status",
                         "Disconnected"
                     }
@@ -148,6 +149,14 @@ fn profile_button(profile: &TvProfile, active: bool, focused: bool) -> Element {
         .next()
         .map(|c| c.to_uppercase().to_string())
         .unwrap_or_else(|| "?".to_string());
+    // The disc's colour comes from the `profiles` row, so the ink on it has
+    // to be chosen rather than assumed: a white initial on Boy 4's
+    // `#F4D03F` is 1.5:1, and on his brother's `#2672B3` it is 5.1:1
+    // (T3.4 / `palette::best_ink_on`). A row with an unreadable colour falls
+    // back to the hub's primary blue rather than to no disc at all.
+    let disc = Rgb::parse(&profile.color).unwrap_or(SHEFFIELD_DARK);
+    let disc_hex = disc.to_hex();
+    let disc_ink = best_ink_on(disc);
 
     rsx! {
         button {
@@ -157,8 +166,8 @@ fn profile_button(profile: &TvProfile, active: bool, focused: bool) -> Element {
             "aria-current": if active { "true" } else { "false" },
             class: "{ring} {fill} flex items-center gap-6 px-8 py-6 shadow-lg",
             span {
-                class: "{TV_HEADING} flex h-24 w-24 shrink-0 items-center justify-center rounded-full font-bold text-white",
-                style: "background-color: {profile.color}",
+                class: "{TV_HEADING} flex h-24 w-24 shrink-0 items-center justify-center rounded-full font-bold {disc_ink}",
+                style: "background-color: {disc_hex}",
                 "{initial}"
             }
             span { class: "{TV_BODY_LARGE} truncate font-bold", "{profile.name}" }
@@ -174,7 +183,7 @@ fn join_qr_button(focused: bool) -> Element {
             "data-tv-focus": "join-qr",
             class: "{ring} mt-auto bg-white px-8 py-6 shadow-lg",
             span { class: "{TV_BODY_LARGE} font-bold text-sheffield-dark", "Add a phone" }
-            span { class: "{TV_BODY_TEXT} block text-slate-500", "Play/Pause shows the code" }
+            span { class: "{TV_BODY_TEXT} block text-slate-600", "Play/Pause shows the code" }
         }
     }
 }
@@ -200,7 +209,7 @@ fn routine_panel(model: &TvModel, focused: Option<&FocusId>) -> Element {
 
     if items.is_empty() && tasks.is_empty() {
         return rsx! {
-            p { class: "{TV_HEADING} text-slate-500", "Loading today's routine…" }
+            p { class: "{TV_HEADING} text-slate-600", "Loading today's routine…" }
         };
     }
 
@@ -212,7 +221,10 @@ fn routine_panel(model: &TvModel, focused: Option<&FocusId>) -> Element {
                     style: "width: {progress}%",
                 }
             }
-            p { class: "{TV_HEADING} shrink-0 font-bold text-sheffield-accent", "{done} / {total}" }
+            p {
+                class: "{TV_HEADING} shrink-0 rounded-full bg-sheffield-accent px-8 py-1 font-bold text-slate-800",
+                "{done} / {total}"
+            }
         }
         ul { class: "flex min-h-0 flex-1 flex-col gap-5 overflow-auto",
             for item in items.into_iter() {
@@ -233,7 +245,7 @@ fn routine_row(item: &RoutineItemView, focused: bool) -> Element {
     let id = FocusId::RoutineItem(item.template_id).dom_id();
     let ring = focus_class(focused);
     let fill = if item.completed {
-        "bg-sheffield-light/25 text-slate-500"
+        "bg-sheffield-light/25 text-slate-800"
     } else {
         "bg-white text-slate-800"
     };
@@ -256,7 +268,7 @@ fn routine_row(item: &RoutineItemView, focused: bool) -> Element {
             }
             span { class: "min-w-0 flex-1",
                 span { class: "{TV_BODY_LARGE} block font-bold", "{item.title}" }
-                span { class: "{TV_BODY_TEXT} block text-slate-500", "{item.description}" }
+                span { class: "{TV_BODY_TEXT} block text-slate-600", "{item.description}" }
             }
         }
     }
@@ -266,7 +278,7 @@ fn task_row(task: &CustomTaskView, focused: bool) -> Element {
     let id = FocusId::CustomTask(task.id).dom_id();
     let ring = focus_class(focused);
     let fill = if task.is_completed {
-        "bg-sheffield-light/25 text-slate-500"
+        "bg-sheffield-light/25 text-slate-800"
     } else {
         "bg-white text-slate-800"
     };
@@ -290,7 +302,7 @@ fn calendar_panel(model: &TvModel, focused: Option<&FocusId>) -> Element {
 
     if events.is_empty() {
         return rsx! {
-            p { class: "{TV_HEADING} text-slate-500", "Nothing on the calendar today." }
+            p { class: "{TV_HEADING} text-slate-600", "Nothing on the calendar today." }
         };
     }
 
@@ -342,7 +354,7 @@ fn clock(timestamp: &str) -> String {
 fn whiteboard_panel(board: Element) -> Element {
     rsx! {
         div { class: "flex min-h-0 flex-1 flex-col gap-6",
-            p { class: "{TV_BODY_TEXT} shrink-0 text-slate-500",
+            p { class: "{TV_BODY_TEXT} shrink-0 text-slate-600",
                 "Drawing happens on a phone — the board shows here."
             }
             div { class: "min-h-0 flex-1 overflow-hidden rounded-3xl bg-white shadow-lg", {board} }
@@ -362,7 +374,7 @@ fn panel_hints(model: &TvModel) -> Element {
             let fill = if panel == current {
                 "bg-sheffield-dark text-white"
             } else {
-                "bg-white text-slate-500"
+                "bg-white text-slate-600"
             };
             (
                 panel,
@@ -398,7 +410,7 @@ fn join_overlay(model: &TvModel, focused: Option<&FocusId>) -> Element {
             "data-tv-overlay": "join-qr",
 
             h1 { class: "{TV_HEADING_LARGE} font-bold text-sheffield-dark", "Add a phone" }
-            p { class: "{TV_HEADING} text-slate-500",
+            p { class: "{TV_HEADING} text-slate-600",
                 "Scan this with the phone's camera, on the home Wi‑Fi."
             }
             if let Some(svg) = svg {
@@ -407,7 +419,7 @@ fn join_overlay(model: &TvModel, focused: Option<&FocusId>) -> Element {
             if let Some(url) = url {
                 p { class: "{TV_HEADING} font-bold tracking-wide text-slate-800", "{url}" }
             } else {
-                p { class: "{TV_HEADING} text-slate-500", "Waiting for the hub's address…" }
+                p { class: "{TV_HEADING} text-slate-600", "Waiting for the hub's address…" }
             }
             button {
                 id: "tv-overlay-close",

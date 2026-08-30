@@ -144,7 +144,7 @@ pub fn MobileShell() -> Element {
                     aria_live: "polite",
                     "{message}"
                     button {
-                        class: "ml-3 font-bold text-slate-500",
+                        class: "ml-3 font-bold text-slate-800",
                         aria_label: "Dismiss",
                         onclick: move |_| toast.set(None),
                         "×"
@@ -195,7 +195,7 @@ pub fn MobileShell() -> Element {
                 for entry in MobileTab::ALL {
                     button {
                         key: "{entry.slug()}",
-                        class: if entry == tab() { "flex flex-col items-center gap-0.5 px-1 py-2 text-xs font-bold text-sheffield-dark" } else { "flex flex-col items-center gap-0.5 px-1 py-2 text-xs font-semibold text-slate-400" },
+                        class: if entry == tab() { "flex flex-col items-center gap-0.5 px-1 py-2 text-xs font-bold text-sheffield-dark" } else { "flex flex-col items-center gap-0.5 px-1 py-2 text-xs font-semibold text-slate-600" },
                         aria_current: if entry == tab() { "page" } else { "false" },
                         onclick: move |_| tab.set(entry),
                         span { class: "text-xl leading-none", aria_hidden: "true", "{entry.glyph()}" }
@@ -227,14 +227,22 @@ async fn flush_queue() -> Option<String> {
     chosen.map(QueueToast::message)
 }
 
+/// The connection state, as a **chip** rather than as coloured text.
+///
+/// T3.4: `sheffield-sun` on the `sheffield-dark` header was 3.4:1 and
+/// `sheffield-accent` on it was 1.6:1 — the "Offline" word, the one word on
+/// this surface that has to be legible when everything else has failed, was
+/// the least legible thing on the screen. Flipping the hue to the *ground*
+/// and putting `slate-800` on it gives 9.7:1 connected and 4.7:1 offline,
+/// with the hue still doing the signalling (`palette::PALETTE_PAIRS`).
 #[component]
 fn ConnectionDot(connected: bool) -> Element {
     rsx! {
         span {
-            class: if connected { "flex items-center gap-2 text-xs font-semibold text-sheffield-sun" } else { "flex items-center gap-2 text-xs font-semibold text-sheffield-accent" },
+            class: if connected { "flex items-center gap-2 rounded-full bg-sheffield-sun px-3 py-1 text-xs font-bold text-slate-800" } else { "flex items-center gap-2 rounded-full bg-sheffield-accent px-3 py-1 text-xs font-bold text-slate-800" },
             role: "status",
             span {
-                class: if connected { "h-2.5 w-2.5 rounded-full bg-sheffield-sun" } else { "h-2.5 w-2.5 rounded-full bg-sheffield-accent" },
+                class: "h-2.5 w-2.5 rounded-full bg-slate-800",
                 aria_hidden: "true",
             }
             if connected {

@@ -33,11 +33,11 @@ pub fn MobileSettings(queue_version: u64, on_retry: EventHandler<()>) -> Element
             section {
                 h2 { class: "mb-1 text-lg font-bold text-sheffield-dark", "Parent sign-in" }
                 if signed_in() {
-                    p { class: "mb-3 text-sm text-slate-500",
+                    p { class: "mb-3 text-sm text-slate-600",
                         "This phone is signed in as a parent and can control the TV and edit the family's settings."
                     }
                     button {
-                        class: "rounded-2xl bg-white px-4 py-3 text-base font-semibold text-sheffield-accent shadow ring-1 ring-slate-200",
+                        class: "rounded-2xl border-l-4 border-sheffield-accent bg-white px-4 py-3 text-base font-semibold text-slate-800 shadow ring-1 ring-slate-200",
                         onclick: move |_| {
                             session::clear();
                             signed_in.set(false);
@@ -46,7 +46,7 @@ pub fn MobileSettings(queue_version: u64, on_retry: EventHandler<()>) -> Element
                         "Sign out"
                     }
                 } else {
-                    p { class: "mb-3 text-sm text-slate-500",
+                    p { class: "mb-3 text-sm text-slate-600",
                         "Enter the six-digit parent PIN. The hub checks it, never this phone."
                     }
                     form {
@@ -102,11 +102,11 @@ pub fn MobileSettings(queue_version: u64, on_retry: EventHandler<()>) -> Element
             section {
                 h2 { class: "mb-1 text-lg font-bold text-sheffield-dark", "Saved while offline" }
                 if queue.is_empty() {
-                    p { class: "text-sm text-slate-500",
+                    p { class: "text-sm text-slate-600",
                         "Nothing waiting — every change has reached the hub."
                     }
                 } else {
-                    p { class: "mb-3 text-sm text-slate-500",
+                    p { class: "mb-3 text-sm text-slate-600",
                         "{queue.len()} change(s) are waiting to be sent. They keep the day they were made for, and the hub applies each one exactly once."
                     }
                     ul { class: "mb-3 flex flex-col gap-2",
@@ -117,7 +117,7 @@ pub fn MobileSettings(queue_version: u64, on_retry: EventHandler<()>) -> Element
                                 span { class: "font-semibold text-sheffield-dark",
                                     "{entry.mutation.label()}"
                                 }
-                                span { class: "text-slate-500", " · for {entry.date}" }
+                                span { class: "text-slate-600", " · for {entry.date}" }
                             }
                         }
                     }
@@ -131,7 +131,7 @@ pub fn MobileSettings(queue_version: u64, on_retry: EventHandler<()>) -> Element
 
             section {
                 h2 { class: "mb-1 text-lg font-bold text-sheffield-dark", "Offline & install" }
-                p { class: "text-sm text-slate-500",
+                p { class: "text-sm text-slate-600",
                     "Add the hub to your home screen to use it like an app. On Android changes are sent again as soon as the phone reconnects; on iPhone they are sent the next time you open the app. Either way nothing is lost for two days, and nothing is applied twice."
                 }
             }

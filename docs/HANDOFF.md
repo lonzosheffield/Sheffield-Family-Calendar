@@ -1853,3 +1853,78 @@ PURPLE §P3 T3.1's modified acceptance for this run — **no elevated install
 was performed by this task**; that is owner step A3, and `sc query
 FamilyHub` / `netsh advfirewall firewall show rule name=FamilyHub*` are the
 owner's own verification commands once they run `install` for real.
+=======
+## T3.4 — palette-faithful polish (wave 3)
+
+Branch `phase-3/T3.4`. Files touched, all inside T3.4's §P4 grant
+(`src/client/components/tv/**`, `src/client/components/mobile/**`, styling
+only) plus the two artefacts the task statement names
+(`tests/palette_tests.rs`, `assets/tailwind.css`). No `Cargo.toml`, no
+`router.rs`, no migration, no new crate, no new non-Rust component.
+`tailwind.config.js` is **unchanged** — the five Sheffield hues are exactly as
+T0.1 left them; only which ink sits on which ground changed.
+
+**New:** `src/client/components/tv/palette.rs` — the WCAG maths (relative
+luminance, contrast ratio, alpha compositing, all from the hex values), the
+nine-token allowlist, the ink/ground pair table, and `best_ink_on()` for the
+profile discs.
+
+### Requests
+
+1. **`palette.rs` wants to live one directory up.** It is the whole hub's
+   colour contract — `mobile/**` pairs are in it too — but §P4 gives T3.4 no
+   shared file, and adding a module to `src/client/components/mod.rs` would
+   have been an edit outside the grant. It is therefore homed at
+   `tv/palette.rs` and used from `mobile/**` via the full path. Whoever owns
+   `components/mod.rs` next can move it to `src/client/components/palette.rs`
+   with a re-export; nothing but the `use` lines changes.
+
+2. **Four components rendered *inside* `/m` are still off-palette, and T3.4
+   does not own them.** `tests/palette_tests.rs` scans `tv/**` and `mobile/**`
+   only, so these are invisible to it today:
+
+   | file | owner | off-palette tokens |
+   | --- | --- | --- |
+   | `components/routine.rs` | T2.5 | `text-slate-400/500`, `bg-slate-50`, `bg-red-50`, `text-red-500/600/700`, `border-red-500`, `ring-red-200`, `ring-slate-100` |
+   | `components/calendar.rs` | T2.4 | `text-slate-400/500`, `bg-slate-50`, `bg-red-50`, `text-red-600/700` |
+   | `components/whiteboard.rs` | T2.3 | `text-slate-500`, `ring-slate-200` |
+   | `components/qr.rs` | T1.3 | none found |
+
+   Concretely: `text-slate-400` on white is **2.56:1** and `text-slate-500` on
+   white is **4.76:1**; the fix in every case is `text-slate-600` (7.58:1),
+   which is already the muted stop on both surfaces. Once those four are
+   converted, widen `surface_sources()` in `tests/palette_tests.rs` from two
+   directories to all of `src/client/components/**` and the allowlist scan
+   covers the whole client. That is a one-line test change plus a token
+   sweep, but it edits three other tasks' files, so it is recorded rather
+   than applied.
+
+3. **T2.7's "no phone Settings upload control" request is still open.** T3.4
+   is the next owner of `mobile/**` but its grant is *styling only* (§P4),
+   and a file input is behaviour, not styling. Left untouched.
+
+### Decisions worth ratifying
+
+- **The focus ring's offset is now `sheffield-dark`, not `sheffield-paper`**
+  (`tv/style.rs`). D8 fixes the ring itself at `ring-sheffield-sun`, and sun
+  on paper is 1.48:1 — the indicator had no edge WCAG 1.4.11 would accept. A
+  dark gap gives it two: sun→dark 3.37:1 and dark→card 5.07:1. `ring-8` and
+  `focus:ring-sheffield-sun` are untouched, so every T2.1 assertion still
+  holds.
+- **The two mid-tone hues became grounds instead of inks.** `sheffield-accent`
+  as *text* is 3.09:1 on paper and 1.61:1 on the phone's dark header — the
+  word "Offline", which has to be legible precisely when nothing else works,
+  was the least legible thing on the screen. It is now `slate-800` on an
+  accent chip (4.62:1); "Connected" is `slate-800` on a sun chip (9.71:1);
+  the kiosk's disconnected badge is the same chip, which also removed the one
+  stray off-palette Tailwind colour (`bg-red-600`) from `/tv`.
+- **Profile-disc ink is computed, not assumed.** A white initial on Boy 4's
+  `#F4D03F` was 1.51:1. `palette::best_ink_on()` picks `slate-800` or `white`
+  per row colour; a swept RGB cube shows the pick never falls below 3.83:1.
+- **The neutral ramp is three stops** (`slate-800` ink, `slate-600` muted,
+  `slate-200` on-dark). `slate-400`, `slate-500` and `slate-700` are gone from
+  both surfaces and the allowlist scan keeps them out.
+
+No acceptance test was weakened. `tests/tv_tests.rs` (21 tests, T2.1's whole
+contract) is untouched and green.
+>>>>>>> phase-3/T3.4

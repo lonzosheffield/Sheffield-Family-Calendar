@@ -13,6 +13,7 @@
 //! | [`model`] | panels, zones, focus identities, and [`model::focus_order`] — the single definition of what is focusable and in what order |
 //! | [`nav`] | [`nav::on_key`], the pure transition function the whole remote runs through |
 //! | [`style`] | the focus ring, the four-size type scale (all ≥ 28 px, headings ≥ 44 px) and the 5 % overscan class |
+//! | [`palette`] | **T3.4** — the Sheffield palette as a contract: every ink/ground pair, its WCAG ratio computed in Rust, and the ink picker for the profile discs |
 //! | [`staleness`] | the permanent "updated HH:MM" line and the red disconnected badge (T1.7's tracker, ported to wasm) |
 //! | [`clock`] | the hub's own wall clock, polled — the badge's server pulse and the source of HH:MM |
 //! | [`surface`] | [`surface::TvSurface`], a pure component that renders a [`model::TvModel`] |
@@ -46,6 +47,7 @@ pub mod clock;
 pub mod keymap;
 pub mod model;
 pub mod nav;
+pub mod palette;
 pub mod shell;
 pub mod staleness;
 pub mod style;
