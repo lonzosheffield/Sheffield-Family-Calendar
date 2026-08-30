@@ -756,3 +756,130 @@ T1.6 was not part of this closeout and its branch/worktree are untouched.
   exactly as the WS protocol already does.
 
 Wave 2-a (T2.1–T2.5) may start from this `main` once T1.6 is also closed.
+
+---
+
+## From T2.1 (Fire TV kiosk / 10-foot UI) → Boss, T1.2, T1.4, T2.2, T2.3, T3.4
+
+T2.1 owns `src/client/components/tv/**` (PURPLE §P4) and stayed inside it
+except where noted below. Golden files live in `tests/golden/`; the acceptance
+suite is `tests/tv_tests.rs`.
+
+### H-20. `src/client/app.rs` — one line changed, and it has no listed owner
+
+§P4's ownership table has no row for `src/client/app.rs`, and `/tv` is useless
+if nothing routes to the new surface, so `KioskDashboard` now renders
+`TvShell {}` instead of `Dashboard {}` (plus the matching `use`). That is the
+whole diff in that file.
+
+**T2.2 will need the same file** for `/m`, and it edits a different component
+(`Mobile`), so the two should merge cleanly — but Boss should confirm at the
+2-a close and give the file an owner for wave 3. `components::dashboard` is
+now unreferenced by `/tv`; it is left in the tree because it is the obvious
+starting point for T2.2's phone layout. If T2.2 does not want it, Boss can
+delete it at the 2-a close.
+
+### H-21. `assets/tailwind.css` was rebuilt — and must be rebuilt again at the 2-a close
+
+`assets/**` belongs to T0.7, but Tailwind's output is *generated from `src/`*,
+and the kiosk's new utilities (`p-[5%]`, `ring-8`, `ring-offset-4`,
+`ring-transparent`, `text-4xl/5xl/6xl`, `bg-red-600`, `w-[26rem]`, …) are not
+in the committed CSS, so `/tv` would render unstyled without it. Rebuilt with
+the pinned binary, exactly the command T0.8's CI step runs:
+
+```powershell
+& "$env:USERPROFILE\.cargo\bin\tailwindcss.exe" -i input.css -o assets/tailwind.css --minify
+```
+
+Every other wave 2-a task adds classes too, so this file **will** conflict.
+Precedent is the wave 1-a close (`1bc45d9`): Boss rebuilds it once on the
+merged tree. Resolve any conflict by taking either side and re-running the
+command above — it is a build artefact, never hand-edited.
+
+### H-22. `tv_clock()` is a `#[server]` fn living outside `src/server/api/`
+
+`src/client/components/tv/clock.rs` declares one server function,
+`tv_clock() -> TvClock { hhmm, date }`, returning the **hub's** local time
+(§P5.5 default 14: server-local, never device-local). It is declared there
+because every module in `src/server/api/` is owned by another task
+(T1.4/T1.5/T2.4/T2.7) and a wave-2 task may not edit them.
+
+Request: fold it into `src/server/api/` (a new `tv.rs`, or `routine.rs`
+alongside `today()`) at a wave boundary and re-export it from `api/mod.rs`
+like every other server fn. The move is mechanical — the only callers are
+`tv::shell` and its own unit test.
+
+### H-23. → T1.2: the server never sends `ServerMessage::Health`
+
+`docs/PROTOCOL.md` and §P2c list `Health { stale, last_update }`, but nothing
+in `src/server/api/realtime.rs` ever emits it, so **the only server→client
+traffic on an idle socket is `Pong`** — and `RealtimeBus::apply` matches
+`Pong` to `{}`. The consequence for D8: a client cannot observe "the hub is
+alive" over the WebSocket at all between user actions.
+
+T2.1 works around this by polling `tv_clock()` every 20 s, which is a real
+round trip to the hub and therefore a real liveness probe; that poll is what
+feeds `TvStaleness::record_message`, and the badge is
+`!connected || tracker.is_stale(now)` exactly as the wave 1-b Boss note
+specified. It works, but it is an HTTP poll standing in for a protocol
+message that is already designed.
+
+Request: when `src/server/api/realtime.rs` is next open, broadcast
+`ServerMessage::Health { stale: false, last_update }` on the existing
+heartbeat/tick path (every 20–30 s is plenty). `RealtimeBus.stale` already
+consumes it and the kiosk already renders it; the clock poll can then drop to
+a much lower frequency or disappear.
+
+### H-24. → T1.4 / Boss: H-18 (the first-run setup code on the TV) is **not** done
+
+The wave 1-b close left "display the first-run setup code on the TV" to T2.1,
+suggesting `auth::ensure_setup_code` / `read_setup_code` be called "from
+server-rendered code". T2.1 did **not** implement it, deliberately:
+
+* `/tv` is SSR'd and then **hydrated**. A `#[cfg(feature = "server")]` block
+  inside a component renders on the server and renders nothing in the wasm
+  build — a hydration mismatch on the one surface that must never flicker or
+  panic. Nor does `use_server_future` keep the code off the wire: the value
+  would be serialised into the hydration payload, which is the same exposure
+  as an endpoint.
+* The only clean shapes are (a) a `#[server]` fn returning the code, which is
+  network-exposed and contradicts T1.4's "not network-exposed; that stays", or
+  (b) the same fn restricted to the HTTP TV origin — a real decision about the
+  auth surface, which belongs to T1.4's owner, not to a UI task.
+
+Recommendation: (b), as `api/profiles.rs::parent_setup_code()`, gated on the
+request arriving on the HTTP kiosk listener and returning `None` on the HTTPS
+origin. The kiosk can then show it in the join-QR overlay beside the URL,
+which is exactly where a parent standing at the television is looking.
+Nothing is blocked meanwhile: the setup code is still written to the log and
+to `<data>\setup-code.txt` (T1.4).
+
+### H-25. → T3.4 (styling only) and T2.3: what the kiosk's contract fixes
+
+T3.4 may restyle `src/client/components/tv/**`, but five things are asserted
+by `tests/tv_tests.rs` and must survive:
+
+1. every focusable element carries every class in
+   `tv::style::TV_FOCUSABLE_CLASS`, and exactly one carries the bare
+   `ring-sheffield-sun`;
+2. every rendered font size is on `tests/golden/tv_type_scale.txt` (four
+   sizes, all ≥ 28 px; `<h1>/<h2>/<h3>` ≥ 44 px). Adding a size means adding a
+   row there **and** to `tv::style::TV_TYPE_SCALE`, which the suite compares
+   against each other;
+3. the surface root carries `tv::style::TV_OVERSCAN_CLASS` (`p-[5%]`);
+4. no Tailwind hover variant appears in the directory or in the rendered
+   markup, and no pointer handler is wired up on the television;
+5. the rendered `data-tv-focus` ids, in document order, equal
+   `tests/golden/tv_focus_order.txt` **and** `tv::model::focus_order()`.
+
+That golden file is written against `tv::fixture::canonical_model()`, and the
+suite asserts that fixture's routine length still equals
+`db::SHEFFIELD_MORNING_ROUTINE.len()` — so adding a ninth morning-routine item
+is a deliberate golden-file regeneration, not a silent drift.
+
+**T2.3**: the kiosk renders `Whiteboard {}` inside a frame on its third panel
+and gives it **no focusable children** — drawing is phone-only (§P5.5 default
+35). A keyboard-reachable control added to that component would not be
+reachable from the remote, and the typography allowlist does not cover
+`whiteboard.rs` (the test renders the placeholder, not the live component).
+Keep the board read-only on the television.

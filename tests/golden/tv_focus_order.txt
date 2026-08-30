@@ -1,0 +1,51 @@
+# T2.1 / PURPLE §P3 (a) — the exact, ordered list of focusable element ids on
+# the Fire TV kiosk, for the canonical family in
+# `src/client/components/tv/fixture.rs`.
+#
+# `tests/tv_tests.rs` asserts this file matches BOTH
+#   * `tv::model::focus_order()` — the order the remote's Up/Down walks, and
+#   * the `id` attributes of every `data-tv-focus` element in the rendered
+#     HTML, in document order
+# so the order a test reasons about and the order a child actually walks can
+# never drift apart. Every one of these elements must also carry the focus
+# ring (`tv::style::TV_FOCUSABLE_CLASS`).
+#
+# Left/Right cycles the panel, so there is one block per panel; an open
+# overlay owns the whole screen and therefore the whole focus order.
+
+[panel:routine]
+tv-profile-1
+tv-profile-2
+tv-profile-3
+tv-profile-4
+tv-join-qr
+tv-routine-1
+tv-routine-2
+tv-routine-3
+tv-routine-4
+tv-routine-5
+tv-routine-6
+tv-routine-7
+tv-routine-8
+tv-task-41
+tv-task-42
+
+[panel:calendar]
+tv-profile-1
+tv-profile-2
+tv-profile-3
+tv-profile-4
+tv-join-qr
+tv-event-local-1
+tv-event-google-abc-12
+tv-event-local-2
+
+[panel:whiteboard]
+tv-profile-1
+tv-profile-2
+tv-profile-3
+tv-profile-4
+tv-join-qr
+
+[overlay:join-qr]
+tv-overlay-close

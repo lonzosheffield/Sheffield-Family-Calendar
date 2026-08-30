@@ -1,8 +1,8 @@
 use dioxus::prelude::*;
 
-use crate::client::components::dashboard::Dashboard;
 use crate::client::components::routine::Routine;
 use crate::client::components::screensaver::Screensaver;
+use crate::client::components::tv::TvShell;
 use crate::client::realtime::use_realtime_provider;
 use crate::shared::types::MaximizedView;
 
@@ -79,11 +79,19 @@ pub fn Tv() -> Element {
     }
 }
 
+/// The kiosk (T2.1): the 10-foot, D-pad-only surface of PLAN v2 D8, plus the
+/// ambient screensaver layered over it.
+///
+/// The old three-up `Dashboard` was a desktop layout — pointer-driven,
+/// `hover:`-styled and 14 px in places — so `/tv` renders
+/// [`TvShell`](crate::client::components::tv::TvShell) instead.
+/// `components::dashboard` stays in the tree for the phone surface T2.2
+/// builds; nothing on the television reaches it.
 #[component]
 fn KioskDashboard() -> Element {
     rsx! {
         div { class: "relative h-full w-full bg-sheffield-paper font-display text-slate-800",
-            Dashboard {}
+            TvShell {}
             Screensaver {}
         }
     }

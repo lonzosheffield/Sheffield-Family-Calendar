@@ -1,0 +1,11 @@
+# T2.1 / PLAN v2 D8 — the ONLY font sizes the /tv surface may use.
+#
+# Format: <tailwind class> <computed px at the default 16px root>
+# Body copy must be >= 28px; anything on an <h1>/<h2>/<h3> must be >= 44px.
+# `tests/tv_tests.rs` renders every panel and every overlay and fails if a
+# size token outside this list reaches the markup, or if the list itself
+# drops below the minimums. T3.4 additionally caps the scale at six sizes.
+text-3xl 30
+text-4xl 36
+text-5xl 48
+text-6xl 60

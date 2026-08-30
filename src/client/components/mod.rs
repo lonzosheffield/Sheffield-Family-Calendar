@@ -5,4 +5,6 @@ pub mod dashboard;
 pub mod qr;
 pub mod routine;
 pub mod screensaver;
+// T2.1: the Fire TV kiosk — the 10-foot, D-pad-only surface (PLAN v2 D8).
+pub mod tv;
 pub mod whiteboard;
