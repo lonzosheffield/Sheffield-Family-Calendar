@@ -5,7 +5,7 @@
 
 use image::ImageDecoder;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 fn read_doc(relative_path: &str) -> String {
     let full = Path::new(env!("CARGO_MANIFEST_DIR")).join(relative_path);
@@ -283,6 +283,495 @@ fn test_maskable_icons_have_ten_percent_safe_zone_padding() {
         assert!(
             regular.iter().any(|p| *p != BACKGROUND),
             "icon-{size}.png should paint artwork within the outer 10 % band (otherwise the maskable assertion is vacuous)"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// T3.2 acceptance tests — the runbooks
+// (`docs/reviews/PURPLE_TEAM.md` §P3, row T3.2 / PLAN v2 §3 Phase 3).
+//
+// "A `#[test]` asserts: every doc exists; `FIRE_TV.md` covers, by string
+// match, `sleep_timeout`, `HDMI-CEC`, `SYSTEM_ALERT_WINDOW`,
+// `GET_USAGE_STATS`, `Screensaver`, `Silk`, and the Fully Kiosk PLUS price;
+// `OWNER_CHECKLIST.md` contains >= 8 numbered steps each with an explicit
+// pass criterion; `RECOVERY.md` covers >= 4 named failure modes; every
+// internal doc link resolves (link checker test)."
+// ---------------------------------------------------------------------------
+
+/// The five runbooks T3.2 delivers, plus the operator-facing docs they link
+/// to. Every backticked repo path in these files must resolve — these are
+/// what a human follows with a remote in one hand.
+const RUNBOOK_DOCS: &[&str] = &[
+    "docs/FIRE_TV.md",
+    "docs/OWNER_CHECKLIST.md",
+    "docs/DEV_WINDOWS.md",
+    "docs/PWA.md",
+    "docs/RECOVERY.md",
+    "docs/NON_RUST.md",
+    "docs/PROTOCOL.md",
+    "docs/BASELINE.md",
+];
+
+/// Planning records. They legitimately name deliverables of tasks that have
+/// not run yet, so an unresolved reference from one of these is only allowed
+/// when it is one of [`PLANNED_ARTEFACTS`]; anything else is a typo and
+/// fails.
+const PLANNING_DOCS: &[&str] = &["docs/PLAN.md", "docs/HANDOFF.md"];
+
+/// Documents PLAN v2 promises but that a later task (or a failure that never
+/// happened) creates: T3.3 writes `VERIFICATION.md`, T3.5 the `qa/` round
+/// files, and `BLOCKED.md`/`RESIDUAL.md` only exist if a task blocks.
+const PLANNED_ARTEFACTS: &[&str] = &[
+    "docs/VERIFICATION.md",
+    "docs/BLOCKED.md",
+    "docs/RESIDUAL.md",
+];
+
+fn repo_root() -> &'static Path {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+}
+
+/// Markdown outside fenced code blocks. Everything the link checker looks at
+/// — headings, `[text](target)` links, backticked paths — is prose, never a
+/// PowerShell snippet that happens to mention `Cargo.toml`.
+fn without_code_fences(markdown: &str) -> String {
+    let mut out = String::with_capacity(markdown.len());
+    let mut in_fence = false;
+    for line in markdown.lines() {
+        if line.trim_start().starts_with("```") {
+            in_fence = !in_fence;
+            continue;
+        }
+        if !in_fence {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// GitHub's heading-anchor rule: lower-case, drop everything that is not
+/// alphanumeric or a space/hyphen, then spaces become hyphens. `## Failure
+/// mode 1 — The television is blank` becomes
+/// `failure-mode-1--the-television-is-blank` (the em dash vanishes and leaves
+/// its two spaces behind, which is exactly what GitHub does).
+fn slugify_heading(heading: &str) -> String {
+    let text = heading.trim_start_matches('#').trim();
+    let mut slug = String::with_capacity(text.len());
+    for ch in text.chars() {
+        if ch.is_alphanumeric() {
+            slug.extend(ch.to_lowercase());
+        } else if ch == ' ' || ch == '-' {
+            slug.push('-');
+        }
+    }
+    slug
+}
+
+fn heading_slugs(markdown: &str) -> Vec<String> {
+    without_code_fences(markdown)
+        .lines()
+        .filter(|line| line.starts_with('#'))
+        .map(slugify_heading)
+        .collect()
+}
+
+/// Every markdown file the checker covers: `docs/**/*.md` plus the repo's
+/// own `README.md`.
+fn all_markdown_files() -> Vec<PathBuf> {
+    fn walk(dir: &Path, found: &mut Vec<PathBuf>) {
+        let entries = fs::read_dir(dir).unwrap_or_else(|e| panic!("read {}: {e}", dir.display()));
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, found);
+            } else if path.extension().is_some_and(|ext| ext == "md") {
+                found.push(path);
+            }
+        }
+    }
+
+    let mut found = vec![repo_root().join("README.md")];
+    walk(&repo_root().join("docs"), &mut found);
+    found.sort();
+    found
+}
+
+/// The inline-code spans of a line: the odd-indexed pieces of a split on
+/// backticks.
+fn code_spans(line: &str) -> Vec<&str> {
+    line.split('`')
+        .enumerate()
+        .filter_map(|(i, piece)| (i % 2 == 1).then_some(piece))
+        .collect()
+}
+
+/// The same text with every inline-code span emptied out. `[text](target)`
+/// written inside backticks is markdown *syntax being discussed*, not a link
+/// — `docs/HANDOFF.md` does exactly that when it describes this checker.
+fn without_code_spans(markdown: &str) -> String {
+    let mut out = String::with_capacity(markdown.len());
+    for line in markdown.lines() {
+        for (index, piece) in line.split('`').enumerate() {
+            if index % 2 == 0 {
+                out.push_str(piece);
+            }
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// Does this inline-code span look like a path into this repository?
+fn looks_like_repo_path(span: &str) -> bool {
+    let Some((_, extension)) = span.rsplit_once('.') else {
+        return false;
+    };
+    // Only `.md`/`.toml`: source paths in the reviews are quoted with line
+    // numbers and refer to files that have since been split up, and the
+    // reviews are frozen historical records.
+    if !matches!(extension, "md" | "toml") {
+        return false;
+    }
+    span.chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '/' | '-'))
+}
+
+/// Resolve a reference from `source`: repo-root-relative first (how every
+/// `docs/...` reference is written), then relative to the referring file (so
+/// a bare `PURPLE_TEAM.md` inside `docs/reviews/` resolves too).
+fn resolve_reference(source: &Path, reference: &str) -> Option<PathBuf> {
+    let from_root = repo_root().join(reference);
+    if from_root.is_file() {
+        return Some(from_root);
+    }
+    let sibling = source.parent()?.join(reference);
+    sibling.is_file().then_some(sibling)
+}
+
+fn relative_to_repo(path: &Path) -> String {
+    path.strip_prefix(repo_root())
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+#[test]
+fn t3_2_every_runbook_doc_exists_and_is_substantial() {
+    for doc in RUNBOOK_DOCS {
+        let content = read_doc(doc);
+        assert!(
+            content.lines().count() >= 20,
+            "{doc} exists but is a stub ({} lines)",
+            content.lines().count()
+        );
+    }
+}
+
+#[test]
+fn t3_2_fire_tv_covers_every_required_string() {
+    let content = read_doc("docs/FIRE_TV.md");
+
+    // The six strings named verbatim in PURPLE_TEAM.md §P3 row T3.2.
+    for required in [
+        "sleep_timeout",
+        "HDMI-CEC",
+        "SYSTEM_ALERT_WINDOW",
+        "GET_USAGE_STATS",
+        "Screensaver",
+        "Silk",
+    ] {
+        assert!(
+            content.contains(required),
+            "docs/FIRE_TV.md must document `{required}`"
+        );
+    }
+
+    // ... "and the Fully Kiosk PLUS price" — both currencies, as
+    // `docs/NON_RUST.md` prices it.
+    assert!(
+        content.contains("PLUS"),
+        "docs/FIRE_TV.md must name the Fully Kiosk PLUS licence"
+    );
+    for price in ["\u{20ac}8.90", "$10.99"] {
+        assert!(
+            content.contains(price),
+            "docs/FIRE_TV.md must state the Fully Kiosk PLUS price {price}"
+        );
+    }
+
+    // T0.0's contract, re-asserted here because T3.2 rewrote the file: the
+    // STATUS line and all three branches survive finalisation.
+    assert!(content.starts_with("STATUS: FIRE_OS"));
+    for branch in ["## Branch A", "## Branch B", "## Branch B\u{2032}"] {
+        assert!(
+            content.contains(branch),
+            "docs/FIRE_TV.md lost the `{branch}` heading"
+        );
+    }
+
+    // A2/the task statement: this display is a television, not a stick, so
+    // the HDMI-CEC step is explicitly replaced by disabling the television's
+    // own sleep/power-saver timers.
+    let lowered = content.to_lowercase();
+    assert!(
+        lowered.contains("power-saver") || lowered.contains("power saver"),
+        "docs/FIRE_TV.md must give the television's own sleep/power-saver timers as the \
+         replacement for the HDMI-CEC step"
+    );
+    assert!(
+        content.contains("NS-50F301NA22") && content.contains("Fire OS 7.7.1.5"),
+        "docs/FIRE_TV.md must identify the detected device"
+    );
+}
+
+#[test]
+fn t3_2_owner_checklist_has_eight_numbered_steps_each_with_a_pass_criterion() {
+    let content = read_doc("docs/OWNER_CHECKLIST.md");
+    let stripped = without_code_fences(&content);
+
+    // A step is `### <n>. <title>`; its body runs to the next such heading.
+    let mut steps: Vec<(usize, String, String)> = Vec::new();
+    for line in stripped.lines() {
+        let step_heading = line
+            .strip_prefix("### ")
+            .and_then(|rest| rest.split_once('.'))
+            .and_then(|(number, title)| number.parse::<usize>().ok().map(|n| (n, title)));
+        match step_heading {
+            Some((number, title)) => steps.push((number, title.trim().to_string(), String::new())),
+            None => {
+                if let Some(last) = steps.last_mut() {
+                    last.2.push_str(line);
+                    last.2.push('\n');
+                }
+            }
+        }
+    }
+
+    assert!(
+        steps.len() >= 8,
+        "docs/OWNER_CHECKLIST.md must contain at least 8 numbered steps, found {}",
+        steps.len()
+    );
+
+    // Numbered, in order, from 1 — a checklist you work down.
+    for (index, (number, title, _)) in steps.iter().enumerate() {
+        assert_eq!(
+            *number,
+            index + 1,
+            "docs/OWNER_CHECKLIST.md step numbering jumps at `{title}`"
+        );
+    }
+
+    for (number, title, body) in &steps {
+        assert!(
+            body.contains("**Pass criterion"),
+            "docs/OWNER_CHECKLIST.md step {number} ({title}) has no explicit **Pass criterion:**"
+        );
+        assert!(
+            body.trim().len() > 120,
+            "docs/OWNER_CHECKLIST.md step {number} ({title}) is too thin to follow"
+        );
+    }
+
+    // PLAN v2 Appendix A A3, and the task statement: the elevated install.
+    assert!(
+        content.contains("family-hub.exe install"),
+        "docs/OWNER_CHECKLIST.md must give the `family-hub.exe install` command"
+    );
+    assert!(
+        content.to_lowercase().contains("elevated"),
+        "docs/OWNER_CHECKLIST.md must say `family-hub.exe install` needs an elevated prompt"
+    );
+}
+
+#[test]
+fn t3_2_recovery_covers_at_least_four_named_failure_modes() {
+    let content = read_doc("docs/RECOVERY.md");
+    let stripped = without_code_fences(&content);
+
+    let modes: Vec<&str> = stripped
+        .lines()
+        .filter_map(|line| line.strip_prefix("## Failure mode "))
+        .collect();
+
+    assert!(
+        modes.len() >= 4,
+        "docs/RECOVERY.md must cover at least 4 named failure modes, found {}: {modes:?}",
+        modes.len()
+    );
+
+    // Each one is *named*, not just numbered.
+    for mode in &modes {
+        let (number, name) = mode.split_once(char::is_whitespace).unwrap_or_else(|| {
+            panic!("failure mode heading is not `## Failure mode <n> - <name>`: {mode:?}")
+        });
+        assert!(
+            number.trim().parse::<usize>().is_ok(),
+            "failure mode heading is not numbered: {mode:?}"
+        );
+        assert!(
+            name.trim_start_matches(['\u{2014}', '-', ' ']).len() >= 10,
+            "failure mode {number} has no descriptive name: {mode:?}"
+        );
+    }
+
+    // The three the acceptance row names explicitly ("what to do when the TV
+    // is blank, the cert expired, the DB is corrupt").
+    let lowered = content.to_lowercase();
+    for topic in [
+        "television is blank",
+        "trusting the hub",
+        "database is corrupt",
+    ] {
+        assert!(
+            lowered.contains(topic),
+            "docs/RECOVERY.md must cover the `{topic}` failure mode"
+        );
+    }
+    assert!(
+        content.matches("**Verify:").count() >= 4,
+        "each failure mode in docs/RECOVERY.md needs a way to confirm the fix worked"
+    );
+}
+
+/// The link checker. Three passes, none of which may find a broken target:
+///
+/// 1. every `[text](target)` link in `docs/**/*.md` and `README.md` — the
+///    file must exist, and a `#fragment` must match a real heading;
+/// 2. every backticked repo path (`.md`/`.toml`) in the runbook set;
+/// 3. every backticked `docs/*.md` path in the planning records, which may
+///    additionally name a [`PLANNED_ARTEFACTS`] file that a later task
+///    creates.
+#[test]
+fn t3_2_every_internal_doc_link_resolves() {
+    let files = all_markdown_files();
+    let mut broken: Vec<String> = Vec::new();
+    let mut checked_links = 0usize;
+    let mut checked_anchors = 0usize;
+    let mut checked_paths = 0usize;
+
+    for file in &files {
+        let raw =
+            fs::read_to_string(file).unwrap_or_else(|e| panic!("read {}: {e}", file.display()));
+        let content = without_code_fences(&raw);
+        let here = relative_to_repo(file);
+
+        // --- (1) markdown links ------------------------------------------
+        let prose = without_code_spans(&content);
+        let mut rest = prose.as_str();
+        while let Some(open) = rest.find("](") {
+            rest = &rest[open + 2..];
+            let Some(close) = rest.find(')') else { break };
+            let target = &rest[..close];
+            rest = &rest[close + 1..];
+
+            if target.starts_with("http://")
+                || target.starts_with("https://")
+                || target.starts_with("mailto:")
+                || target.is_empty()
+            {
+                continue;
+            }
+            checked_links += 1;
+
+            let (path_part, anchor) = match target.split_once('#') {
+                Some((path, anchor)) => (path, Some(anchor)),
+                None => (target, None),
+            };
+
+            let resolved = if path_part.is_empty() {
+                Some(file.clone())
+            } else {
+                let found = resolve_reference(file, path_part);
+                if found.is_none() {
+                    broken.push(format!("{here}: link target `{target}` does not exist"));
+                }
+                found
+            };
+
+            if let (Some(resolved), Some(anchor)) = (resolved, anchor) {
+                checked_anchors += 1;
+                let target_doc = fs::read_to_string(&resolved).unwrap_or_default();
+                if !heading_slugs(&target_doc).iter().any(|slug| slug == anchor) {
+                    broken.push(format!(
+                        "{here}: link `{target}` points at no heading in {}",
+                        relative_to_repo(&resolved)
+                    ));
+                }
+            }
+        }
+
+        // --- (2) and (3) backticked repo paths ---------------------------
+        let is_runbook = RUNBOOK_DOCS.contains(&here.as_str());
+        let is_planning = PLANNING_DOCS.contains(&here.as_str());
+        if !is_runbook && !is_planning {
+            continue;
+        }
+
+        for line in content.lines() {
+            for span in code_spans(line) {
+                if !looks_like_repo_path(span) {
+                    continue;
+                }
+                // A planning record is only held to its `docs/` references;
+                // it also cites upstream repositories by path, and names
+                // artefacts a later task will write.
+                if is_planning && (!span.starts_with("docs/") || PLANNED_ARTEFACTS.contains(&span))
+                {
+                    continue;
+                }
+                checked_paths += 1;
+                if resolve_reference(file, span).is_none() {
+                    broken.push(format!("{here}: `{span}` does not exist"));
+                }
+            }
+        }
+    }
+
+    assert!(
+        broken.is_empty(),
+        "{} broken internal doc reference(s):\n  {}",
+        broken.len(),
+        broken.join("\n  ")
+    );
+
+    // Guard against the checker silently doing nothing.
+    assert!(
+        files.len() >= 10,
+        "the link checker found only {} markdown files",
+        files.len()
+    );
+    assert!(
+        checked_links >= 5 && checked_anchors >= 5 && checked_paths >= 50,
+        "the link checker is vacuous: {checked_links} links, {checked_anchors} anchors, \
+         {checked_paths} paths"
+    );
+}
+
+/// The runbooks are a set, not five islands: each of the five links to the
+/// others by name, so whichever one the owner opens first leads to the rest.
+#[test]
+fn t3_2_the_runbooks_cross_reference_each_other() {
+    let set = [
+        "docs/FIRE_TV.md",
+        "docs/OWNER_CHECKLIST.md",
+        "docs/DEV_WINDOWS.md",
+        "docs/PWA.md",
+        "docs/RECOVERY.md",
+    ];
+    for doc in set {
+        let content = read_doc(doc);
+        let links: Vec<&str> = set
+            .iter()
+            .filter(|other| **other != doc && content.contains(*other))
+            .copied()
+            .collect();
+        assert!(
+            links.len() >= 3,
+            "{doc} links to only {} of the other four runbooks: {links:?}",
+            links.len()
         );
     }
 }

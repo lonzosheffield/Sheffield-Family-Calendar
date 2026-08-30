@@ -13,7 +13,7 @@ drawing, photo capture, calendar editing and administration are phone-only
 
 1. Join the home Wi-Fi.
 2. Install the hub's certificate once, from `http://<hub-ip>:8080/ca.crt`
-   (Appendix A step A6; on iPhone also switch it on under
+   (`docs/OWNER_CHECKLIST.md` step 7; on iPhone also switch it on under
    *Settings → General → About → Certificate Trust Settings*).
    Without it the phone has no secure context, and with no secure context
    there is no install prompt, no service worker and no camera.
@@ -133,5 +133,7 @@ button reaches the server and is dropped there, never applied.
   button.
 
 Related: `docs/FIRE_TV.md` (the television), `docs/OWNER_CHECKLIST.md`
-(one-time setup on real devices, steps A6–A8), `docs/PROTOCOL.md` (the
-realtime messages the remote sends).
+(one-time setup on real devices — steps 7–9 are the phone ones),
+`docs/RECOVERY.md` (what to do when a phone stops trusting the hub, or a
+queued change never arrives), `docs/PROTOCOL.md` (the realtime messages the
+remote sends), `docs/DEV_WINDOWS.md` (building and serving it).

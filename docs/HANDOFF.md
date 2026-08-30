@@ -2008,3 +2008,101 @@ isolation and in the next full run. Both compute `date` from
 `chrono::Local::now()` and ran across the local midnight rollover during this
 session; `http_tests.rs` was not touched in wave 3. Worth a look at the
 two tests' shared server/DB and the ±1-day window in the QA loop.
+
+---
+
+## T3.2 — runbooks (wave 3)
+
+Branch `phase-3/T3.2`. Files touched: `docs/FIRE_TV.md`,
+`docs/OWNER_CHECKLIST.md`, `docs/DEV_WINDOWS.md`, `docs/PWA.md`,
+`docs/RECOVERY.md` (new) and `tests/docs_tests.rs` — all inside T3.2's §P4
+grant ("`docs/**` … T3.2 consolidates"). No `Cargo.toml`, no source file, no
+new crate, no new non-Rust component.
+
+`docs/RECOVERY.md` is new: eight named failure modes (blank TV, hub
+unreachable, phones stop trusting the hub, database corrupt, realtime stops,
+disk filling, PIN lost, images 404), each with symptom → fix → **Verify:**.
+Its restore procedure is the real one — `family-hub.exe stop`, keep the
+broken `family.db`, remove the `-wal`/`-shm` sidecars, copy the
+`family-YYYYMMDD-HHMM.db` and its `_uploads` snapshot back — matching
+`server::backup::restore_database`/`restore_uploads`.
+
+### Decisions worth ratifying
+
+- **Appendix A is renumbered 1–13.** `A1…A12` became `### 1.`…`### 13.`
+  numbered steps with a `**Pass criterion:**` each (PURPLE §P3 T3.2 asks for
+  "≥ 8 numbered steps each with an explicit pass criterion"; a lettered table
+  row is neither numbered nor followable in order). The mapping is stated in
+  the file's own header row. **One step is new:** step 4, "Set the parent
+  PIN" — T1.4 ships a first-run setup code with no owner-facing instructions
+  anywhere, and steps 7–9 cannot be done without a parent session.
+- **Fully Kiosk PLUS is priced `€8.90 / $10.99` everywhere**, matching
+  `docs/NON_RUST.md`. T0.0's file said "~$11 / €8.90"; the acceptance row
+  wants "the Fully Kiosk PLUS price" and one number in two places is worth
+  more than two.
+- **HDMI-CEC is documented as *not applicable* to this device and moved to
+  Branch B′.** A2 says the display is a Fire TV Edition *television*, so
+  there is no second box for CEC to power down; the replacement step is the
+  television's own sleep/power-saver timers (`docs/FIRE_TV.md` Branch A step
+  5). The string `HDMI-CEC` still appears — the acceptance row requires it —
+  but it now says where it does and does not apply rather than prescribing a
+  step that has nothing to act on.
+- **`docs/PWA.md`'s two cross-references were re-pointed** at the new step
+  numbers (`step 7`, `steps 7–9`). Nothing else in it changed; T2.2's
+  `tests/pwa_tests.rs` is untouched.
+
+### The link checker (`t3_2_every_internal_doc_link_resolves`)
+
+Three passes over `docs/**/*.md` + `README.md`: (1) every `[text](target)`
+link — file must exist, and a `#fragment` must slugify onto a real heading
+(GitHub's rule, implemented in `slugify_heading`); (2) every backticked
+`.md`/`.toml` repo path in the **runbook set** (the five above plus
+`NON_RUST.md`, `PROTOCOL.md`, `BASELINE.md`); (3) every backticked
+`docs/*.md` path in `PLAN.md`/`HANDOFF.md`. Code fences are stripped first,
+and the test asserts its own counters (≥ 5 links, ≥ 5 anchors, ≥ 50 paths) so
+it cannot pass vacuously. Verified negatively: injecting one backticked
+reference to a `docs/` file that does not exist, plus one link to a heading
+anchor that does not exist, into `docs/RECOVERY.md` produced exactly those two
+failures and nothing else; both were then reverted.
+
+Two scoping decisions are deliberate and should be revisited by whoever owns
+them next:
+
+1. **`docs/reviews/**` is not held to pass (2)/(3).** Those are frozen
+   review records that cite *upstream* repositories by path
+   (`net/docs/certificate_lifetimes.md`, `packages/fullstack/Cargo.toml`,
+   `net/dns/README.md`); they are not links into this repo. Their
+   `[text](url)` links are still checked by pass (1).
+2. **`PLANNED_ARTEFACTS`** (`docs/VERIFICATION.md`, `docs/BLOCKED.md`,
+   `docs/RESIDUAL.md`) are allowed to be unresolved *from the planning docs
+   only*. They are deliverables of tasks that have not run (T3.3, T3.5) or of
+   failures that did not happen. **T3.3 should delete `docs/VERIFICATION.md`
+   from that list once it writes the file** — the constant is three lines in
+   `tests/docs_tests.rs`. A reference to any *other* missing `docs/*.md`
+   from `PLAN.md` or `HANDOFF.md` fails the test today.
+
+### Requests
+
+1. **`docs/PLAN.md` Appendix A and `docs/reviews/PURPLE_TEAM.md` Appendix A
+   still use `A1…A12`.** `docs/OWNER_CHECKLIST.md` is now the delivered
+   article and numbers 1–13. T3.2 does not own either file. Boss may want a
+   one-line note in PLAN §Appendix A pointing at the delivered numbering (the
+   checklist already carries the mapping in both directions, so nothing is
+   lost if it stays as it is).
+2. **Nothing in the repo is named `familyhub.toml`.** It is the optional
+   config file `config.rs` reads from the data directory. `OWNER_CHECKLIST.md`
+   step 13 therefore names it in italics rather than as a backticked repo
+   path, so the link checker does not have to carry an exception for a file
+   that is correct to be absent.
+
+### Observed once, not reproduced
+
+A full `cargo test --features server` aborted with `error: internal compiler
+error: Res::Err but no error emitted` / `no type-dependent def for method
+call` while compiling `tests/tv_tests.rs`, immediately after a
+`cargo clippy --features web --target wasm32-unknown-unknown` run against the
+same `target/`. Re-running compiled and passed (21/21), as did the full suite
+straight after (exit 0). Stale incremental artefacts from the interleaved
+wasm/host clippy runs are the obvious suspect; no source file involved was
+touched by this task. Recorded for T3.5 in case CI ever shows it — a
+`cargo clean` between the two clippy targets is the cheap mitigation.

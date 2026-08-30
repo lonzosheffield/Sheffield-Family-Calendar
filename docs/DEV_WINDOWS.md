@@ -1,5 +1,15 @@
 # Development Setup — Windows 11
 
+Everything in this project is Rust. The declared exceptions — a ~100-line service
+worker, a build-time Tailwind binary, `adb`, the CI YAML — are listed and justified in
+`docs/NON_RUST.md`; there is nothing else to install and no Node toolchain.
+
+**Where to go next:** `docs/PLAN.md` (why the code looks like this) ·
+`docs/PROTOCOL.md` (the realtime message contract) · `docs/OWNER_CHECKLIST.md`
+(installing it for real) · `docs/RECOVERY.md` (operating it) · `docs/FIRE_TV.md` (the
+television) · `docs/PWA.md` (the phones) · `docs/BASELINE.md` (the state the build was
+in when the plan was written).
+
 ## Prerequisites & Setup
 
 ### Step 1: Update `$env:PATH` (Required for every shell session)
@@ -14,8 +24,13 @@ $env:FAMILY_HUB_DATA_DIR = "$env:TEMP\familyhub-test"
 
 This prefix ensures:
 - **`$USERPROFILE\.cargo\bin`** — Rust toolchain (cargo, rustc, dx)
-- **`$USERPROFILE\scoop\shims`** — Scoop package manager (if installed)
+- **`$USERPROFILE\scoop\shims`** — Scoop package manager (if installed; this is where
+  `adb` lives)
 - **`$APPDATA\npm`** — npm global binaries (if Node.js installed)
+
+`FAMILY_HUB_DATA_DIR` is set here **for tests and development only**. Never point it
+at the real data directory (`%ProgramData%\FamilyHub`) while running the test suite —
+several tests create and delete databases underneath it.
 
 Or in **Bash** (MSYS2 / Git Bash):
 
@@ -46,6 +61,10 @@ Or build from source (slower):
 cargo install --locked dioxus-cli@0.7.10
 ```
 
+`@0.7.x` is **not** valid `binstall` syntax, and 0.7.0/0.7.1 carry a Windows
+`--addr 0.0.0.0` bug. An older `dx` 0.6.3 may still exist at `~/.cargo/dx06` — it is
+not used by anything here and should be ignored.
+
 ### Step 4: Install Tailwind Standalone (v3.4.17)
 
 Download the **Windows x64 binary** (no Node.js required):
@@ -65,13 +84,23 @@ Invoke-WebRequest -Uri $url -OutFile $dest
 
 **Why this version?** Tailwind v4 changes the config model entirely. There is no pure-Rust equivalent; v3.4.17 is the last stable v3 release. The binary is build-time only and does not appear in the shipped application.
 
+`assets/tailwind.css` is **committed**, and CI rebuilds it and fails on any diff — so
+after changing a class in a component, regenerate it in the same commit:
+
+```powershell
+tailwindcss -c .\tailwind.config.js -i .\input.css -o .\assets\tailwind.css --minify
+```
+
 ### Step 5: Build the Project
 
 ```powershell
-# Full server build + web target
-cargo build --features server --target wasm32-unknown-unknown --release
+# Server build
+cargo build --features server
 
-# Or use Dioxus CLI (one command)
+# Web (wasm) build
+cargo build --features web --target wasm32-unknown-unknown
+
+# Or use the Dioxus CLI for the full web bundle
 dx build --platform web --release
 ```
 
@@ -80,6 +109,10 @@ The build will:
 2. Generate WASM and glue code (web-sys, wasm-bindgen)
 3. Run Tailwind CLI to compile `input.css` → `output.css`
 4. Bundle assets
+
+The two features are mutually exclusive in practice: `server` pulls in tokio, sqlx,
+axum, rustls and the PKI; `web` pulls in `web-sys` and the wasm glue. Nearly every
+module is behind one of the two.
 
 ### Step 6: Run Locally
 
@@ -94,6 +127,101 @@ cargo run --features server --release
 Then open:
 - **TV UI:** `http://127.0.0.1:8080/tv`
 - **Phone PWA:** `https://127.0.0.1:8443/m` (requires CA installation for local cert)
+
+The HTTP origin serves the television in full and 308-redirects only `/m*`,
+`/manifest.webmanifest` and `/sw.js` to HTTPS — that split is decision D3′ in
+`docs/PLAN.md`, not an accident.
+
+### Step 7: The service host (`family-hub.exe`)
+
+The Dioxus app's own binary (`src/main.rs`) is the development entry point. The thing
+that gets installed on the family's PC is a **second** binary target:
+
+```powershell
+# Foreground, logs to this console — the developer's equivalent of the service
+cargo run --features server --bin family-hub -- run
+
+# The other subcommands (install/uninstall/start/stop need an elevated prompt)
+cargo run --features server --bin family-hub -- status
+cargo run --features server --bin family-hub -- tv-probe
+```
+
+`install|uninstall|start|stop|status|run|tv-probe`, all through
+`windows_service::service_manager` — no PowerShell scripts. Installing it for real is
+`docs/OWNER_CHECKLIST.md` step 3 and needs elevation; `run` needs neither.
+
+---
+
+## Where things live
+
+| Path | What it is |
+| --- | --- |
+| `src/main.rs` | Dioxus fullstack entry point — **frozen** at under 25 lines by design |
+| `src/bin/family_hub.rs` | `family-hub.exe`, the Windows service host / CLI |
+| `src/server/` | `router.rs`, `config.rs`, `db.rs`, `auth.rs`, `pki.rs`, `tls.rs`, `mdns.rs`, `backup.rs`, `health.rs`, `service.rs`, `calendar.rs`, `api/` |
+| `src/client/components/tv/` | The 10-foot kiosk UI (D-pad focus, overscan, staleness badge) |
+| `src/client/components/mobile/` | The phone PWA: tabs, offline queue, session, `sw.js` |
+| `src/shared/types.rs` | The realtime message enums shared by both surfaces |
+| `migrations/` | `0001_init`, `0002_core`, `0003_profiles` — numbers are assigned centrally |
+| `tests/` | One file per task's acceptance suite (see below) |
+| `xtask/` | Rust-only build tooling: PWA icon generation via `resvg` |
+| `docs/` | This file and its siblings |
+
+Runtime data never lands in the working directory: every path is absolute, derived
+from `FAMILY_HUB_DATA_DIR` (default `%ProgramData%\FamilyHub`), and logged at startup.
+
+---
+
+## Testing
+
+Run all tests (requires `--features server`):
+
+```powershell
+cargo test --features server
+```
+
+Specific test:
+
+```powershell
+cargo test --features server test_name
+```
+
+The suite is organised by acceptance contract, not by module — `tests/db_tests.rs`,
+`storage_tests.rs`, `http_tests.rs`, `realtime_tests.rs`, `tls_tests.rs`,
+`router_tests.rs`, `config_tests.rs`, `profiles_tests.rs`, `routine_tests.rs`,
+`backup_tests.rs`, `health_tests.rs`, `tv_tests.rs`, `pwa_tests.rs`,
+`whiteboard_tests.rs`, `calendar_tests.rs`, `photo_tests.rs`,
+`screensaver_tests.rs`, `loop_tests.rs`, `service_tests.rs`, `palette_tests.rs`,
+`ci_tests.rs`, `docs_tests.rs`. `docs_tests.rs` asserts the documentation in this
+directory — including that every internal link in it resolves — so a renamed doc
+fails the build rather than rotting quietly.
+
+A handful of tests mutate process-global environment variables and serialise
+themselves on a lock; running the suite with `--test-threads=1` is never necessary.
+
+---
+
+## Formatting & Linting
+
+```powershell
+# Check formatting (no changes)
+cargo fmt --check
+
+# Fix formatting
+cargo fmt
+
+# Lint (server target, all tests)
+cargo clippy --features server --all-targets -- -D warnings
+
+# Lint (web target)
+cargo clippy --features web --target wasm32-unknown-unknown -- -D warnings
+
+# No duplicate major versions of axum / tower-http / hyper
+cargo tree -d
+```
+
+All CI checks must pass before committing. CI (`.github/workflows/`) runs exactly
+these, plus the Tailwind fail-on-diff rebuild and a Windows x64 release build.
 
 ---
 
@@ -118,41 +246,30 @@ Run Step 4 to download the binary. Ensure `$env:USERPROFILE\.cargo\bin` is in yo
 ### Wasm32 target not installed
 Run Step 2's `rustup target add wasm32-unknown-unknown`.
 
+### `assets/tailwind.css` differs in CI but not locally
+The committed CSS was not regenerated after a class change. Re-run the Tailwind
+command in Step 4 and commit the result.
+
+### A test writes to `C:\Windows\System32`
+It cannot — that was the defect (G23) the absolute-path config closed, and
+`tests/config_tests.rs` and `tests/service_tests.rs` assert it. If you see it,
+`FAMILY_HUB_DATA_DIR` is unset *and* something is bypassing `FamilyHubConfig`.
+
+### Ports 8080 / 8443 already in use
+`Get-NetTCPConnection -LocalPort 8080` names the owner. An installed `FamilyHub`
+service on the same box is the usual culprit — `family-hub.exe stop` before `dx serve`.
+
 ### Slow builds
 The first build will compile all dependencies. Subsequent builds are faster. On this machine (14 cores), expect 4–7 minutes for a clean build.
 
 ---
 
-## Testing
+## Version pins that matter
 
-Run all tests (requires `--features server`):
-
-```powershell
-cargo test --features server
-```
-
-Specific test:
-
-```powershell
-cargo test --features server test_name
-```
-
----
-
-## Formatting & Linting
-
-```powershell
-# Check formatting (no changes)
-cargo fmt --check
-
-# Fix formatting
-cargo fmt
-
-# Lint (server target, all tests)
-cargo clippy --features server --all-targets -- -D warnings
-
-# Lint (web target)
-cargo clippy --features web --target wasm32-unknown-unknown -- -D warnings
-```
-
-All CI checks must pass before committing.
+`dioxus =0.7.10` · `dx 0.7.10` · `axum =0.8.9` · `sqlx =0.8.6` ·
+`rustls =0.23.43` (**`ring`**, never `aws-lc-rs` — it needs CMake and NASM on Windows)
+· `tokio-rustls =0.26.4` · `rcgen =0.14.10` · `mdns-sd =0.21.0` · `fast_qr =0.13.1` ·
+`argon2 =0.6.0` · `rrule =0.14.0` · `windows-service =0.8.1` · Tailwind standalone
+3.4.17. The full table, with the trap each pin avoids, is
+`docs/reviews/PURPLE_TEAM.md` §P5.4. Do not float these — several of them broke their
+own API within a patch line.
