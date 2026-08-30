@@ -1282,3 +1282,158 @@ test in `tests/backup_tests.rs`, and the whole suite is green on `main`.
   T2.5 existed and will be reconciled once T2.5 lands.
 - `.gitignore` now excludes `.claude/worktrees/` (agent worktrees are
   checkouts, never content).
+
+---
+
+## From T2.4 (Calendar v2) → Boss
+
+T2.4 owns `src/server/calendar.rs`, `src/server/api/calendar.rs` and
+`src/client/components/calendar.rs` (§P4). Everything below is either a file
+outside that set that had to change, or a request for one that did not.
+
+### H-20. `Cargo.toml`: `rrule = "=0.14.0"` added (§P4 says Boss serialises this)
+
+T2.4's acceptance (b) and (d) are *about* `rrule`, and §P5.4 pins it exactly,
+so the task cannot be done without the dependency. Added as an `optional`
+dependency inside the `server` feature only — recurrence is expanded on the
+hub and the surfaces receive concrete occurrences, so the wasm bundle never
+carries `chrono-tz`'s timezone database. The only other outstanding wave-2a
+branch is T2.5, which needs no new crate (`image` and axum `multipart` are
+already in), so the expected conflict at merge is the `[dependencies]` block
+plus one `server = [...]` line — resolve by keeping both sides.
+
+Precedent: T1.3 and T1.4 added their own pinned crates on their own branches
+(the `# T1.3 —` / `# T1.4 —` comment blocks in `Cargo.toml`) and recorded it
+here; this follows that shape, including the comment block naming the pin's
+trap (`all(limit)`, never `all_unchecked()`).
+
+### H-21. `src/server/api/mod.rs`: five new re-exports
+
+The same mechanical addition every previous module made
+(`pub use calendar::{create_local_event, delete_local_event, get_calendar_week,
+get_events_for_day, get_today_events, update_local_event};`). `get_today_events`
+keeps its name, its endpoint and its signature, so `tv::shell` and every other
+call site are untouched.
+
+### H-22. → T2.1 (`src/client/components/tv/**`): the kiosk still renders `is_empty()`
+
+W3's `Loading`/`Empty`/`Error` state machine is landed for the phone and the
+dashboard in `client::components::calendar::CalendarState`, and it is unit- and
+integration-tested. The **television** still cannot show the difference:
+`TvModel.events` is a bare `Vec<CalendarEvent>` and `tv::surface::calendar_panel`
+falls back to `if events.is_empty()`, so a failed fetch on the kiosk looks
+exactly like an empty day. Fixing that means touching `tv/model.rs`,
+`tv/shell.rs` and `tv/surface.rs` (T2.1's files, and `tests/golden/` pins the
+focus order), which T2.4 may not do.
+
+Requested change, small and mechanical:
+
+1. `TvModel.events: Vec<CalendarEvent>` → carry the state alongside it, e.g.
+   `pub events: CalendarState<Vec<CalendarEvent>>` (the enum is public and
+   generic, and `CalendarState::resolve` is its single constructor).
+2. `tv::shell` builds it from its existing `events_resource`:
+   `CalendarState::resolve(resource.read_unchecked().clone().map(|r| r.map_err(|e| e.to_string())), Vec::is_empty)`.
+3. `calendar_panel` matches the four arms; `body_order` returns no focus ids
+   for `Loading`/`Error`/`Empty` (it already returns none for an empty list, so
+   the golden file does not move).
+
+Until then the kiosk's behaviour is unchanged from what T2.1 shipped — no
+regression, just the half of W3 that lives in a file T2.4 does not own.
+
+### H-23. → Boss: `assets/tailwind.css` needs the wave-2a rebuild to include this branch
+
+`client::components::calendar` adds utilities the committed CSS does not carry
+(`sm:grid-cols-7`, `bg-red-50`, `border-red-500`, `text-red-700/600`,
+`ring-red-200`, `bg-red-600`, `uppercase`, `tracking-wide`). Following T2.2's
+choice (and T2.1 H-21 / T2.3's note), this branch deliberately does **not**
+rebuild the generated file — Boss rebuilds it once on the merged tree with the
+pinned 3.4.17 binary:
+
+```powershell
+& "$env:USERPROFILE\.cargo\bin\tailwindcss.exe" -i input.css -o assets/tailwind.css --minify
+```
+
+### H-24. → T1.7 (`src/server/health.rs`): one stale doc reference
+
+`health.rs:165` still says "once per successful `fetch_today` inside
+`store_events`". Both functions are gone: the call is now once per successful
+window replace in `calendar::spawn_polling_task`'s loop, and it is still made.
+Doc-comment only; no behaviour change, and T2.4 did not edit the file.
+
+### Decisions T2.4 made that later tasks should know
+
+- **Storage frame of reference.** `events.starts_at` / `ends_at` are
+  **server-local wall clock** as `YYYY-MM-DDTHH:MM:SS`, never RFC3339 and never
+  UTC. All-day events are stored at `T00:00:00` with `all_day = 1` rather than
+  as a bare `YYYY-MM-DD`, so the window `DELETE` and every range `SELECT` stay
+  plain lexicographic comparisons and all-day rows sort with the rest.
+- **Wire ids are `{source}:{row id}@{occurrence start}`.** Two occurrences of
+  one recurring event are therefore distinct (the TV uses this for focus ids),
+  and the phone can tell a deletable local event from a Google one without a
+  second round trip. `tv::model::slugify` already reduces it safely.
+- **Google rows are not editable through the local CRUD path.**
+  `update_local_event` and `delete_local_event` are `... AND source = 'local'`;
+  the next window replace would undo any local edit, so the server returns
+  "no local event" rather than pretending.
+- **The window is ±(7, 60) days** (`WINDOW_PAST_DAYS` / `WINDOW_FUTURE_DAYS`),
+  replaced whole on every poll, with `singleEvents=true` and **no `syncToken`
+  and no `orderBy`** — ordering happens in `parse_events_response`, so R-19's
+  parameter conflict cannot come back.
+- **Local CRUD is parent-gated server-side** (`auth::require_session`), matching
+  §P5.5 default 35's "calendar editing … phone-only"; reads stay
+  unauthenticated because the TV holds no session and must render the day.
+- **The forced midnight poll is observable.** `calendar::poll_requests()`
+  counts them, which is how the W4 assertion is made without credentials or a
+  network; `register_midnight_poll()` is idempotent and is called from
+  `spawn_polling_task` whether or not credentials exist.
+- **ICS import stays cut** (R-25). `icalendar` is not in the tree.
+- **Fixtures are test data, not stack.** `tests/fixtures/google_events_window_{3,2}.json`
+  are committed Google `events.list` bodies, in the same category as
+  `family_v1.db` and `photo_12mp.jpg`; no `docs/NON_RUST.md` row is needed and
+  none was added.
+
+### H-25. → Boss / T2.6: `tests/loop_tests.rs` is flaky on `main`, ~15 % of runs
+
+Measured while gating T2.4, because it turned one full-suite run red and it is
+**not** T2.4's doing. Both branches, same machine, same session, `cargo test
+--features server --test loop_tests` run back to back:
+
+| Tree | Runs | Failures |
+| --- | --- | --- |
+| `41eb990` (this branch's base, i.e. `main`) | 12 | **2** |
+| `phase-2/T2.4` | 12 | 3 |
+
+The failure is always the same assertion, and always only that one:
+
+```
+thread 't2_6_phone_drives_the_tv_across_a_server_restart' panicked at tests\loop_tests.rs:385:17:
+phone's post-restart Snapshot must still carry the stroke drawn before the restart
+```
+
+This is exactly the residual Boss recorded at the wave 2-a close under
+"**T2.3 H-21 (write-behind `record_stroke`): ratified, with one residual**":
+`realtime::record_stroke` returns the `seq` and `tokio::spawn`s the insert, so
+a stroke is published before it is committed. `loop_tests` step 3 draws, step 4
+aborts the server and reconnects, and nothing in between waits for that
+detached insert — so when the machine is busy (a cold binary, a parallel
+build), the post-restart `Snapshot` can be taken before the row lands.
+
+T2.4 did not touch `api/realtime.rs`, `db.rs`'s whiteboard section, the board
+store or `loop_tests.rs`, and every calendar suite is deterministic. The
+difference between the two rows above is noise on a 12-run sample of the same
+race, not a regression.
+
+Concrete fix, for whoever owns it (T2.3's file, T2.6's assertion — Boss to
+assign): make the persistence observable instead of hoping. Either
+
+* have `record_stroke` await the insert (it is one row on the write pool; the
+  759 ms → <250 ms p99 justification for going write-behind was measured
+  against T1.2's load test, which is a different, much hotter path), or
+* keep the write-behind and have `snapshot` return the highest **contiguous
+  committed** `seq` — which is the fix Boss already sketched — so a snapshot
+  can never bookmark past a row that has not landed.
+
+The first is a two-line change and removes the class of bug; the second keeps
+the throughput and needs a query change. Either way the assertion stands
+unchanged: it is describing correct behaviour, and it is the code that is
+wrong.

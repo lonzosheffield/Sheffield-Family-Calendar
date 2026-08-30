@@ -1,0 +1,25 @@
+{
+  "kind": "calendar#events",
+  "summary": "Sheffield family",
+  "timeZone": "Europe/London",
+  "updated": "2026-08-29T07:15:00.000Z",
+  "items": [
+    {
+      "kind": "calendar#event",
+      "id": "sheffield-swimming-0001",
+      "status": "confirmed",
+      "summary": "Swimming lesson (moved to lane 3)",
+      "location": "Ponds Forge",
+      "start": { "dateTime": "2026-08-29T17:00:00+01:00", "timeZone": "Europe/London" },
+      "end": { "dateTime": "2026-08-29T18:00:00+01:00", "timeZone": "Europe/London" }
+    },
+    {
+      "kind": "calendar#event",
+      "id": "sheffield-halfterm-0003",
+      "status": "confirmed",
+      "summary": "Half term",
+      "start": { "date": "2026-08-31" },
+      "end": { "date": "2026-09-05" }
+    }
+  ]
+}

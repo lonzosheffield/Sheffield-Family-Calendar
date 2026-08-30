@@ -29,7 +29,10 @@ pub mod screensaver;
 pub mod tv;
 pub mod whiteboard;
 
-pub use calendar::get_today_events;
+pub use calendar::{
+    create_local_event, delete_local_event, get_calendar_week, get_events_for_day,
+    get_today_events, update_local_event,
+};
 pub use profiles::{
     change_parent_pin, create_profile, delete_profile, list_profiles, parent_setup_status,
     rename_profile, set_initial_parent_pin, set_profile_color, verify_parent_pin,

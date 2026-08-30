@@ -68,6 +68,15 @@ image = { version = "0.25", optional = true }
 # one is already exposed).
 argon2 = { version = "=0.6.0", optional = true }
 
+# T2.4 — local recurring events. Server-only: recurrence is expanded on the
+# hub and the surfaces receive already-expanded occurrences, so the wasm
+# bundle never carries a timezone database. PURPLE_TEAM.md §P5.4 pins this
+# exactly and forbids `all_unchecked()` — every expansion here goes through
+# `all(limit)`, which returns `RRuleResult { dates, limited }` and can never
+# run away on a pathological rule. `rrule` pulls `chrono-tz` in itself, which
+# is what makes `DTSTART;TZID=America/New_York:...` resolve real DST offsets.
+rrule = { version = "=0.14.0", optional = true }
+
 # T1.3 — TLS + PKI + dual listener + mDNS (PLAN v2 D3′, PURPLE_TEAM.md §P5.4).
 # `ring`, never `aws-lc-rs`: aws-lc-rs needs CMake + NASM on Windows. Every
 # crate below therefore turns its default features off, because both
@@ -153,6 +162,7 @@ server = [
     "dep:mdns-sd",
     "dep:if-addrs",
     "dep:argon2",
+    "dep:rrule",
 ]
 
 [profile.release]
