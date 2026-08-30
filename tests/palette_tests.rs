@@ -17,7 +17,9 @@
 //!   nesting-aware scanner, so every element knows the ground it is actually
 //!   sitting on — inherited through however many wrappers — and every
 //!   ink/ground pair the kiosk paints is required to be in the table **and**
-//!   to clear 4.5:1. A pair that appears in the markup but not in the table
+//!   to clear the AA floor its declared `size` names: 4.5:1 for `Body`, and
+//!   3.0:1 for `Large`, of which Phase 4 declares exactly one (the wordmark
+//!   word "Morning", asserted below). A pair that appears in the markup but not in the table
 //!   fails; a pair in the table that no longer clears AA fails. The profile
 //!   discs, whose ground is an inline `background-color` from the `profiles`
 //!   row rather than a class, are checked straight from their hex.
@@ -338,6 +340,7 @@ fn t3_4_a_every_pair_the_kiosk_actually_paints_is_in_the_table_and_passes_aa() {
     };
 
     let mut seen: Vec<(String, String)> = Vec::new();
+    let mut large: Vec<(String, String)> = Vec::new();
     let mut inline_grounds: Vec<String> = Vec::new();
 
     for (section, html) in rendered_sections() {
@@ -356,11 +359,24 @@ fn t3_4_a_every_pair_the_kiosk_actually_paints_is_in_the_table_and_passes_aa() {
                         )
                     });
                     let ratio = pair_contrast(pair).expect("resolves");
+                    // Phase 4 / D4.4 (§2.2) split the blanket 4.5:1 into the
+                    // two WCAG AA floors the `size` column already names, and
+                    // this is the second place that blanket was written: a
+                    // painted pair is held to *its own* declared floor — 4.5:1
+                    // for `Body`, 3.0:1 for the one `Large` pair (the wordmark
+                    // word "Morning", 60 px / 800 / `.poster-outline`). Never
+                    // below AA for either size; `Body` is not relaxed at all.
+                    let floor = pair.size.min_contrast();
                     assert!(
-                        ratio >= 4.5,
-                        "[{section}] <{tag}> {ink} on {ground} is {ratio:.2}:1"
+                        ratio >= floor,
+                        "[{section}] <{tag}> {ink} on {ground} is {ratio:.2}:1, \
+                         under the {:?} floor of {floor:.1}:1",
+                        pair.size
                     );
                     let key = (ink.clone(), ground.clone());
+                    if pair.size == TextSize::Large && !large.contains(&key) {
+                        large.push(key.clone());
+                    }
                     if !seen.contains(&key) {
                         seen.push(key);
                     }
@@ -390,6 +406,16 @@ fn t3_4_a_every_pair_the_kiosk_actually_paints_is_in_the_table_and_passes_aa() {
         seen.len() >= 8,
         "only {} distinct ink/ground pairs were exercised: {seen:?}",
         seen.len()
+    );
+    // The 3:1 large-text allowance is a door, not a corridor: exactly one
+    // pair on the kiosk may walk through it, and it is the poster wordmark's
+    // display red. Anything else painted as `Large` fails here even though it
+    // would clear its own floor above.
+    large.sort();
+    assert_eq!(
+        large,
+        vec![("text-sheffield-accent".to_string(), "bg-white".to_string())],
+        "the only pair allowed the AA large-text floor is the wordmark's display red"
     );
     inline_grounds.sort();
     assert_eq!(

@@ -18,6 +18,11 @@
 //! * **Overscan** — [`TV_OVERSCAN_CLASS`] is 5 % padding on every
 //!   full-screen container, so nothing lands in the bezel-cropped edge of a
 //!   television (D8).
+//! * **The frame and the card** (Phase 4 / D4.3) — [`TV_FRAME_CLASS`] paints
+//!   the overscan band as the poster's sky-blue border and
+//!   [`TV_POSTER_CARD_CLASS`] is the one white, dark-bordered card that
+//!   carries every pixel of content. The frame never carries ink; the card
+//!   is the only element on the kiosk with a visible dark border.
 //! * **No pointer-only affordances** — a D-pad has no pointer, so Tailwind's
 //!   hover variant is banned outright. `tests/tv_tests.rs` greps this whole
 //!   directory (and the rendered markup) for that prefix and fails on a hit,
@@ -70,6 +75,64 @@ pub const TV_TYPE_SCALE: [(&str, u32); 4] = [
     (TV_HEADING, 48),
     (TV_HEADING_LARGE, 60),
 ];
+
+// ---------------------------------------------------------------------------
+// Phase 4 / D4.3 — the poster's own furniture
+// (`docs/design/DESIGN_DIRECTION.md` §2.3, §2.4, §2.6, §3.1)
+// ---------------------------------------------------------------------------
+
+/// The poster's sky-blue frame.
+///
+/// The 5 % overscan band *is* the frame: the television's bezel-cropped edge
+/// and the poster's blue border are the same 96 px on a 1920 × 1080 panel, so
+/// the safety margin stopped being empty space and became the design. Nothing
+/// but the aria-hidden corner balls ever sits on it — §2.2 makes
+/// `sheffield-light` decorative-only, never a ground under ink.
+pub const TV_FRAME_CLASS: &str = "bg-sheffield-light";
+
+/// The white poster card that sits inside the frame and carries everything.
+///
+/// The **only** element on the kiosk wearing a visible dark border (§2.3);
+/// rows inside it stay border-free and lift on `shadow-lg`. It is also where
+/// the kiosk's base ink lives, because the frame may not carry ink at all.
+pub const TV_POSTER_CARD_CLASS: &str = "flex w-full min-h-0 flex-1 flex-col rounded-[2.5rem] border-4 border-slate-800 bg-white p-10 text-slate-800";
+
+/// The wordmark's tracked eyebrow — the poster's quiet top line (§2.6).
+///
+/// Caps + tracking is reserved for this one word; instructions stay
+/// sentence-case. The word is written in capitals in the markup rather than
+/// set with a transform, so a reader and a `grep` both see what the
+/// television shows.
+pub const TV_EYEBROW_CLASS: &str = "font-bold tracking-[0.35em] text-slate-800";
+
+/// The wordmark's loud word — the poster's outlined display red (§2.1, §2.6).
+///
+/// `sheffield-accent` on white is 3.16:1: AA **Large** only, which is why
+/// this class is only ever applied together with [`TV_HEADING_LARGE`] (60 px)
+/// at weight 800. It is declared in `palette::PALETTE_PAIRS` as the single
+/// `TextSize::Large` pair on the two surfaces.
+pub const TV_WORDMARK_DISPLAY_CLASS: &str =
+    "font-poster font-extrabold text-sheffield-accent poster-outline";
+
+/// The wordmark's quiet words (§2.6).
+pub const TV_WORDMARK_QUIET_CLASS: &str = "font-poster font-extrabold text-slate-800";
+
+/// A heading on a panel that is not the routine — the poster lockup belongs
+/// to the routine, the heart; the others get the face and the blue (§2.6).
+pub const TV_PANEL_HEADING_CLASS: &str = "font-poster font-bold text-sheffield-dark";
+
+/// The checked checkbox's rubber stamp (§2.4).
+///
+/// `.stamp-check` (`input.css`, D4.4) rotates −4° and scales 1.06, with the
+/// 150 ms ease-out behind a `prefers-reduced-motion` guard: the tick lands
+/// slightly crooked, the way a child actually checks a box.
+pub const TV_STAMP_CLASS: &str = "stamp-check";
+
+/// The 8/8 celebration (§2.4): the two wordmark suns turn, slowly, once every
+/// eight seconds — and not at all for a viewer who has asked for less motion.
+/// No confetti and no sound: the poster is exuberant, not noisy.
+pub const TV_CELEBRATION_SPIN_CLASS: &str =
+    "inline-block motion-safe:animate-spin motion-safe:[animation-duration:8s]";
 
 /// Smallest body size the kiosk may use (D8).
 pub const TV_MIN_BODY_PX: u32 = 28;

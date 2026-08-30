@@ -28,6 +28,7 @@
 use dioxus::prelude::*;
 
 use family_calendar::client::components::calendar::CalendarState;
+use family_calendar::client::components::glyphs::icon_glyph;
 use family_calendar::client::components::tv::fixture::{canonical_model, CANONICAL_ROUTINE};
 use family_calendar::client::components::tv::keymap::{
     keys_debug_enabled, KeyLogEntry, TvKey, TV_KEYS,
@@ -930,4 +931,289 @@ fn t2_4_e_a_failed_calendar_fetch_is_not_rendered_as_an_empty_day() {
         .map(CalendarState::name)
         .collect();
     assert_eq!(names, vec!["error", "loading", "empty", "ready"]);
+}
+
+// ---------------------------------------------------------------------------
+// D4.3 — the kiosk becomes the poster
+// (`docs/design/DESIGN_DIRECTION.md` §3.1, §3.2, §3.4; acceptance (a)–(g))
+// ---------------------------------------------------------------------------
+//
+// Seven assertions, lettered as §4 letters them. (d), (e) and (f) are the
+// *unchanged* T2.1/T3.4 assertions above and in `tests/palette_tests.rs` —
+// the poster had to land green against them, not around them — so the test
+// here re-states them as D4.3's own contract rather than duplicating their
+// machinery: the golden focus-order file must still describe the same 29
+// ids, the type-scale golden must still be the four D8 sizes, and neither
+// the poster's source nor its markup may name a pointer-only variant.
+
+/// The first `<h1 ...>...</h1>` in `html`, opening tag included.
+fn first_h1(html: &str) -> String {
+    let start = html.find("<h1").expect("the surface renders an <h1>");
+    let end = html[start..].find("</h1>").expect("an unclosed <h1>") + start;
+    html[start..end].to_string()
+}
+
+/// The canonical kiosk with the eight *seeded* icons rather than the
+/// fixture's eight suns, so (b) is a real test of the mapping.
+fn seeded_icon_model() -> TvModel {
+    let mut model = canonical_model();
+    assert_eq!(
+        model.routine.len(),
+        SHEFFIELD_MORNING_ROUTINE.len(),
+        "the fixture routine and the seeded routine are different lengths"
+    );
+    for (item, (title, description, icon)) in
+        model.routine.iter_mut().zip(SHEFFIELD_MORNING_ROUTINE)
+    {
+        item.title = title.to_string();
+        item.description = description.to_string();
+        item.icon_name = icon.to_string();
+    }
+    model
+}
+
+/// (a) The wordmark: the poster's stacked headline, sun first.
+#[test]
+fn d4_3_a_the_routine_panel_wears_the_poster_wordmark() {
+    let html = render(&canonical_model());
+
+    // The tracked eyebrow, in capitals in the markup — not a CSS transform,
+    // so what a reader greps is what the television shows.
+    let eyebrow = tags(&html)
+        .into_iter()
+        .find(|tag| tag.classes().contains(&"tracking-[0.35em]"))
+        .expect("no element carries `tracking-[0.35em]`");
+    assert!(
+        html.contains("SHEFFIELD"),
+        "the wordmark eyebrow does not say SHEFFIELD:\n{html}"
+    );
+    assert!(
+        eyebrow.classes().contains(&"text-3xl"),
+        "the eyebrow is off the type scale: {:?}",
+        eyebrow.classes()
+    );
+
+    // The sun comes before the h1's text, exactly as it does on the poster.
+    let h1 = first_h1(&html);
+    let sun = h1.find('\u{2600}').expect("no sun in the wordmark's <h1>");
+    let morning = h1.find("Morning").expect("no `Morning` in the wordmark");
+    assert!(
+        sun < morning,
+        "the sun renders after the wordmark's text:\n{h1}"
+    );
+    assert_eq!(
+        h1.matches('\u{2600}').count(),
+        2,
+        "the wordmark must be flanked by exactly two suns (§2.8):\n{h1}"
+    );
+
+    // "Morning" is the outlined display red; "Routine" is quiet ink. The
+    // pair `text-sheffield-accent` on `bg-white` is declared `Large` in
+    // `palette::PALETTE_PAIRS` and only legal at >= 44px/800, which is why
+    // the <h1> itself must carry the 60px size.
+    assert!(h1.contains("text-sheffield-accent"), "{h1}");
+    assert!(h1.contains("poster-outline"), "{h1}");
+    assert!(h1.contains("font-poster"), "{h1}");
+    assert!(h1.contains("text-6xl"), "{h1}");
+    assert!(h1.contains("Routine"), "{h1}");
+
+    // ...and the lockup belongs to the routine alone (§2.6).
+    let mut calendar = canonical_model();
+    calendar.state.panel = TvPanel::Calendar;
+    assert!(
+        !first_h1(&render(&calendar)).contains("poster-outline"),
+        "the Today panel borrowed the routine's wordmark"
+    );
+}
+
+/// (b) Row anatomy: every routine row leads with its own poster glyph.
+#[test]
+fn d4_3_b_every_routine_row_renders_its_icon_glyph() {
+    let model = seeded_icon_model();
+    let html = render(&model);
+
+    for item in &model.routine {
+        let glyph = icon_glyph(&item.icon_name);
+        assert!(
+            html.contains(glyph),
+            "the `{}` row is missing its glyph {glyph:?}:\n{html}",
+            item.icon_name
+        );
+        assert_ne!(
+            glyph, "\u{2705}",
+            "`{}` fell back to the unknown-icon check",
+            item.icon_name
+        );
+        // ...and the *why* is in parentheses after the instruction (§1.3).
+        // The seeded whys carry apostrophes ("God's provision"), which the
+        // renderer escapes, so the needle is escaped the same way.
+        let why = item
+            .description
+            .replace('&', "&amp;")
+            .replace('\'', "&#39;");
+        assert!(
+            html.contains(&format!("({why})")),
+            "the `{}` row does not put its why in parentheses:\n{html}",
+            item.icon_name
+        );
+    }
+
+    // A custom task with no photo still reads as a poster row.
+    assert!(
+        html.contains("\u{2705}"),
+        "the photo-less custom task lost its fallback glyph"
+    );
+}
+
+/// (c) The frame and the card.
+#[test]
+fn d4_3_c_the_frame_is_the_overscan_band_and_the_card_is_the_only_one() {
+    for (section, model) in golden_models() {
+        let html = render(&model);
+        let all = tags(&html);
+
+        let root = all
+            .iter()
+            .find(|tag| tag.attr("data-tv-surface").is_some())
+            .unwrap_or_else(|| panic!("[{section}] no surface root"));
+        let classes = root.classes();
+        assert!(
+            classes.contains(&"bg-sheffield-light"),
+            "[{section}] the root is not the poster's blue frame: {classes:?}"
+        );
+        assert!(
+            classes.contains(&TV_OVERSCAN_CLASS),
+            "[{section}] the frame is not the 5% overscan band: {classes:?}"
+        );
+        // The frame carries no ink: §2.2 makes `sheffield-light` decorative
+        // only, so a text colour on the root would be a pair that cannot be
+        // declared.
+        assert!(
+            !classes.iter().any(|c| c.starts_with("text-slate")
+                || c.starts_with("text-sheffield")
+                || *c == "text-white"),
+            "[{section}] the frame carries ink: {classes:?}"
+        );
+
+        let cards: Vec<&Tag> = all
+            .iter()
+            .filter(|tag| {
+                let classes = tag.classes();
+                classes.contains(&"border-slate-800") && classes.contains(&"bg-white")
+            })
+            .collect();
+        assert_eq!(
+            cards.len(),
+            1,
+            "[{section}] expected exactly one poster card, found {}",
+            cards.len()
+        );
+        assert!(
+            cards[0].classes().contains(&"border-4"),
+            "[{section}] the poster card's border is not the poster's: {:?}",
+            cards[0].classes()
+        );
+    }
+}
+
+/// (d)–(f) The three contracts the poster had to land green *against*.
+#[test]
+fn d4_3_d_e_f_the_poster_did_not_move_the_focus_order_or_the_type_scale() {
+    // (d) the focus-order golden file. D4.3 added glyphs, a frame and a card
+    // — no focusables — so this file may not have moved. Its shape is pinned
+    // here so a future edit fails twice: once in `t2_1_a_...`, and once as a
+    // deliberate D4.3 contract.
+    let ids: Vec<String> = golden_focus_order()
+        .into_iter()
+        .flat_map(|(_, ids)| ids)
+        .collect();
+    assert_eq!(
+        ids.len(),
+        15 + 8 + 5 + 1,
+        "the golden focus order changed length: {ids:?}"
+    );
+    for (section, model) in golden_models() {
+        let rendered = rendered_focus_ids(&render(&model));
+        let expected: Vec<String> = golden_focus_order()
+            .into_iter()
+            .find(|(name, _)| *name == section)
+            .expect("a golden section")
+            .1;
+        assert_eq!(rendered, expected, "[{section}] the poster moved the focus");
+    }
+
+    // (e) the type-scale golden: still the four D8 sizes, and the <h1> the
+    // wordmark now builds is still 60px.
+    assert_eq!(
+        golden_type_scale(),
+        vec![
+            ("text-3xl".to_string(), 30),
+            ("text-4xl".to_string(), 36),
+            ("text-5xl".to_string(), 48),
+            ("text-6xl".to_string(), 60),
+        ],
+        "the type-scale golden moved"
+    );
+    assert_eq!(TV_TYPE_SCALE.len(), 4);
+
+    // (f) no pointer-only affordance, in the poster's own new markup —
+    // including the 8/8 state, which no golden model renders.
+    for (section, mut model) in golden_models() {
+        model.routine.iter_mut().for_each(|i| i.completed = true);
+        let html = render(&model);
+        assert!(
+            !html.contains(concat!("hover", ":")),
+            "[{section}] the poster rendered a pointer-only variant"
+        );
+    }
+}
+
+/// (g) The 8/8 celebration: the count chip flips accent -> sun.
+#[test]
+fn d4_3_g_the_count_chip_turns_sun_yellow_at_eight_of_eight() {
+    let chip_ground = |model: &TvModel| -> String {
+        let html = render(model);
+        let tag = tags(&html)
+            .into_iter()
+            .find(|tag| tag.attr("id") == Some("tv-routine-count"))
+            .expect("the routine panel renders a count chip");
+        tag.classes()
+            .into_iter()
+            .find(|class| class.starts_with("bg-"))
+            .expect("the chip has a ground")
+            .to_string()
+    };
+
+    // 1 / 8 — the working morning.
+    let mut one = canonical_model();
+    one.routine
+        .iter_mut()
+        .enumerate()
+        .for_each(|(index, item)| item.completed = index == 0);
+    assert_eq!(chip_ground(&one), "bg-sheffield-accent");
+    assert!(render(&one).contains("1 / 8"));
+
+    // 8 / 8 — the poster's own exuberance, on a ground the chip's
+    // `text-slate-800` clears at 10.4:1 (a declared pair).
+    let mut all = canonical_model();
+    all.routine
+        .iter_mut()
+        .for_each(|item| item.completed = true);
+    let html = render(&all);
+    assert_eq!(chip_ground(&all), "bg-sheffield-sun");
+    assert!(html.contains("8 / 8"));
+    assert!(
+        html.contains('\u{2600}'),
+        "the finished routine lost its celebration sun"
+    );
+    // ...and the wordmark's suns turn, for anyone who has not asked for less
+    // motion (§2.4).
+    assert!(
+        first_h1(&html).contains("motion-safe:animate-spin"),
+        "the 8/8 wordmark suns do not turn"
+    );
+    assert!(
+        !first_h1(&render(&one)).contains("animate-spin"),
+        "the suns turn before the routine is finished"
+    );
 }

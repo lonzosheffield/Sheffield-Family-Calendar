@@ -29,17 +29,46 @@ use super::keymap::TV_KEYS;
 use super::model::{current_focus, FocusId, TvModel, TvOverlay, TvPanel, TvProfile};
 use super::staleness::status_line;
 use super::style::{
-    focus_class, TV_BODY_LARGE, TV_BODY_TEXT, TV_HEADING, TV_HEADING_LARGE, TV_OVERSCAN_CLASS,
+    focus_class, TV_BODY_LARGE, TV_BODY_TEXT, TV_CELEBRATION_SPIN_CLASS, TV_EYEBROW_CLASS,
+    TV_FRAME_CLASS, TV_HEADING, TV_HEADING_LARGE, TV_OVERSCAN_CLASS, TV_PANEL_HEADING_CLASS,
+    TV_POSTER_CARD_CLASS, TV_STAMP_CLASS, TV_WORDMARK_DISPLAY_CLASS, TV_WORDMARK_QUIET_CLASS,
 };
+use crate::client::components::glyphs::{ball_glyph, icon_glyph, ADD_PHONE_GLYPH, ROUTINE_GLYPH};
 use crate::client::components::palette::{best_ink_on, Rgb, SHEFFIELD_DARK};
 
-/// Every full-screen container on the kiosk: paper ground, display face,
-/// 30 px base text, 5 % overscan.
+/// Every full-screen container on the kiosk: **the poster's blue frame**, the
+/// display face, 30 px base text, 5 % overscan.
+///
+/// D4.3 turned the overscan band into the frame (§3.1): the ground is
+/// `sheffield-light` and carries no ink of its own, because everything the
+/// kiosk says lives on the white poster card
+/// ([`TV_POSTER_CARD_CLASS`](super::style::TV_POSTER_CARD_CLASS)) inside it.
 fn screen_class(extra: &str) -> String {
     format!(
-        "relative flex h-full min-h-screen w-full flex-col bg-sheffield-paper font-display \
-         text-slate-800 {TV_BODY_TEXT} {TV_OVERSCAN_CLASS} {extra}"
+        "relative flex h-full min-h-screen w-full flex-col {TV_FRAME_CLASS} font-display \
+         {TV_BODY_TEXT} {TV_OVERSCAN_CLASS} {extra}"
     )
+}
+
+/// The two aria-hidden sports balls that anchor the bottom corners of the
+/// frame — four balls for four boys, straight off the poster (§2.8, §3.1.6).
+///
+/// They sit on the blue band, never over text, and never anywhere else.
+fn corner_balls() -> Element {
+    let left = format!("{}{}", ball_glyph(1), ball_glyph(2));
+    let right = format!("{}{}", ball_glyph(3), ball_glyph(4));
+    rsx! {
+        span {
+            class: "{TV_HEADING} pointer-events-none absolute bottom-[1.6%] left-[1.6%] select-none",
+            "aria-hidden": "true",
+            "{left}"
+        }
+        span {
+            class: "{TV_HEADING} pointer-events-none absolute bottom-[1.6%] right-[1.6%] select-none",
+            "aria-hidden": "true",
+            "{right}"
+        }
+    }
 }
 
 #[component]
@@ -53,27 +82,40 @@ pub fn TvSurface(model: TvModel, children: Element) -> Element {
     rsx! {
         div {
             id: "tv-root",
-            class: screen_class("gap-8"),
+            class: screen_class(""),
             "data-tv-surface": "1",
             "data-tv-panel": model.state.panel.slug(),
             "data-tv-profile": model.active_profile().map(|p| p.id.to_string()).unwrap_or_default(),
 
-            {header(&model)}
+            // The poster card: one white page with a thin dark border, and
+            // the only element on the kiosk that wears one (§2.3).
+            div { class: "{TV_POSTER_CARD_CLASS} gap-8",
 
-            div { class: "flex min-h-0 flex-1 gap-10",
-                {profile_rail(&model, focused.as_ref())}
-                main { class: "flex min-h-0 flex-1 flex-col gap-6",
-                    {panel_body(&model, focused.as_ref(), children)}
+                {header(&model)}
+
+                div { class: "flex min-h-0 flex-1 gap-10",
+                    {profile_rail(&model, focused.as_ref())}
+                    main { class: "flex min-h-0 flex-1 flex-col gap-6",
+                        {panel_body(&model, focused.as_ref(), children)}
+                    }
                 }
+
+                {panel_hints(&model)}
             }
 
-            {panel_hints(&model)}
+            {corner_balls()}
 
             if model.keys_debug {
                 {keys_overlay(&model)}
             }
         }
     }
+}
+
+/// Is every routine item ticked? The 8/8 state (§2.4) — the count chip turns
+/// sun-yellow and the wordmark's two suns start to turn.
+fn routine_complete(model: &TvModel) -> bool {
+    !model.routine.is_empty() && model.routine.iter().all(|item| item.completed)
 }
 
 // ---------------------------------------------------------------------------
@@ -86,15 +128,16 @@ fn header(model: &TvModel) -> Element {
         .active_profile()
         .map(|p| p.name.clone())
         .unwrap_or_else(|| "Sheffield Family".to_string());
+    let routine = model.state.panel == TvPanel::Routine;
+    let celebrating = routine && routine_complete(model);
 
     rsx! {
-        header { class: "flex shrink-0 items-baseline justify-between gap-10",
-            div { class: "flex items-baseline gap-6",
-                h1 { class: "{TV_HEADING_LARGE} font-bold text-sheffield-dark",
+        header { class: "flex shrink-0 items-end justify-between gap-10",
+            if routine {
+                {wordmark(model.state.panel.title(), &profile, celebrating)}
+            } else {
+                h1 { class: "{TV_HEADING_LARGE} {TV_PANEL_HEADING_CLASS}",
                     "{model.state.panel.title()}"
-                }
-                if model.state.panel == TvPanel::Routine {
-                    p { class: "{TV_HEADING} text-slate-600", "{profile}" }
                 }
             }
             div { class: "flex shrink-0 items-center gap-6",
@@ -116,6 +159,44 @@ fn header(model: &TvModel) -> Element {
     }
 }
 
+/// The poster's headline, rebuilt as the routine panel's wordmark (§2.6).
+///
+/// ```text
+/// SHEFFIELD                     <- eyebrow: 30 px, bold, tracking-[0.35em]
+/// ☀️ Morning Routine ☀️  Boy 1   <- 60 px Baloo 2 800; "Morning" is the
+///                                  outlined display red, the rest is ink
+/// ```
+///
+/// The loud word is the panel title's *first* word, so the lockup is built
+/// from the same `TvPanel::title()` every other surface reads rather than
+/// from a second, drifting copy of the words. The two suns are aria-hidden
+/// emoji flanking the line, exactly two, never behind text (§2.8).
+fn wordmark(title: &str, profile: &str, celebrating: bool) -> Element {
+    let (loud, quiet) = title.split_once(' ').unwrap_or((title, ""));
+    let sun = if celebrating {
+        TV_CELEBRATION_SPIN_CLASS
+    } else {
+        ""
+    };
+
+    rsx! {
+        div { class: "flex min-w-0 flex-col gap-1",
+            span { class: "{TV_BODY_TEXT} {TV_EYEBROW_CLASS}", "SHEFFIELD" }
+            div { class: "flex min-w-0 items-baseline gap-6",
+                h1 { class: "{TV_HEADING_LARGE} flex shrink-0 items-baseline gap-5",
+                    span { class: "select-none {sun}", "aria-hidden": "true", "{ROUTINE_GLYPH}" }
+                    span { class: "{TV_WORDMARK_DISPLAY_CLASS}", "{loud}" }
+                    if !quiet.is_empty() {
+                        span { class: "{TV_WORDMARK_QUIET_CLASS}", "{quiet}" }
+                    }
+                    span { class: "select-none {sun}", "aria-hidden": "true", "{ROUTINE_GLYPH}" }
+                }
+                p { class: "{TV_HEADING} truncate text-slate-600", "{profile}" }
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // The profile rail
 // ---------------------------------------------------------------------------
@@ -128,15 +209,18 @@ fn profile_rail(model: &TvModel, focused: Option<&FocusId>) -> Element {
         nav {
             class: "flex w-[26rem] shrink-0 flex-col gap-5 overflow-hidden",
             "aria-label": "Family profiles",
-            for profile in profiles.into_iter() {
-                {profile_button(&profile, active == Some(profile.id), focused == Some(&FocusId::Profile(profile.id)))}
+            for (index, profile) in profiles.into_iter().enumerate() {
+                {profile_button(&profile, index as u32 + 1, active == Some(profile.id), focused == Some(&FocusId::Profile(profile.id)))}
             }
             {join_qr_button(focused == Some(&FocusId::JoinQr))}
         }
     }
 }
 
-fn profile_button(profile: &TvProfile, active: bool, focused: bool) -> Element {
+/// One boy in the rail. `rail_index` is his 1-based position, which is what
+/// picks his sports ball off the poster's bottom corners (§2.5): ⚽ 🏈 ⚾ 🏀,
+/// cycling for a fifth profile.
+fn profile_button(profile: &TvProfile, rail_index: u32, active: bool, focused: bool) -> Element {
     let id = FocusId::Profile(profile.id).dom_id();
     let ring = focus_class(focused);
     let fill = if active {
@@ -171,7 +255,12 @@ fn profile_button(profile: &TvProfile, active: bool, focused: bool) -> Element {
                 style: "background-color: {disc_hex}",
                 "{initial}"
             }
-            span { class: "{TV_BODY_LARGE} truncate font-bold", "{profile.name}" }
+            span { class: "{TV_BODY_LARGE} min-w-0 flex-1 truncate font-bold", "{profile.name}" }
+            span {
+                class: "{TV_BODY_LARGE} shrink-0 select-none",
+                "aria-hidden": "true",
+                "{ball_glyph(rail_index)}"
+            }
         }
     }
 }
@@ -183,7 +272,10 @@ fn join_qr_button(focused: bool) -> Element {
             id: "tv-join-qr",
             "data-tv-focus": "join-qr",
             class: "{ring} mt-auto bg-white px-8 py-6 shadow-lg",
-            span { class: "{TV_BODY_LARGE} font-bold text-sheffield-dark", "Add a phone" }
+            span { class: "{TV_BODY_LARGE} font-bold text-sheffield-dark",
+                span { class: "select-none", "aria-hidden": "true", "{ADD_PHONE_GLYPH} " }
+                "Add a phone"
+            }
             span { class: "{TV_BODY_TEXT} block text-slate-600", "Play/Pause shows the code" }
         }
     }
@@ -207,6 +299,15 @@ fn routine_panel(model: &TvModel, focused: Option<&FocusId>) -> Element {
     let progress = routine_progress(&model.routine);
     let done = model.routine.iter().filter(|i| i.completed).count();
     let total = model.routine.len();
+    // §2.4 — all 8 done: the chip leaves the accent red for the poster's sun
+    // yellow and gains a sun of its own. Both grounds are declared pairs
+    // under `slate-800`; only the ground changes.
+    let complete = routine_complete(model);
+    let chip_ground = if complete {
+        "bg-sheffield-sun"
+    } else {
+        "bg-sheffield-accent"
+    };
 
     if items.is_empty() && tasks.is_empty() {
         return rsx! {
@@ -223,8 +324,12 @@ fn routine_panel(model: &TvModel, focused: Option<&FocusId>) -> Element {
                 }
             }
             p {
-                class: "{TV_HEADING} shrink-0 rounded-full bg-sheffield-accent px-8 py-1 font-bold text-slate-800",
+                id: "tv-routine-count",
+                class: "{TV_HEADING} shrink-0 rounded-full {chip_ground} px-8 py-1 font-poster font-bold text-slate-800",
                 "{done} / {total}"
+                if complete {
+                    span { class: "select-none", "aria-hidden": "true", " {ROUTINE_GLYPH}" }
+                }
             }
         }
         ul { class: "flex min-h-0 flex-1 flex-col gap-5 overflow-auto",
@@ -242,6 +347,11 @@ fn routine_panel(model: &TvModel, focused: Option<&FocusId>) -> Element {
     }
 }
 
+/// The poster's row, in the poster's order: **icon → empty square → the
+/// instruction, with the *why* in parentheses after it** (§1.3, §3.1.3).
+///
+/// The parenthetical why is the seeded `description` column — the app kept
+/// the poster's voice from the first migration; this puts back its shape.
 fn routine_row(item: &RoutineItemView, focused: bool) -> Element {
     let id = FocusId::RoutineItem(item.template_id).dom_id();
     let ring = focus_class(focused);
@@ -250,12 +360,7 @@ fn routine_row(item: &RoutineItemView, focused: bool) -> Element {
     } else {
         "bg-white text-slate-800"
     };
-    let mark = if item.completed { "✓" } else { "" };
-    let box_class = if item.completed {
-        "bg-sheffield-dark text-white"
-    } else {
-        "bg-white text-sheffield-dark ring-4 ring-sheffield-light"
-    };
+    let why = item.description.trim().to_string();
 
     rsx! {
         button {
@@ -263,14 +368,45 @@ fn routine_row(item: &RoutineItemView, focused: bool) -> Element {
             "data-tv-focus": "routine-item",
             "aria-pressed": if item.completed { "true" } else { "false" },
             class: "{ring} {fill} flex items-center gap-8 px-8 py-6 shadow-lg",
-            span {
-                class: "{TV_HEADING} flex h-20 w-20 shrink-0 items-center justify-center rounded-2xl font-bold {box_class}",
-                "{mark}"
-            }
+            {row_glyph(icon_glyph(&item.icon_name))}
+            {checkbox(item.completed)}
             span { class: "min-w-0 flex-1",
-                span { class: "{TV_BODY_LARGE} block font-bold", "{item.title}" }
-                span { class: "{TV_BODY_TEXT} block text-slate-600", "{item.description}" }
+                span { class: "{TV_BODY_LARGE} font-bold", "{item.title}" }
+                if !why.is_empty() {
+                    span { class: "{TV_BODY_TEXT} text-slate-600", " ({why})" }
+                }
             }
+        }
+    }
+}
+
+/// A row's leading glyph — the poster's full-colour clip-art, at 48 px.
+///
+/// Always `aria-hidden` beside real text and never wrapped in a `text-*`
+/// colour class: emoji bring their own colour (§2.5).
+fn row_glyph(glyph: &str) -> Element {
+    rsx! {
+        span {
+            class: "{TV_HEADING} w-20 shrink-0 select-none text-center",
+            "aria-hidden": "true",
+            "{glyph}"
+        }
+    }
+}
+
+/// The poster's empty rounded square, and the stamp that lands in it (§2.4).
+fn checkbox(checked: bool) -> Element {
+    let mark = if checked { "✓" } else { "" };
+    let state = if checked {
+        format!("bg-sheffield-dark text-white {TV_STAMP_CLASS}")
+    } else {
+        "bg-white text-sheffield-dark ring-4 ring-sheffield-light".to_string()
+    };
+
+    rsx! {
+        span {
+            class: "{TV_HEADING} flex h-20 w-20 shrink-0 items-center justify-center rounded-2xl font-bold {state}",
+            "{mark}"
         }
     }
 }
@@ -290,9 +426,15 @@ fn task_row(task: &CustomTaskView, focused: bool) -> Element {
             "data-tv-focus": "custom-task",
             "aria-pressed": if task.is_completed { "true" } else { "false" },
             class: "{ring} {fill} flex items-center gap-8 px-8 py-6 shadow-lg",
+            // §3.1.4 — the photo thumbnail plays the glyph's role when there
+            // is one; otherwise the row leads with `icon_glyph`'s fallback,
+            // so a custom task still reads as a poster row.
             if let Some(path) = task.photo_path.clone() {
                 img { class: "h-20 w-20 shrink-0 rounded-2xl object-cover", src: "{path}", alt: "" }
+            } else {
+                {row_glyph(icon_glyph("custom-task"))}
             }
+            {checkbox(task.is_completed)}
             span { class: "{TV_BODY_LARGE} min-w-0 flex-1 font-bold", "{task.title}" }
         }
     }
@@ -377,7 +519,13 @@ fn whiteboard_panel(board: Element) -> Element {
             p { class: "{TV_BODY_TEXT} shrink-0 text-slate-600",
                 "Drawing happens on a phone — the board shows here."
             }
-            div { class: "min-h-0 flex-1 overflow-hidden rounded-3xl bg-white shadow-lg", {board} }
+            // On the white poster card the board needs an edge of its own:
+            // the same light-blue ring the empty checkboxes wear, so the
+            // drawing surface reads as a surface rather than as more page.
+            div {
+                class: "min-h-0 flex-1 overflow-hidden rounded-3xl bg-white ring-4 ring-sheffield-light",
+                {board}
+            }
         }
     }
 }
@@ -419,33 +567,51 @@ fn panel_hints(model: &TvModel) -> Element {
 fn join_overlay(model: &TvModel, focused: Option<&FocusId>) -> Element {
     let url = model.join_url.clone();
     let ring = focus_class(focused == Some(&FocusId::OverlayClose));
-    let svg = url.as_deref().and_then(|url| qr_svg(url, 520).ok());
+    // 320 px, not the old 520: the overlay now lives inside the poster card
+    // rather than on the whole page, and a code that overflowed the card
+    // would spill onto the frame. Measured against the 1080-line kiosk, the
+    // whole stack (heading, sentence, code, URL, Back) fits the card's
+    // 800 px interior with room to spare. A phone is held a hand's width
+    // from the screen to scan, so 320 px on a 1920-wide panel still reads
+    // instantly.
+    let svg = url.as_deref().and_then(|url| qr_svg(url, 320).ok());
 
     rsx! {
         div {
             id: "tv-overlay",
-            class: screen_class("items-center justify-center gap-10"),
+            class: screen_class(""),
             "data-tv-surface": "1",
             "data-tv-panel": model.state.panel.slug(),
             "data-tv-overlay": "join-qr",
 
-            h1 { class: "{TV_HEADING_LARGE} font-bold text-sheffield-dark", "Add a phone" }
-            p { class: "{TV_HEADING} text-slate-600",
-                "Scan this with the phone's camera, on the home Wi‑Fi."
-            }
-            if let Some(svg) = svg {
-                div { class: "rounded-3xl bg-white p-10 shadow-lg", dangerous_inner_html: "{svg}" }
-            }
-            if let Some(url) = url {
-                p { class: "{TV_HEADING} font-bold tracking-wide text-slate-800", "{url}" }
-            } else {
-                p { class: "{TV_HEADING} text-slate-600", "Waiting for the hub's address…" }
-            }
-            button {
-                id: "tv-overlay-close",
-                "data-tv-focus": "overlay-close",
-                class: "{ring} w-auto bg-sheffield-dark px-12 py-6 shadow-lg",
-                span { class: "{TV_BODY_LARGE} font-bold text-white", "Back" }
+            div { class: "{TV_POSTER_CARD_CLASS} items-center justify-center gap-6",
+                h1 { class: "{TV_HEADING_LARGE} flex items-baseline gap-5 {TV_PANEL_HEADING_CLASS}",
+                    span { class: "select-none", "aria-hidden": "true", "{ADD_PHONE_GLYPH}" }
+                    "Add a phone"
+                }
+                p { class: "{TV_BODY_LARGE} text-slate-600",
+                    "Scan this with the phone's camera, on the home Wi‑Fi."
+                }
+                // A smaller poster on the poster: the code sits on the paper
+                // tint so it reads as its own card against the white page
+                // (§3.4).
+                if let Some(svg) = svg {
+                    div {
+                        class: "rounded-3xl bg-sheffield-paper p-8 shadow-lg",
+                        dangerous_inner_html: "{svg}",
+                    }
+                }
+                if let Some(url) = url {
+                    p { class: "{TV_BODY_LARGE} font-bold tracking-wide text-slate-800", "{url}" }
+                } else {
+                    p { class: "{TV_BODY_LARGE} text-slate-600", "Waiting for the hub's address…" }
+                }
+                button {
+                    id: "tv-overlay-close",
+                    "data-tv-focus": "overlay-close",
+                    class: "{ring} w-auto bg-sheffield-dark px-12 py-6 shadow-lg",
+                    span { class: "{TV_BODY_LARGE} font-bold text-white", "Back" }
+                }
             }
         }
     }
