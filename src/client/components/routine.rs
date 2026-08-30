@@ -2,6 +2,7 @@ use dioxus::html::FileData;
 use dioxus::prelude::*;
 
 use crate::client::app::use_app_state;
+use crate::client::components::glyphs::icon_glyph;
 use crate::client::components::mobile::queue::{self, QueuedMutation};
 use crate::client::components::mobile::session;
 use crate::client::realtime::use_realtime;
@@ -337,9 +338,21 @@ fn ProfileSelector() -> Element {
     }
 }
 
+/// The phone's routine row (`/m`'s Routine tab). `pub` so
+/// `tests/glyph_tests.rs` can render it standalone, the same way
+/// `tests/tv_tests.rs` renders `TvSurface` — this component takes plain
+/// props and needs no app context, so `dioxus::ssr::render_element` is
+/// enough.
+///
+/// **D4.2 / DESIGN_DIRECTION.md §3.5**: this used to end with a raw
+/// `{item.icon_name}` string (a debug leftover that literally printed
+/// "graduation-cap" on the school row). The poster's row anatomy (§2.5) is
+/// emoji icon → checkbox → text, so the row now *leads* with
+/// [`icon_glyph`] instead, and the trailing icon-name label is gone.
 #[component]
-fn RoutineRow(item: RoutineItemView, on_toggle: EventHandler<bool>) -> Element {
+pub fn RoutineRow(item: RoutineItemView, on_toggle: EventHandler<bool>) -> Element {
     let completed = item.completed;
+    let glyph = icon_glyph(&item.icon_name);
 
     rsx! {
         button {
@@ -349,9 +362,17 @@ fn RoutineRow(item: RoutineItemView, on_toggle: EventHandler<bool>) -> Element {
                 "flex w-full items-start gap-4 rounded-2xl bg-white p-4 text-left shadow-sm ring-1 ring-slate-100 transition hover:ring-sheffield-light"
             },
             onclick: move |_| on_toggle.call(!completed),
+            // §2.5: `aria-hidden`, no `text-*` colour class — the emoji
+            // brings its own colour and the row's title already names the
+            // task for a screen reader.
+            span { class: "mt-1 shrink-0 text-2xl leading-none", aria_hidden: "true", "{glyph}" }
             span {
                 class: if completed {
-                    "mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-sheffield-dark text-white"
+                    // §2.4: the satisfying stamp. `.stamp-check` (an
+                    // `input.css` utility owned by D4.1/D4.4) rotates and
+                    // scales the checked box on a rubber-stamp transition;
+                    // this file only ever names the class.
+                    "stamp-check mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-sheffield-dark text-white"
                 } else {
                     "mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border-2 border-sheffield-light"
                 },
@@ -367,10 +388,6 @@ fn RoutineRow(item: RoutineItemView, on_toggle: EventHandler<bool>) -> Element {
                     "{item.title}"
                 }
                 span { class: "block text-sm text-slate-600", "{item.description}" }
-            }
-            // QA round 1 (Q1-15): `text-sheffield-light` on white is 2.16:1.
-            span { class: "ml-auto text-xs uppercase tracking-wide text-slate-600",
-                "{item.icon_name}"
             }
         }
     }

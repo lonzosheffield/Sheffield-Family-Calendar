@@ -31,6 +31,7 @@ pub mod storage;
 use dioxus::prelude::*;
 
 use crate::client::components::calendar::CalendarPanel;
+use crate::client::components::glyphs;
 use crate::client::components::mobile::queue::{OfflineQueue, QueueToast};
 use crate::client::components::mobile::remote::TvRemote;
 use crate::client::components::mobile::session::SessionState;
@@ -82,15 +83,17 @@ impl MobileTab {
         }
     }
 
-    /// A glyph rather than an icon font or an SVG sprite: five characters
-    /// beat a whole extra asset pipeline on a surface only two people use.
+    /// A glyph rather than an icon font or an SVG sprite: the shared poster
+    /// mapping (`glyphs::icon_glyph`'s panel/tab siblings, D4.2 /
+    /// DESIGN_DIRECTION.md §2.5) beats a whole extra asset pipeline on a
+    /// surface only two people use.
     pub fn glyph(self) -> &'static str {
         match self {
-            MobileTab::Routine => "✓",
-            MobileTab::Calendar => "▦",
-            MobileTab::Board => "✎",
-            MobileTab::TvRemote => "▶",
-            MobileTab::Settings => "⚙",
+            MobileTab::Routine => glyphs::ROUTINE_GLYPH,
+            MobileTab::Calendar => glyphs::CALENDAR_GLYPH,
+            MobileTab::Board => glyphs::WHITEBOARD_GLYPH,
+            MobileTab::TvRemote => glyphs::TV_REMOTE_GLYPH,
+            MobileTab::Settings => glyphs::SETTINGS_GLYPH,
         }
     }
 }
@@ -148,7 +151,16 @@ pub fn MobileShell() -> Element {
     rsx! {
         div { class: "flex min-h-screen w-full flex-col bg-sheffield-paper font-display text-slate-800",
             header { class: "sticky top-0 z-10 flex items-center justify-between bg-sheffield-dark px-4 py-3 text-white",
-                h1 { class: "text-lg font-bold", "{tab().label()}" }
+                // §3.5: "`☀️ Sheffield Hub` beside the tab label,
+                // `font-poster`" — both spans inherit the header's own
+                // `text-white` ink, so this adds no new palette pair.
+                div { class: "flex items-baseline gap-2",
+                    h1 { class: "font-poster text-lg font-bold",
+                        span { aria_hidden: "true", "{glyphs::ROUTINE_GLYPH} " }
+                        "Sheffield Hub"
+                    }
+                    span { class: "text-sm font-semibold", "{tab().label()}" }
+                }
                 ConnectionDot { connected }
             }
 

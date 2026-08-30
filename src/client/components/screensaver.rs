@@ -1,6 +1,7 @@
 use dioxus::prelude::*;
 
 use crate::client::app::use_app_state;
+use crate::client::components::glyphs;
 use crate::server::api::list_screensaver_images;
 use crate::shared::types::MaximizedView;
 
@@ -138,11 +139,20 @@ pub fn Screensaver() -> Element {
     });
 
     let active = is_idle() || scheduled_on;
-    if !active || images.is_empty() {
+    if !active {
         return rsx! {};
     }
 
-    let current = slide() % images.len();
+    // D4.2 / §3.3: the caption chip renders as soon as the overlay is
+    // active, independent of whether any photo has loaded yet — the family
+    // should still see whose hub this is on a bare black screen, not only
+    // once a `list_screensaver_images` fetch resolves. `current` only
+    // matters when there is something to crossfade.
+    let current = if images.is_empty() {
+        0
+    } else {
+        slide() % images.len()
+    };
 
     rsx! {
         div {
@@ -167,6 +177,16 @@ pub fn Screensaver() -> Element {
                     src: "{image}",
                     alt: "",
                 }
+            }
+            // §3.3: bottom-left, inside the 5% overscan band, a *solid*
+            // ground (never translucent over a photo) — `text-white` on
+            // `bg-slate-800` is already a declared, passing palette pair
+            // (`palette::PALETTE_PAIRS`, "the key-code overlay's headings"),
+            // so this chip adds no new colour.
+            div {
+                class: "absolute bottom-[5%] left-[5%] flex items-center gap-2 rounded-full bg-slate-800 px-6 py-2 font-poster text-3xl text-white",
+                span { aria_hidden: "true", "{glyphs::ROUTINE_GLYPH}" }
+                "Sheffield Family Hub"
             }
         }
     }
