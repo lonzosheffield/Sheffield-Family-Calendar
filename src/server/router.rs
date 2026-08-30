@@ -42,6 +42,7 @@ use dioxus::prelude::*;
 use tower_http::services::ServeDir;
 
 use crate::client::app::App;
+use crate::client::components::mobile::pwa;
 use crate::client::components::qr::phone_join_url;
 use crate::server::api::realtime;
 use crate::server::config::FamilyHubConfig;
@@ -78,8 +79,18 @@ pub fn build_router(config: &FamilyHubConfig) -> Router {
 
     Router::new()
         .route("/", get(redirect_root_to_tv))
-        .route("/manifest.webmanifest", get(manifest_stub))
-        .route("/sw.js", get(service_worker_stub))
+        // T2.2 filled these three in. T0.6 registered the first two as stubs
+        // and its own doc comment reserved their bodies for this task
+        // ("T2.2 replaces the body with the real manifest … but keeps this
+        // route and its content type"); `/icons/{file}` is new, and serves
+        // the T0.7 icon set from the binary at a hash-free URL so the
+        // manifest can reference it and an install can never fail on a
+        // missing file. Everything they serve lives in
+        // `client::components::mobile::pwa` — see `docs/HANDOFF.md`
+        // "T2.2 → Boss / T2.5".
+        .route(pwa::MANIFEST_PATH, get(pwa::handlers::manifest))
+        .route(pwa::SERVICE_WORKER_PATH, get(pwa::handlers::service_worker))
+        .route("/icons/{file}", get(pwa::handlers::icon))
         .route(
             "/ca.crt",
             get(move || {
@@ -155,27 +166,6 @@ fn upgrade_target(uri: &Uri, headers: &header::HeaderMap, tls_port: u16) -> Opti
 /// PWA at `/m`. A permanent redirect keeps old bookmarks/QR codes working.
 async fn redirect_root_to_tv() -> Redirect {
     Redirect::permanent("/tv")
-}
-
-/// T0.6 stub. T2.2 replaces the body with the real manifest (icons from
-/// T0.7, `scope: "/"`, `start_url: "/m"`) but keeps this route and its
-/// `application/manifest+json` content type, which is what matters for PWA
-/// installability (G6).
-async fn manifest_stub() -> impl IntoResponse {
-    (
-        [(header::CONTENT_TYPE, "application/manifest+json")],
-        r#"{"name":"Sheffield Family Hub","scope":"/","start_url":"/m"}"#,
-    )
-}
-
-/// T0.6 stub. T2.2 replaces the body with the real service worker
-/// (app-shell precache, network-first server fns, cache-first uploads) but
-/// keeps this route and its `text/javascript` content type.
-async fn service_worker_stub() -> impl IntoResponse {
-    (
-        [(header::CONTENT_TYPE, "text/javascript")],
-        "// T0.6 stub; T2.2 lands the real service worker here.\n",
-    )
 }
 
 /// The local CA certificate the owner installs on each phone (PLAN v2 D3′,

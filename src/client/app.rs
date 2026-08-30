@@ -1,13 +1,12 @@
 use dioxus::prelude::*;
 
-use crate::client::components::routine::Routine;
+use crate::client::components::mobile::MobileShell;
 use crate::client::components::screensaver::Screensaver;
 use crate::client::components::tv::TvShell;
 use crate::client::realtime::use_realtime_provider;
 use crate::shared::types::MaximizedView;
 
 const TAILWIND_CSS: Asset = asset!("/assets/tailwind.css");
-const MANIFEST: Asset = asset!("/assets/manifest.json");
 
 /// Global UI state shared by every panel.
 #[derive(Clone, Copy)]
@@ -53,7 +52,24 @@ pub fn App() -> Element {
 
     rsx! {
         document::Link { rel: "stylesheet", href: TAILWIND_CSS }
-        document::Link { rel: "manifest", href: MANIFEST }
+        // T2.2 / G6 / R-16: the manifest is linked at its **root** URL, not
+        // through `asset!()`. A hashed `/assets/<hash>-manifest.json` puts
+        // `start_url: "/m"` outside the manifest's own scope, and the install
+        // prompt never appears however many icons it lists.
+        document::Link {
+            rel: "manifest",
+            href: crate::client::components::mobile::pwa::MANIFEST_PATH,
+        }
+        document::Link {
+            rel: "apple-touch-icon",
+            href: "/icons/icon-192.png",
+        }
+        document::Meta { name: "apple-mobile-web-app-capable", content: "yes" }
+        document::Meta {
+            name: "apple-mobile-web-app-status-bar-style",
+            content: "black-translucent",
+        }
+        document::Meta { name: "apple-mobile-web-app-title", content: "Family Hub" }
         document::Meta {
             name: "viewport",
             content: "width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no",
@@ -104,11 +120,14 @@ pub fn MobileShort() -> Element {
     }
 }
 
+/// The phone PWA. T2.2 replaced the v1 routine-only page (G9) with the full
+/// five-tab shell — Routine · Calendar · Board · TV Remote · Settings —
+/// which still renders `Routine { compact: true }` as its first tab, so
+/// `tests/http_tests.rs::http_mobile_serves_routine_only_view` (a protected
+/// T0.3 assertion, `docs/HANDOFF.md` H-2) keeps holding.
 #[component]
 pub fn Mobile() -> Element {
     rsx! {
-        div { class: "min-h-screen w-full bg-sheffield-paper p-4 font-display text-slate-800",
-            Routine { compact: true }
-        }
+        MobileShell {}
     }
 }

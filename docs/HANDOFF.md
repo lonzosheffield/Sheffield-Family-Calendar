@@ -883,3 +883,132 @@ and gives it **no focusable children** — drawing is phone-only (§P5.5 default
 reachable from the remote, and the typography allowlist does not cover
 `whiteboard.rs` (the test renders the placeholder, not the live component).
 Keep the board read-only on the television.
+
+## From T2.2 (phone PWA) → Boss, T2.5, T3.4
+
+### H-20. Two `src/server/router.rs` handler bodies and one new route — the seam T0.6 reserved
+
+`src/server/router.rs` is T0.6's file, later edited by T1.3 and T2.5 (§P4).
+T2.2 edited it anyway, minimally, on the same basis T1.7 edited it for H-14:
+**T0.6's own doc comments reserved these bodies for this task** — verbatim,
+"T0.6 stub. T2.2 replaces the body with the real manifest (icons from T0.7,
+`scope: "/"`, `start_url: "/m"`) but keeps this route and its
+`application/manifest+json` content type", and the same for `/sw.js`. There is
+no other way to satisfy T2.2 acceptance (a) and (b), which are HTTP assertions
+against those two routes.
+
+What changed, in full:
+
+* `manifest_stub` and `service_worker_stub` **deleted**; the two `.route(...)`
+  lines now point at `client::components::mobile::pwa::handlers::{manifest,
+  service_worker}`. Paths and content types are unchanged, so
+  `tests/router_tests.rs` and `tests/tls_tests.rs` still pass untouched.
+* **One new route**, `.route("/icons/{file}", get(pwa::handlers::icon))`,
+  serving T0.7's four PNGs from `include_bytes!` at hash-free URLs. The
+  manifest has to reference icons at a stable path, and `asset!()` output is
+  hashed (which is G6 all over again); a fixed-table lookup also means the
+  route cannot be path-traversed.
+* One `use crate::client::components::mobile::pwa;`.
+
+Nothing else in the file was touched. **For T2.5:** the conflict surface is
+three adjacent lines in `build_router`'s route chain and one `use` — trivial
+to merge either way round.
+
+### H-21. `assets/tailwind.css` is stale — one rebuild at the 2-a merge, please
+
+`assets/**` is T0.7's (§P4) and `assets/tailwind.css` is a build output, so
+T2.2 deliberately did **not** regenerate it: every task in wave 2-a adds
+utility classes, and five branches each committing an independently minified
+CSS file is five guaranteed merge conflicts in a single-line file. CI's
+"Tailwind rebuild (fail on diff)" step (T0.8) will therefore be red until
+someone rebuilds once.
+
+Request: after merging wave 2-a, run the one command CI runs —
+
+```powershell
+& "$env:USERPROFILE\.cargo\bin\tailwindcss.exe" -i input.css -o assets/tailwind.css --minify
+```
+
+— and commit the result. (The binary is already installed on this box, v3.4.17
+as pinned.) Until then the phone's new classes render unstyled; nothing else
+breaks.
+
+### H-22. `assets/manifest.json` is now dead — delete it with the same touch
+
+The v1 hashed manifest (`assets/manifest.json`, `icons: []`) is no longer
+referenced by anything: `client/app.rs` now links `/manifest.webmanifest` at
+its root URL, and `tests/pwa_tests.rs` asserts the string `manifest.json` does
+not appear in `/m`'s HTML. The file is in `assets/**` (T0.7's), so T2.2 left
+it in place rather than delete a file it does not own. It should go.
+
+### H-23. For T2.5 — enqueue a failed toggle into the offline queue (two call sites)
+
+The offline queue (`client/components/mobile/queue.rs`) is complete and
+tested: it stamps the intended date and a never-regenerated idempotency key,
+expires at 48 h with a toast, replays on reconnect (the phone shell's effect)
+and on demand (Settings → "Try sending now"). What it does not yet have in
+production is a *producer*, because the only two queueable mutations are
+issued from `src/client/components/routine.rs`, which is T2.5's file in this
+wave.
+
+One line each, at the two existing `let _ = toggle_*(...).await;` call sites:
+
+```rust
+use crate::client::components::mobile::queue::{self, QueuedMutation};
+
+if toggle_routine_task(user_id, template_id, completed, date.clone(), key)
+    .await
+    .is_err()
+{
+    queue::record_offline_failure(
+        QueuedMutation::ToggleRoutineTask { user_id, template_id, completed },
+        date,
+    );
+}
+```
+
+and the `ToggleCustomTask { user_id, task_id, completed }` equivalent for
+`toggle_custom_task` (`user_id` there is the task's *owner*, which the call
+site already has). `record_offline_failure` loads, enqueues and saves; it
+needs nothing else. Note the two calls currently discard their `Result` with
+`let _ =`, so a failed tick is silently lost today — this closes that as well
+as wiring the queue.
+
+If T2.5's brief will not stretch to it, Boss can apply the two lines as a
+micro-commit at the 2-a boundary; it touches no file T2.2 owns either way.
+
+### H-24. `web-sys`'s `Storage` feature (optional, `Cargo.toml`)
+
+`client/components/mobile/storage.rs` reaches `localStorage` through four
+`#[wasm_bindgen] extern "C"` declarations rather than `web_sys::Storage`,
+because `Storage` is not in `Cargo.toml`'s `web-sys` feature list and
+`Cargo.toml` is a Boss micro-commit (§P4). The extern block is ordinary Rust
+under the already-declared `wasm-bindgen` glue exception
+(`docs/NON_RUST.md`), catches the exception Safari private mode throws on
+`window.localStorage` access, and needs no new dependency — so this is a
+tidiness request, not a blocker. If Boss would rather there be one mechanism,
+add `"Storage"` to the `web-sys` features and the module's `imp` can collapse
+to `window.local_storage().ok().flatten()`.
+
+### Notes on decisions T2.2 made inside its own files
+
+* **No Background Sync in `sw.js`.** PURPLE §P3 T2.2(e) phrases the Android
+  promise as "Background Sync". A service worker cannot read `localStorage`,
+  so honouring that literally would mean a second copy of the queue in
+  IndexedDB plus a JavaScript reimplementation of the replay and idempotency
+  rules — two implementations to keep in step, inside a 6 KB budget, for a
+  guarantee iOS cannot offer at all (RR-6). `docs/PWA.md` therefore states the
+  promise PLAN v2 D6 itself states — "Android replays on reconnect; iOS
+  replays on next app open" — names Background Sync explicitly, and explains
+  the decision. The doc test asserts both platform sections and both promises.
+* **`/m` is no longer routine-only.** `client/app.rs::Mobile` renders the
+  five-tab `MobileShell` (G9). The protected T0.3 assertions
+  (`http_mobile_serves_routine_only_view`, `http_m_serves_routine_only_view`)
+  are untouched and still pass: Routine is the default tab, so "Add photo
+  task" is present and the string "Whiteboard" is not — the board tab is
+  labelled "Board" and its content is not rendered until selected.
+* **`client/app.rs`** was edited (manifest link moved off `asset!()`, iOS
+  meta tags, `Mobile` renders `MobileShell`). It has no listed owner in §P4;
+  T2.1 will also need it for the TV routes. The changes are confined to the
+  `App` head block and the `Mobile` component, so they do not overlap
+  `Tv`/`KioskDashboard`.
