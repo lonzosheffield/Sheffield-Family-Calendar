@@ -101,8 +101,8 @@ pub fn Tv() -> Element {
 /// The old three-up `Dashboard` was a desktop layout — pointer-driven,
 /// `hover:`-styled and 14 px in places — so `/tv` renders
 /// [`TvShell`](crate::client::components::tv::TvShell) instead.
-/// `components::dashboard` stays in the tree for the phone surface T2.2
-/// builds; nothing on the television reaches it.
+/// The old `components::dashboard` was deleted at the wave 2-b close once
+/// neither `/tv` nor `/m` (T2.2's `MobileShell`) rendered it.
 #[component]
 fn KioskDashboard() -> Element {
     rsx! {

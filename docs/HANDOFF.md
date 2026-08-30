@@ -1764,3 +1764,53 @@ existed to reuse:
 warnings`, `cargo clippy --features web --target wasm32-unknown-unknown --
 -D warnings`, `cargo test --features server`) is green on this branch,
 `screensaver_tests.rs` and `photo_tests.rs` both included.
+
+---
+
+## Boss close — wave 2-b (T2.7 reconcile)
+
+**Merged:** `T2.7` (squash of `phase-2/T2.7`, rebased on `main` at
+`454d7ad`). Reviewed against PLAN §3 / PURPLE §P3 T2.7: (a) list ≥ 3 with
+every URL 200 `image/jpeg` — `tests/screensaver_tests.rs`; (b) upload appears
+in the list — same file, multipart `POST /api/upload_screensaver_image`;
+(c) idle state machine fires at exactly 600 s — `IdleTracker` unit tests in
+`src/client/components/screensaver.rs`; (d) disabled schedule emits nothing
+at any hour — `schedule_tests` in `src/server/api/screensaver.rs`. No test
+weakened (`tests/photo_tests.rs` untouched and green), no new non-Rust
+component, no secrets. T2.6 had already merged at the 2-a close.
+
+**Ratified, both T2.7 requests above:** `MaximizedView::Screensaver`
+(`src/shared/types.rs`, T1.2's file) with its `tv/model.rs` arm; the
+`pub(crate) sniff_downscale_reencode` extraction in `src/server/api/photos.rs`
+(T2.5's file, behaviour unchanged); the `router.rs` edits (screensaver
+multipart route on the same 25 MiB limit, `screensaver_router` under the
+same `nosniff`/`attachment` middleware, `screensaver::ensure_background_tasks()`
+at boot). One allowlist/re-encode implementation now exists in the tree.
+
+**Applied at this close:**
+
+- **`src/client/components/dashboard.rs` deleted**, as scheduled at both
+  2-a closes — still unreferenced after T2.4/T2.5/T2.7 (the only mentions
+  were `pub mod dashboard;` and an `app.rs` doc comment; both updated).
+  T2.7's two `Screensaver` arms in it went with it.
+
+**Left recorded (not applied), with the reason:**
+
+- **T2.7 — no phone Settings upload control.** `mobile/settings.rs` (T2.2)
+  still has no "ambient photos" file input; the route is proven over HTTP
+  only. Whoever next owns `mobile/**` adds a file input that `POST`s
+  `multipart/form-data` (field `photo`) to `/api/upload_screensaver_image`.
+- **T2.7 — the schedule has no enable path.** `ScreensaverSchedule::default()`
+  is the only instance ever constructed (`enabled: false, hour: 22`), so the
+  loop is provably inert but a family cannot opt in yet. A `[screensaver]
+  schedule_hour` key in `familyhub.toml` (T0.5's `FamilyHubConfig`) is the
+  natural home; wave-3 item, not a 2-b apply.
+- **T2.1 H-23 (server `Health` heartbeat), T2.4 H-22 (`TvModel.events` →
+  `CalendarState`), T2.4 H-25 / T2.5 residual (await the stroke insert),
+  T1.4 H-19 (`Set-Cookie` login route):** all still scheduled as owner
+  micro-commits; none is a one-line apply. Unchanged from the 2-a rerun
+  close.
+
+**Worktrees:** `.claude/worktrees/wf_d57bfb45-d60-5` (T2.7, merged) removed.
+No other task worktree remains; the `worktree-*` placeholder branches carry
+no checkout.

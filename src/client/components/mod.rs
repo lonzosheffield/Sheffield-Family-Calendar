@@ -1,5 +1,4 @@
 pub mod calendar;
-pub mod dashboard;
 // T2.2: the phone PWA — manifest, service worker, offline queue, bottom tabs.
 pub mod mobile;
 // T1.3: the kiosk join QR (fast_qr SVG). Compiled for both targets - the
