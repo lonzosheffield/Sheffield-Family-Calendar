@@ -136,6 +136,18 @@ async fn fonts_route_serves_each_woff2_with_the_right_content_type_and_magic_byt
             "GET /fonts/{file}: expected content-type font/woff2, got {content_type:?}"
         );
 
+        let cache_control = response
+            .headers()
+            .get("cache-control")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        assert_eq!(
+            cache_control, "public, max-age=31536000, immutable",
+            "GET /fonts/{file}: expected an immutable, one-year cache-control header \
+             (QD-01 — a build baked into the binary can cache forever), got {cache_control:?}"
+        );
+
         let body = response
             .bytes()
             .await
@@ -145,6 +157,96 @@ async fn fonts_route_serves_each_woff2_with_the_right_content_type_and_magic_byt
             "GET /fonts/{file}: body must start with the wOF2 magic bytes"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// QD-01 (QA design round 1): `/fonts` must not depend on `CARGO_MANIFEST_DIR`
+// or any other path relative to the build machine's source checkout — a
+// `ServeDir` rooted at `concat!(env!("CARGO_MANIFEST_DIR"), "/assets/fonts")`
+// resolves that root at *request* time, so it serves fine from `cargo test`
+// (whose CWD is the repo) but 404s on every real install, where the compiled
+// binary runs from an entirely different machine and directory. Proven the
+// strong way: actually `set_current_dir` away from the repo before booting
+// the router and driving a real request, not just grepping the source.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn fonts_route_is_served_even_when_the_process_cwd_is_not_the_repo() {
+    let config = test_config();
+
+    // `test_config`/`init_test_env` above already resolve every path they
+    // need (DATABASE_URL, DIOXUS_PUBLIC_PATH, the data dir) to absolutes
+    // before this point, so it is safe to yank the process CWD out from
+    // under them — exactly the same "resolved once, absolutely" discipline
+    // `FamilyHubConfig` documents for G23/R-14, which is what QD-01 asks
+    // `/fonts` to also honour.
+    let original_cwd = std::env::current_dir().expect("process has a current directory");
+    let scratch_cwd =
+        std::env::temp_dir().join(format!("familyhub-font-tests-cwd-{}", std::process::id()));
+    std::fs::create_dir_all(&scratch_cwd).expect("scratch CWD is creatable");
+    // This directory deliberately has no `assets/fonts` under it at all —
+    // if `/fonts` were still a `ServeDir` resolving its root relative to
+    // anything about the process's environment or working directory, this
+    // is where that would show up as a 404.
+    std::env::set_current_dir(&scratch_cwd).expect("can chdir into the scratch directory");
+
+    // Always restore the CWD, even on panic, so a failure here does not
+    // corrupt every other test in this binary (they share one process).
+    struct RestoreCwd(PathBuf);
+    impl Drop for RestoreCwd {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.0);
+        }
+    }
+    let _restore = RestoreCwd(original_cwd);
+
+    let addr = spawn_router(&config).await;
+    let client = http_client();
+
+    for file in FONT_FILES {
+        let response = client
+            .get(format!("http://{addr}/fonts/{file}"))
+            .send()
+            .await
+            .unwrap_or_else(|err| {
+                panic!("GET /fonts/{file} should respond even with an unrelated CWD: {err}")
+            });
+        assert_eq!(
+            response.status().as_u16(),
+            200,
+            "GET /fonts/{file} must be 200 regardless of the process's current directory \
+             (QD-01) — a CARGO_MANIFEST_DIR-rooted ServeDir would 404 here"
+        );
+        let body = response
+            .bytes()
+            .await
+            .unwrap_or_else(|err| panic!("GET /fonts/{file} body should read: {err}"));
+        assert!(
+            body.starts_with(b"wOF2"),
+            "GET /fonts/{file}: body must start with the wOF2 magic bytes"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&scratch_cwd);
+}
+
+#[test]
+fn fonts_route_no_longer_serves_from_a_build_machine_path() {
+    let router_src = std::fs::read_to_string(repo_root().join("src/server/router.rs"))
+        .expect("src/server/router.rs is readable");
+    let fonts_router_start = router_src
+        .find("fn fonts_router")
+        .expect("router.rs must define fonts_router");
+    let fonts_router_end = router_src[fonts_router_start..]
+        .find("\n}") // tolerate either LF or CRLF line endings
+        .map(|offset| fonts_router_start + offset)
+        .expect("fonts_router must have a closing brace");
+    let fonts_router_body = &router_src[fonts_router_start..fonts_router_end];
+    assert!(
+        !fonts_router_body.contains("ServeDir"),
+        "QD-01: fonts_router must not use ServeDir — the three faces must be \
+         include_bytes!'d into the binary and served by named routes instead"
+    );
 }
 
 // ---------------------------------------------------------------------------

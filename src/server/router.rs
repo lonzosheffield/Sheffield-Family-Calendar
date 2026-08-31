@@ -206,25 +206,69 @@ fn screensaver_router(config: &FamilyHubConfig) -> Router {
         .layer(axum::middleware::from_fn(uploads_security_headers))
 }
 
-/// `/fonts` as its own tiny `Router<()>`, mirroring [`screensaver_router`]'s
-/// shape (D4.1, `docs/design/DESIGN_DIRECTION.md` §4/§5) — the three poster
-/// faces (`assets/fonts/*.woff2`) are, unlike `/uploads` and
-/// `/assets/screensaver`, build-time data baked into this crate rather than
-/// runtime content under `FamilyHubConfig`'s data directory, so this router
-/// takes no config: [`FONTS_DIR`] resolves at compile time, next to this
-/// source file's own crate root, on whichever machine produced this binary
-/// — exactly the same "resolved once, absolutely, never relative to the
-/// process's current working directory" discipline `FamilyHubConfig`
-/// applies to runtime paths (G23/R-14), just fixed at build time instead of
-/// load time since these files never change per-install. No security
-/// headers layer: these are same-origin font binaries the browser is
-/// expected to load and use as fonts, not user-uploaded images that must
-/// never render inline (the `uploads_security_headers` rationale above does
-/// not apply here).
-const FONTS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/fonts");
+/// `Content-Type` for every `/fonts/*.woff2` response.
+const FONT_CONTENT_TYPE: &str = "font/woff2";
 
+/// The three poster faces never change per-install (a new build is a new
+/// binary), so — like [`pwa::ICONS`] — they get the longest cache axum can
+/// express plus `immutable`, which tells a revisiting browser not to even
+/// send a revalidation request.
+const FONT_CACHE_CONTROL: &str = "public, max-age=31536000, immutable";
+
+/// `/fonts` as its own tiny `Router<()>` of three named routes — one per
+/// poster face (D4.1, `docs/design/DESIGN_DIRECTION.md` §4/§5) — rather than
+/// a [`ServeDir`] over `assets/fonts` (QD-01, `docs/qa/QA_DESIGN_ROUND_1.md`):
+/// a `ServeDir` resolves its root at **request** time, and
+/// `concat!(env!("CARGO_MANIFEST_DIR"), …)` bakes in the *build machine's*
+/// source checkout path — a path that does not exist, and is never meant to
+/// exist, on the machine the compiled binary actually ships to. `/fonts`
+/// served nothing there. `include_bytes!` instead bakes the three faces into
+/// the binary itself at compile time, exactly the same "resolved once,
+/// absolutely, never relative to the process's current working directory (or
+/// its build-time source tree)" discipline `FamilyHubConfig` applies to
+/// runtime paths (G23/R-14) and [`pwa::ICONS`]/[`pwa::handlers::icon`] already
+/// apply to the PWA icon set — this mirrors that pattern rather than
+/// `uploads_router`'s or `screensaver_router`'s `ServeDir`, since those two
+/// really do serve mutable, runtime content under `FamilyHubConfig`'s data
+/// directory. No security headers layer: these are same-origin font binaries
+/// the browser is expected to load and use as fonts, not user-uploaded images
+/// that must never render inline (the `uploads_security_headers` rationale
+/// above does not apply here).
 fn fonts_router() -> Router {
-    Router::new().fallback_service(ServeDir::new(FONTS_DIR))
+    async fn nunito_600() -> impl IntoResponse {
+        (
+            [
+                (header::CONTENT_TYPE, FONT_CONTENT_TYPE),
+                (header::CACHE_CONTROL, FONT_CACHE_CONTROL),
+            ],
+            include_bytes!("../../assets/fonts/nunito-600-latin.woff2").as_slice(),
+        )
+    }
+
+    async fn nunito_800() -> impl IntoResponse {
+        (
+            [
+                (header::CONTENT_TYPE, FONT_CONTENT_TYPE),
+                (header::CACHE_CONTROL, FONT_CACHE_CONTROL),
+            ],
+            include_bytes!("../../assets/fonts/nunito-800-latin.woff2").as_slice(),
+        )
+    }
+
+    async fn baloo2_800() -> impl IntoResponse {
+        (
+            [
+                (header::CONTENT_TYPE, FONT_CONTENT_TYPE),
+                (header::CACHE_CONTROL, FONT_CACHE_CONTROL),
+            ],
+            include_bytes!("../../assets/fonts/baloo2-800-latin.woff2").as_slice(),
+        )
+    }
+
+    Router::new()
+        .route("/nunito-600-latin.woff2", get(nunito_600))
+        .route("/nunito-800-latin.woff2", get(nunito_800))
+        .route("/baloo2-800-latin.woff2", get(baloo2_800))
 }
 
 /// `X-Content-Type-Options: nosniff` + `Content-Disposition: attachment` on
