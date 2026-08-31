@@ -19,9 +19,10 @@ pub enum MaximizedView {
 /// Number of family profiles supported by the hub (user ids 1..=4).
 pub const FAMILY_PROFILE_COUNT: u32 = 4;
 
-/// Display names for the four family profiles, indexed by `user_id - 1`.
+/// Display names for the four family profiles, indexed by `user_id - 1`
+/// (`migrations/0004_name_the_boys.sql`).
 pub const FAMILY_PROFILES: [&str; FAMILY_PROFILE_COUNT as usize] =
-    ["Boy 1", "Boy 2", "Boy 3", "Boy 4"];
+    ["Isaiah", "Nathaniel", "Simeon", "Ezekiel"];
 
 pub fn profile_name(user_id: u32) -> &'static str {
     FAMILY_PROFILES

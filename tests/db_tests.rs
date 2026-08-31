@@ -12,6 +12,41 @@ async fn memory_pool() -> SqlitePool {
     pool
 }
 
+/// Migrate `pool` through `migrations/0003_profiles.sql` only, stopping one
+/// migration short of `0004_name_the_boys.sql`. Used to simulate a database
+/// exactly as it stood before the owner's software upgraded: the four
+/// profiles seeded but still named "Boy 1".."Boy 4", so a test can rename one
+/// the way the phone's rename UI would, then apply 0004 on top and check that
+/// rename survived.
+///
+/// Builds a scratch `Migrator` over copies of just the first three migration
+/// files (byte-identical to the real ones, so their checksums match what the
+/// full embedded `db::MIGRATOR` expects) rather than touching any migration
+/// file itself.
+async fn migrate_through_0003_profiles(pool: &SqlitePool) {
+    let migrations_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
+    let scratch = std::env::temp_dir().join(format!(
+        "familyhub-through-0003-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&scratch).expect("scratch migrations dir");
+    for file in ["0001_init.sql", "0002_core.sql", "0003_profiles.sql"] {
+        std::fs::copy(migrations_dir.join(file), scratch.join(file))
+            .unwrap_or_else(|err| panic!("copy {file} into scratch migrations dir: {err}"));
+    }
+
+    let migrator = sqlx::migrate::Migrator::new(scratch.clone())
+        .await
+        .expect("build a 0001..0003-only migrator");
+    migrator.run(pool).await.expect("apply 0001..0003");
+
+    let _ = std::fs::remove_dir_all(&scratch);
+}
+
 #[tokio::test]
 async fn migrations_seed_the_eight_sheffield_routine_items() {
     let pool = memory_pool().await;
@@ -196,5 +231,56 @@ async fn insert_custom_task_violates_foreign_key_for_an_unknown_profile() {
     assert!(
         err.to_string().to_lowercase().contains("foreign key"),
         "expected a foreign key violation, got: {err}"
+    );
+}
+
+/// `migrations/0004_name_the_boys.sql`: a fresh database renames all four
+/// seeded placeholders to the owner's chosen names, in `sort_order`.
+#[tokio::test]
+async fn fresh_database_names_the_four_seeded_profiles() {
+    let pool = memory_pool().await;
+
+    let names: Vec<String> = sqlx::query_scalar("SELECT name FROM profiles ORDER BY sort_order")
+        .fetch_all(&pool)
+        .await
+        .expect("profile names");
+
+    assert_eq!(names, vec!["Isaiah", "Nathaniel", "Simeon", "Ezekiel"]);
+}
+
+/// `migrations/0004_name_the_boys.sql` matches on the exact seeded placeholder
+/// name, so a profile the owner already renamed on the phone (here, id 2 from
+/// "Boy 2" to "Nate") is left alone — while the other three, still at their
+/// placeholder names, are renamed normally.
+#[tokio::test]
+async fn a_profile_already_renamed_before_0004_keeps_its_name() {
+    let pool = db::connect("sqlite::memory:")
+        .await
+        .expect("in-memory sqlite");
+    migrate_through_0003_profiles(&pool).await;
+
+    sqlx::query("UPDATE profiles SET name = 'Nate' WHERE id = 2")
+        .execute(&pool)
+        .await
+        .expect("rename Boy 2 to Nate before 0004 ever runs");
+
+    // The owner's software upgrades; `db::migrate` now also applies 0004.
+    db::migrate(&pool).await.expect("migrate through 0004");
+
+    let names: Vec<(i64, String)> =
+        sqlx::query_as("SELECT id, name FROM profiles ORDER BY sort_order")
+            .fetch_all(&pool)
+            .await
+            .expect("profile names");
+
+    assert_eq!(
+        names,
+        vec![
+            (1, "Isaiah".to_string()),
+            (2, "Nate".to_string()),
+            (3, "Simeon".to_string()),
+            (4, "Ezekiel".to_string()),
+        ],
+        "id 2 kept its phone-given name; the other three were renamed by 0004"
     );
 }

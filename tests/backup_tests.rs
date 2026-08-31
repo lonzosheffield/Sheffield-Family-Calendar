@@ -280,8 +280,8 @@ async fn restore_drill_recreates_the_live_database_from_a_backup() {
         db::migration_version(&restored.read)
             .await
             .expect("version"),
-        Some(3),
-        "T1.1's 0001/0002 plus T1.4's 0003_profiles"
+        Some(4),
+        "T1.1's 0001/0002 plus T1.4's 0003_profiles plus phase-4/names' 0004_name_the_boys"
     );
 
     restored.close().await;

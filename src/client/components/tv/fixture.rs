@@ -20,12 +20,13 @@ use crate::shared::types::{CalendarEvent, CustomTaskView, RoutineItemView};
 
 use super::model::{TvModel, TvProfile, TvState};
 
-/// The four child profiles seeded by `migrations/0003_profiles.sql`.
+/// The four child profiles seeded by `migrations/0003_profiles.sql` and named
+/// by `migrations/0004_name_the_boys.sql`.
 pub const CANONICAL_PROFILES: [(i64, &str, &str); 4] = [
-    (1, "Boy 1", "#2672B3"),
-    (2, "Boy 2", "#8BB5DA"),
-    (3, "Boy 3", "#E86A58"),
-    (4, "Boy 4", "#F4D03F"),
+    (1, "Isaiah", "#2672B3"),
+    (2, "Nathaniel", "#8BB5DA"),
+    (3, "Simeon", "#E86A58"),
+    (4, "Ezekiel", "#F4D03F"),
 ];
 
 /// Titles standing in for the eight seeded routine templates. Only the count
