@@ -95,7 +95,13 @@ pub const TV_FRAME_CLASS: &str = "bg-sheffield-light";
 /// The **only** element on the kiosk wearing a visible dark border (§2.3);
 /// rows inside it stay border-free and lift on `shadow-lg`. It is also where
 /// the kiosk's base ink lives, because the frame may not carry ink at all.
-pub const TV_POSTER_CARD_CLASS: &str = "flex w-full min-h-0 flex-1 flex-col rounded-[2.5rem] border-4 border-slate-800 bg-white p-10 text-slate-800";
+/// QA design round 1 / **QD-02** moved the inner padding from `p-10` to `p-8`
+/// and folded the card's own `gap-6` in here (it used to be an inline
+/// `gap-8`): at the kiosk's declared 1920 × 1080 render target those two
+/// steps are 32 vertical pixels the profile rail did not have, and the rail
+/// was 55 px short of its fourth boy. The arithmetic is
+/// [`tv_rail_budget_px`], asserted below and in `tests/tv_tests.rs`.
+pub const TV_POSTER_CARD_CLASS: &str = "flex w-full min-h-0 flex-1 flex-col gap-6 rounded-[2.5rem] border-4 border-slate-800 bg-white p-8 text-slate-800";
 
 /// The wordmark's tracked eyebrow — the poster's quiet top line (§2.6).
 ///
@@ -128,11 +134,110 @@ pub const TV_PANEL_HEADING_CLASS: &str = "font-poster font-bold text-sheffield-d
 /// slightly crooked, the way a child actually checks a box.
 pub const TV_STAMP_CLASS: &str = "stamp-check";
 
+/// The profile rail's own column.
+///
+/// `overflow-y-auto`, not `overflow-hidden` (QD-02): the rail is a scroll
+/// container so the shell's scroll-into-view has something to scroll, and a
+/// fifth profile is then reachable instead of merely focusable.
+pub const TV_PROFILE_RAIL_CLASS: &str = "flex w-[26rem] shrink-0 flex-col gap-5 overflow-y-auto";
+
+/// One boy's button on the rail, minus the focus ring and the fill.
+pub const TV_PROFILE_BUTTON_CLASS: &str = "flex items-center gap-6 px-8 py-4 shadow-lg";
+
+/// The coloured disc carrying a boy's initial.
+pub const TV_PROFILE_DISC_CLASS: &str =
+    "flex h-20 w-20 shrink-0 items-center justify-center rounded-full font-bold";
+
+/// The rail's last entry — *Add a phone*, one line, pinned to the bottom.
+pub const TV_JOIN_PILL_CLASS: &str = "mt-auto bg-white px-8 py-4 shadow-lg";
+
 /// The 8/8 celebration (§2.4): the two wordmark suns turn, slowly, once every
 /// eight seconds — and not at all for a viewer who has asked for less motion.
 /// No confetti and no sound: the poster is exuberant, not noisy.
 pub const TV_CELEBRATION_SPIN_CLASS: &str =
     "inline-block motion-safe:animate-spin motion-safe:[animation-duration:8s]";
+
+// ---------------------------------------------------------------------------
+// QA design round 1 / QD-02 — the profile rail's vertical budget
+// ---------------------------------------------------------------------------
+//
+// Nothing here paints anything. It is the *arithmetic* of the classes above,
+// written down so that "does the rail still hold four boys on a 1080-line
+// television?" is a `cargo test` question rather than a screenshot question.
+// No SSR test can measure a browser, so the numbers below are the measured
+// heights of the two elements that are not made of spacing steps (the
+// wordmark lockup and the panel-hint row) plus plain Tailwind arithmetic for
+// everything else. `tests/tv_tests.rs` pins each class this depends on to the
+// markup it is actually rendered into, so the sum cannot drift away from the
+// page behind its back.
+
+/// The kiosk's declared render size (`docs/device.toml`).
+pub const TV_RENDER_WIDTH_PX: u32 = 1920;
+/// The kiosk's declared render size (`docs/device.toml`).
+pub const TV_RENDER_HEIGHT_PX: u32 = 1080;
+
+/// One step of Tailwind's spacing scale: `p-8` is 8 × 4 px = 32 px.
+pub const TV_SPACING_STEP_PX: u32 = 4;
+
+/// [`TV_OVERSCAN_CLASS`] is `p-[5%]`, and percentage padding resolves against
+/// the container's **width** on all four sides — 96 px at 1920.
+pub const TV_OVERSCAN_PERCENT: u32 = 5;
+
+/// `border-4` on [`TV_POSTER_CARD_CLASS`].
+pub const TV_CARD_BORDER_PX: u32 = 4;
+/// `p-8` on [`TV_POSTER_CARD_CLASS`] (was `p-10` before QD-02).
+pub const TV_CARD_PADDING_STEP: u32 = 8;
+/// `gap-6` on [`TV_POSTER_CARD_CLASS`] (was `gap-8` before QD-02). The card
+/// stacks three children — header, body row, hints — so it pays this twice.
+pub const TV_CARD_GAP_STEP: u32 = 6;
+
+/// The wordmark lockup's measured height: a 30 px eyebrow in a 36 px line
+/// box, then `gap-1`, then the 60 px `text-6xl` line, which Baloo 2's metrics
+/// render as 63.2 px. Rounded up — a budget may only ever be pessimistic.
+pub const TV_HEADER_PX: u32 = 104;
+/// The panel-hint row: one 30 px pill (36 px line box) with `py-2`.
+pub const TV_HINTS_PX: u32 = 52;
+
+/// `gap-5` between the rail's entries.
+pub const TV_RAIL_GAP_STEP: u32 = 5;
+/// `h-20 w-20` — the profile disc. QD-02 took it down from `h-24`: 96 px of
+/// disc is what forced a 128 px row, and four of those plus *Add a phone*
+/// cannot be made to fit 1080 lines however the padding is shuffled.
+pub const TV_PROFILE_DISC_PX: u32 = 80;
+/// `py-4` on a profile button (was `py-6` before QD-02).
+pub const TV_PROFILE_PADDING_Y_STEP: u32 = 4;
+/// The *Add a phone* pill: one 36 px `text-4xl` line box with `py-4`.
+///
+/// QD-02 folded its second line ("Play/Pause shows the code") away — the key
+/// is already on the hint row, and a focus stop nobody can see is worse than
+/// a hint nobody reads.
+pub const TV_JOIN_PILL_PX: u32 = 40 + 2 * TV_PROFILE_PADDING_Y_STEP * TV_SPACING_STEP_PX;
+
+/// Height of one profile button on the rail.
+pub const fn tv_profile_button_px() -> u32 {
+    TV_PROFILE_DISC_PX + 2 * TV_PROFILE_PADDING_Y_STEP * TV_SPACING_STEP_PX
+}
+
+/// The vertical pixels the profile rail actually gets on a 1920 × 1080
+/// television, once the frame, the card, the wordmark and the hint row have
+/// taken theirs.
+pub const fn tv_rail_budget_px() -> u32 {
+    let overscan = TV_RENDER_WIDTH_PX * TV_OVERSCAN_PERCENT / 100;
+    TV_RENDER_HEIGHT_PX
+        - 2 * overscan
+        - 2 * TV_CARD_BORDER_PX
+        - 2 * TV_CARD_PADDING_STEP * TV_SPACING_STEP_PX
+        - TV_HEADER_PX
+        - 2 * TV_CARD_GAP_STEP * TV_SPACING_STEP_PX
+        - TV_HINTS_PX
+}
+
+/// The vertical pixels the rail needs to show `profiles` boys **and** the
+/// *Add a phone* pill without clipping either.
+pub const fn tv_rail_needed_px(profiles: u32) -> u32 {
+    let gap = TV_RAIL_GAP_STEP * TV_SPACING_STEP_PX;
+    profiles * tv_profile_button_px() + profiles * gap + TV_JOIN_PILL_PX
+}
 
 /// Smallest body size the kiosk may use (D8).
 pub const TV_MIN_BODY_PX: u32 = 28;
@@ -202,6 +307,69 @@ mod tests {
             assert!(class.contains("ring-8"), "{class}");
             assert!(class.contains("focus:ring-sheffield-sun"), "{class}");
         }
+    }
+
+    /// QD-02: the arithmetic and the classes it claims to describe are the
+    /// same thing. If someone edits a class string without editing the
+    /// budget (or the other way round), this fails before the television
+    /// does.
+    #[test]
+    fn the_budget_is_made_of_the_classes_it_is_made_of() {
+        let has = |class: &str, token: &str| class.split_whitespace().any(|t| t == token);
+
+        assert_eq!(TV_OVERSCAN_CLASS, "p-[5%]");
+        assert!(has(TV_POSTER_CARD_CLASS, "p-8"), "{TV_POSTER_CARD_CLASS}");
+        assert!(has(TV_POSTER_CARD_CLASS, "gap-6"), "{TV_POSTER_CARD_CLASS}");
+        assert!(
+            has(TV_POSTER_CARD_CLASS, "border-4"),
+            "{TV_POSTER_CARD_CLASS}"
+        );
+        assert!(
+            has(TV_PROFILE_RAIL_CLASS, "gap-5"),
+            "{TV_PROFILE_RAIL_CLASS}"
+        );
+        assert!(
+            has(TV_PROFILE_RAIL_CLASS, "overflow-y-auto"),
+            "the rail must be a scroll container for QD-02's scroll-into-view"
+        );
+        assert!(
+            has(TV_PROFILE_BUTTON_CLASS, "py-4"),
+            "{TV_PROFILE_BUTTON_CLASS}"
+        );
+        assert!(
+            has(TV_PROFILE_DISC_CLASS, "h-20"),
+            "{TV_PROFILE_DISC_CLASS}"
+        );
+        assert!(has(TV_JOIN_PILL_CLASS, "py-4"), "{TV_JOIN_PILL_CLASS}");
+
+        assert_eq!(tv_profile_button_px(), 112);
+        assert_eq!(TV_JOIN_PILL_PX, 72);
+    }
+
+    /// QD-02's actual defect, as a number: the rail was 580 px and needed
+    /// 816 px, so Boy 4 lost his bottom 38 % and *Add a phone* was invisible.
+    #[test]
+    fn the_rail_holds_four_boys_and_the_phone_pill_at_ten_eighty() {
+        let budget = tv_rail_budget_px();
+        let needed = tv_rail_needed_px(4);
+        assert_eq!(budget, 612, "the rail's budget at 1920x1080 moved");
+        assert_eq!(needed, 600, "what four boys plus the phone pill cost moved");
+        assert!(
+            needed <= budget,
+            "the rail needs {needed}px and has {budget}px: the fourth boy or \
+             the phone pill is clipped at {TV_RENDER_WIDTH_PX}x{TV_RENDER_HEIGHT_PX}"
+        );
+        // ...and the pre-QD-02 geometry (p-10, gap-8, py-6, a 96px disc) did
+        // not fit, which is the whole finding. Recomputed here rather than
+        // asserted from memory.
+        let before_budget = budget - 2 * 2 * TV_SPACING_STEP_PX - 2 * 2 * TV_SPACING_STEP_PX;
+        let before_needed = 4 * (96 + 2 * 6 * TV_SPACING_STEP_PX)
+            + 4 * TV_RAIL_GAP_STEP * TV_SPACING_STEP_PX
+            + 40
+            + 36
+            + 2 * 6 * TV_SPACING_STEP_PX;
+        assert_eq!(before_budget, 580);
+        assert!(before_needed > before_budget, "{before_needed}");
     }
 
     // The "no pointer-only affordance" rule is asserted in

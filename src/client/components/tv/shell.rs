@@ -43,8 +43,8 @@ use crate::shared::types::{profile_name, ServerMessage, FAMILY_PROFILE_COUNT};
 
 use super::clock::{tv_clock, TvClock, CLOCK_POLL_SECS};
 use super::keymap::{push_key_log, KeyLogEntry};
-use super::model::{FocusId, TvModel, TvProfile, TvState};
-use super::nav::{on_key_for, TvAction};
+use super::model::{current_focus, FocusId, TvModel, TvProfile, TvState};
+use super::nav::{on_key_for, scroll_target, TvAction};
 use super::staleness::{TvStaleness, BADGE_TICK_MS};
 use super::surface::TvSurface;
 
@@ -288,6 +288,19 @@ pub fn TvShell() -> Element {
     // ---------------------------------------------------------------
     // The remote
     // ---------------------------------------------------------------
+    // QD-02 / QD-08: the element the cursor last landed on, as a DOM id.
+    //
+    // Held in a signal rather than scrolled from inside the key handler so
+    // the scroll happens *after* Dioxus has rendered the frame the press
+    // produced — the row the cursor just moved to may not exist yet when the
+    // press is handled (Left/Right swaps the whole panel).
+    let mut scroll_to = use_signal(|| None::<String>);
+    use_effect(move || {
+        if let Some(dom_id) = scroll_to() {
+            platform::scroll_into_view(&dom_id);
+        }
+    });
+
     let rendered = model.clone();
     let handle_key = move |event: Event<KeyboardData>| {
         let entry = KeyLogEntry::new(event.key().to_string(), event.code().to_string());
@@ -303,9 +316,16 @@ pub fn TvShell() -> Element {
 
         let mut model = rendered.clone();
         model.state = state.peek().to_owned();
+        let was = current_focus(&model);
         let outcome = on_key_for(&model, remote_key);
         state.set(outcome.state);
         model.state = outcome.state;
+
+        // Move the viewport with the ring, in the rail and in the routine
+        // list alike (QD-02, QD-08).
+        if let Some(target) = scroll_target(was.as_ref(), current_focus(&model).as_ref()) {
+            scroll_to.set(Some(target.dom_id()));
+        }
 
         match outcome.action {
             TvAction::None | TvAction::OpenOverlay(_) | TvAction::CloseOverlay => {}
@@ -412,6 +432,29 @@ mod platform {
             .map(|query| keys_debug_enabled(&query))
             .unwrap_or(false)
     }
+
+    /// Bring the element the remote's cursor just landed on into view
+    /// (QD-02 / QD-08).
+    ///
+    /// `ScrollLogicalPosition::Nearest` in both axes is the only choice that
+    /// behaves on a kiosk: `Start`/`Center` would yank an already-visible
+    /// row to the top of its list on every press, and the horizontal
+    /// `Nearest` keeps the rail's scroll container from sliding sideways
+    /// when a focus ring pokes out of it. The default `auto` behaviour is
+    /// instant — a smooth scroll would still be gliding when the next press
+    /// arrives, and nobody presses Down slowly.
+    pub fn scroll_into_view(dom_id: &str) {
+        let Some(element) = web_sys::window()
+            .and_then(|window| window.document())
+            .and_then(|document| document.get_element_by_id(dom_id))
+        else {
+            return;
+        };
+        let options = web_sys::ScrollIntoViewOptions::new();
+        options.set_block(web_sys::ScrollLogicalPosition::Nearest);
+        options.set_inline(web_sys::ScrollLogicalPosition::Nearest);
+        element.scroll_into_view_with_scroll_into_view_options(&options);
+    }
 }
 
 #[cfg(not(all(feature = "web", target_arch = "wasm32")))]
@@ -428,6 +471,9 @@ mod platform {
     pub fn keys_debug_from_location() -> bool {
         false
     }
+
+    /// There is no viewport to scroll during SSR.
+    pub fn scroll_into_view(_dom_id: &str) {}
 }
 
 #[cfg(test)]

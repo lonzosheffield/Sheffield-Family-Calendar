@@ -30,8 +30,9 @@ use super::model::{current_focus, FocusId, TvModel, TvOverlay, TvPanel, TvProfil
 use super::staleness::status_line;
 use super::style::{
     focus_class, TV_BODY_LARGE, TV_BODY_TEXT, TV_CELEBRATION_SPIN_CLASS, TV_EYEBROW_CLASS,
-    TV_FRAME_CLASS, TV_HEADING, TV_HEADING_LARGE, TV_OVERSCAN_CLASS, TV_PANEL_HEADING_CLASS,
-    TV_POSTER_CARD_CLASS, TV_STAMP_CLASS, TV_WORDMARK_DISPLAY_CLASS, TV_WORDMARK_QUIET_CLASS,
+    TV_FRAME_CLASS, TV_HEADING, TV_HEADING_LARGE, TV_JOIN_PILL_CLASS, TV_OVERSCAN_CLASS,
+    TV_PANEL_HEADING_CLASS, TV_POSTER_CARD_CLASS, TV_PROFILE_BUTTON_CLASS, TV_PROFILE_DISC_CLASS,
+    TV_PROFILE_RAIL_CLASS, TV_STAMP_CLASS, TV_WORDMARK_DISPLAY_CLASS, TV_WORDMARK_QUIET_CLASS,
 };
 use crate::client::components::glyphs::{ball_glyph, icon_glyph, ADD_PHONE_GLYPH, ROUTINE_GLYPH};
 use crate::client::components::palette::{best_ink_on, Rgb, SHEFFIELD_DARK};
@@ -89,7 +90,7 @@ pub fn TvSurface(model: TvModel, children: Element) -> Element {
 
             // The poster card: one white page with a thin dark border, and
             // the only element on the kiosk that wears one (§2.3).
-            div { class: "{TV_POSTER_CARD_CLASS} gap-8",
+            div { class: "{TV_POSTER_CARD_CLASS}",
 
                 {header(&model)}
 
@@ -207,7 +208,7 @@ fn profile_rail(model: &TvModel, focused: Option<&FocusId>) -> Element {
 
     rsx! {
         nav {
-            class: "flex w-[26rem] shrink-0 flex-col gap-5 overflow-hidden",
+            class: "{TV_PROFILE_RAIL_CLASS}",
             "aria-label": "Family profiles",
             for (index, profile) in profiles.into_iter().enumerate() {
                 {profile_button(&profile, index as u32 + 1, active == Some(profile.id), focused == Some(&FocusId::Profile(profile.id)))}
@@ -249,9 +250,9 @@ fn profile_button(profile: &TvProfile, rail_index: u32, active: bool, focused: b
             key: "{id}",
             "data-tv-focus": "profile",
             "aria-current": if active { "true" } else { "false" },
-            class: "{ring} {fill} flex items-center gap-6 px-8 py-6 shadow-lg",
+            class: "{ring} {fill} {TV_PROFILE_BUTTON_CLASS}",
             span {
-                class: "{TV_HEADING} flex h-24 w-24 shrink-0 items-center justify-center rounded-full font-bold {disc_ink}",
+                class: "{TV_HEADING} {TV_PROFILE_DISC_CLASS} {disc_ink}",
                 style: "background-color: {disc_hex}",
                 "{initial}"
             }
@@ -265,18 +266,23 @@ fn profile_button(profile: &TvProfile, rail_index: u32, active: bool, focused: b
     }
 }
 
+/// The rail's last entry.
+///
+/// QD-02 folded it down to one line: the second line ("Play/Pause shows the
+/// code") cost 36 px the rail did not have, and the shortcut it advertised is
+/// not the only way in — `Enter` on this very button opens the same overlay,
+/// which is the route a child on a D-pad actually takes.
 fn join_qr_button(focused: bool) -> Element {
     let ring = focus_class(focused);
     rsx! {
         button {
             id: "tv-join-qr",
             "data-tv-focus": "join-qr",
-            class: "{ring} mt-auto bg-white px-8 py-6 shadow-lg",
-            span { class: "{TV_BODY_LARGE} font-bold text-sheffield-dark",
+            class: "{ring} {TV_JOIN_PILL_CLASS}",
+            span { class: "{TV_BODY_LARGE} block truncate font-bold text-sheffield-dark",
                 span { class: "select-none", "aria-hidden": "true", "{ADD_PHONE_GLYPH} " }
                 "Add a phone"
             }
-            span { class: "{TV_BODY_TEXT} block text-slate-600", "Play/Pause shows the code" }
         }
     }
 }

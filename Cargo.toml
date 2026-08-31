@@ -34,6 +34,11 @@ web-sys = { version = "0.3", features = [
     "ServiceWorkerContainer",
     "ServiceWorker",
     "ResizeObserver",
+    # QD-02 / QD-08: `Element::scroll_into_view_with_scroll_into_view_options`
+    # with `block: "nearest"` — how the kiosk's virtual D-pad focus moves the
+    # viewport, since DOM focus never leaves the keyboard host.
+    "ScrollIntoViewOptions",
+    "ScrollLogicalPosition",
     "File",
     "Blob",
     "FormData",

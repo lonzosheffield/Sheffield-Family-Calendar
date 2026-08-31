@@ -204,6 +204,30 @@ pub fn on_key_for(model: &TvModel, key: TvKey) -> KeyOutcome {
     on_key(model.state, key, &layout, &rail, &body)
 }
 
+/// Which element the shell must scroll into view, given where the cursor was
+/// and where it landed.
+///
+/// The remote's cursor is application state, not DOM focus (see
+/// [`super::shell`]), so nothing scrolls on its own: `document.activeElement`
+/// never leaves the keyboard host, and the browser has no idea the ring
+/// moved. Without this the rail and the routine list keep their scroll
+/// position while the cursor walks off the bottom of them — QA design round 1
+/// **QD-02** (the rail) and **QD-08** (the routine list), where pressing Down
+/// seven times left the child looking at a list that had not moved and a ring
+/// they could not see.
+///
+/// Pure on purpose: the wasm half is three lines of `web_sys` that this
+/// function decides *when* to run, so "does focus movement scroll?" is a
+/// `cargo test` question. Returns `None` when the cursor did not actually
+/// move — re-scrolling an element that is already where it was is how a
+/// kiosk develops a twitch.
+pub fn scroll_target(before: Option<&FocusId>, after: Option<&FocusId>) -> Option<FocusId> {
+    match after {
+        Some(after) if Some(after) != before => Some(after.clone()),
+        _ => None,
+    }
+}
+
 /// Fewest key presses from `start` to a state whose cursor is on `target`,
 /// or `None` if it is unreachable.
 ///

@@ -36,18 +36,23 @@ use family_calendar::client::components::tv::keymap::{
 use family_calendar::client::components::tv::model::{
     current_focus, focus_order, FocusId, TvLayout, TvModel, TvOverlay, TvPanel, TvState, TvZone,
 };
-use family_calendar::client::components::tv::nav::{on_key_for, presses_to_reach, TvAction};
+use family_calendar::client::components::tv::nav::{
+    on_key_for, presses_to_reach, scroll_target, TvAction,
+};
 use family_calendar::client::components::tv::staleness::{
     badge_is_lit, TvStaleness, STALENESS_THRESHOLD_MS,
 };
 use family_calendar::client::components::tv::style::{
-    TV_FOCUSABLE_CLASS, TV_FOCUS_RING_ACTIVE, TV_MIN_BODY_PX, TV_MIN_HEADING_PX, TV_OVERSCAN_CLASS,
-    TV_TYPE_SCALE,
+    tv_profile_button_px, tv_rail_budget_px, tv_rail_needed_px, TV_FOCUSABLE_CLASS,
+    TV_FOCUS_RING_ACTIVE, TV_MIN_BODY_PX, TV_MIN_HEADING_PX, TV_OVERSCAN_CLASS,
+    TV_RENDER_HEIGHT_PX, TV_RENDER_WIDTH_PX, TV_TYPE_SCALE,
 };
 use family_calendar::client::components::tv::surface::TvSurface;
 use family_calendar::server::db::SHEFFIELD_MORNING_ROUTINE;
 use family_calendar::server::health::STALENESS_THRESHOLD;
-use family_calendar::shared::types::{CalendarEvent, MaximizedView, ServerMessage};
+use family_calendar::shared::types::{
+    CalendarEvent, MaximizedView, ServerMessage, FAMILY_PROFILE_COUNT,
+};
 
 // ---------------------------------------------------------------------------
 // A very small HTML tag scanner
@@ -1215,5 +1220,214 @@ fn d4_3_g_the_count_chip_turns_sun_yellow_at_eight_of_eight() {
     assert!(
         !first_h1(&render(&one)).contains("animate-spin"),
         "the suns turn before the routine is finished"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// QA design round 1 — QD-02 (the rail stopped fitting four boys) and QD-08
+// (the virtual focus never scrolled itself into view)
+// ---------------------------------------------------------------------------
+
+/// The shipped markup and the layout budget in `style.rs` are one geometry,
+/// stated twice.
+///
+/// `style.rs` can prove that 4 × 112 + 4 × 20 + 72 ≤ 612 all day without ever
+/// touching the page; this walks the rendered markup and pins every class the
+/// sum is made of to the element it claims to be on. Put `p-10` back on the
+/// card, or `py-6` back on a profile button, and this fails — which is what
+/// QD-02 needed and did not have: no SSR test could see the clipping, because
+/// no SSR test knew what the classes cost.
+#[test]
+fn qd_02_the_poster_card_and_the_rail_wear_the_measured_spacing() {
+    for (section, model) in golden_models() {
+        let html = render(&model);
+        let all = tags(&html);
+
+        let root = all
+            .iter()
+            .find(|tag| tag.attr("data-tv-surface").is_some())
+            .unwrap_or_else(|| panic!("[{section}] no surface root"));
+        assert!(
+            root.classes().contains(&"p-[5%]"),
+            "[{section}] the frame's overscan moved: {:?}",
+            root.classes()
+        );
+
+        let card = all
+            .iter()
+            .find(|tag| {
+                let classes = tag.classes();
+                classes.contains(&"border-slate-800") && classes.contains(&"bg-white")
+            })
+            .unwrap_or_else(|| panic!("[{section}] no poster card"));
+        let card_classes = card.classes();
+        for token in ["p-8", "gap-6", "border-4"] {
+            assert!(
+                card_classes.contains(&token),
+                "[{section}] the poster card lost `{token}`: {card_classes:?}"
+            );
+        }
+        for token in ["p-10", "gap-8"] {
+            assert!(
+                !card_classes.contains(&token),
+                "[{section}] the poster card is back on `{token}` — the 32px \
+                 QD-02 handed to the rail: {card_classes:?}"
+            );
+        }
+        assert!(
+            !html.contains("Play/Pause shows the code"),
+            "[{section}] the Add-a-phone pill grew its second line back"
+        );
+
+        // An open overlay owns the whole screen; there is no rail behind it.
+        if section == "overlay:join-qr" {
+            continue;
+        }
+
+        let rail = all
+            .iter()
+            .find(|tag| tag.attr("aria-label") == Some("Family profiles"))
+            .unwrap_or_else(|| panic!("[{section}] no profile rail"));
+        let rail_classes = rail.classes();
+        assert!(
+            rail_classes.contains(&"overflow-y-auto"),
+            "[{section}] the rail is not a scroll container, so a focus \
+             cannot be scrolled into it: {rail_classes:?}"
+        );
+        assert!(
+            rail_classes.contains(&"gap-5"),
+            "[{section}] the rail's gap moved: {rail_classes:?}"
+        );
+
+        let profiles: Vec<&Tag> = all
+            .iter()
+            .filter(|tag| tag.attr("data-tv-focus") == Some("profile"))
+            .collect();
+        assert_eq!(
+            profiles.len(),
+            FAMILY_PROFILE_COUNT as usize,
+            "[{section}] the canonical rail is the four seeded boys"
+        );
+        for button in &profiles {
+            let classes = button.classes();
+            assert!(
+                classes.contains(&"py-4") && !classes.contains(&"py-6"),
+                "[{section}] a profile button is not on QD-02's `py-4`: {classes:?}"
+            );
+        }
+
+        let discs: Vec<&Tag> = all
+            .iter()
+            .filter(|tag| {
+                let classes = tag.classes();
+                classes.contains(&"rounded-full") && classes.contains(&"h-20")
+            })
+            .collect();
+        assert_eq!(
+            discs.len(),
+            FAMILY_PROFILE_COUNT as usize,
+            "[{section}] the profile discs are not the 80px the budget spends"
+        );
+        for disc in &discs {
+            assert!(disc.classes().contains(&"w-20"), "{:?}", disc.classes());
+        }
+
+        let join = all
+            .iter()
+            .find(|tag| tag.attr("id") == Some("tv-join-qr"))
+            .unwrap_or_else(|| panic!("[{section}] no join button"));
+        assert!(
+            join.classes().contains(&"py-4"),
+            "[{section}] the Add-a-phone pill is not one line tall: {:?}",
+            join.classes()
+        );
+    }
+}
+
+/// The finding itself, as arithmetic: 1080 lines, and everything the rail is
+/// not.
+#[test]
+fn qd_02_the_rail_budget_at_1080p_holds_four_boys_and_the_phone_pill() {
+    assert_eq!(
+        (TV_RENDER_WIDTH_PX, TV_RENDER_HEIGHT_PX),
+        (1920, 1080),
+        "the kiosk's render target moved away from `docs/device.toml`"
+    );
+
+    let budget = tv_rail_budget_px();
+    let needed = tv_rail_needed_px(FAMILY_PROFILE_COUNT);
+    assert_eq!(budget, 612, "the rail's budget at 1920x1080 moved");
+    assert_eq!(needed, 600, "four boys plus the phone pill changed price");
+    assert!(
+        needed <= budget,
+        "the rail needs {needed}px of the {budget}px it gets at 1920x1080: \
+         the fourth boy or `Add a phone` is clipped (QD-02)"
+    );
+    // One profile button, from its parts: an 80px disc between 16px paddings.
+    assert_eq!(tv_profile_button_px(), 112);
+    // A fifth boy would not fit — which is exactly why the rail scrolls and
+    // the focus scrolls into it, rather than being assumed to fit forever.
+    assert!(tv_rail_needed_px(FAMILY_PROFILE_COUNT + 1) > budget);
+}
+
+/// QD-08: every move of the remote's cursor asks to be scrolled into view —
+/// in the rail and in the routine list alike.
+///
+/// The wasm half is `Element::scroll_into_view_with_scroll_into_view_options`
+/// and cannot run here; what *decides* whether it runs is
+/// [`scroll_target`], which is pure. Walking the real key handler and
+/// asserting a target after every press is the walk a child actually makes.
+#[test]
+fn qd_08_every_focus_move_asks_to_be_scrolled_into_view() {
+    // Down the rail: three more boys, the phone pill, then a wrap to Boy 1.
+    let mut model = canonical_model();
+    let mut seen: Vec<String> = Vec::new();
+    for _ in 0..=model.profiles.len() {
+        let before = current_focus(&model);
+        model.state = on_key_for(&model, TvKey::Down).state;
+        let after = current_focus(&model);
+        let target = scroll_target(before.as_ref(), after.as_ref())
+            .expect("moving down the rail must scroll the new entry into view");
+        assert_eq!(Some(&target), after.as_ref());
+        seen.push(target.dom_id());
+    }
+    assert_eq!(
+        seen,
+        vec![
+            "tv-profile-2",
+            "tv-profile-3",
+            "tv-profile-4",
+            "tv-join-qr",
+            "tv-profile-1",
+        ],
+        "the rail walk did not scroll every entry it landed on"
+    );
+
+    // Into the routine list and all the way down it: the case QD-08 caught in
+    // Chrome, where seven presses left the list still scrolled to the top.
+    let mut model = canonical_model();
+    model.state = on_key_for(&model, TvKey::Enter).state;
+    assert_eq!(current_focus(&model), Some(FocusId::RoutineItem(1)));
+    for index in 1..CANONICAL_ROUTINE.len() {
+        let template_id = index as u32 + 1;
+        let before = current_focus(&model);
+        model.state = on_key_for(&model, TvKey::Down).state;
+        let after = current_focus(&model);
+        let target = scroll_target(before.as_ref(), after.as_ref())
+            .expect("walking the routine list must scroll each row into view");
+        assert_eq!(target, FocusId::RoutineItem(template_id));
+        assert_eq!(target.dom_id(), format!("tv-routine-{template_id}"));
+    }
+
+    // A press that moves nothing must move nothing: `Backspace` on the rail
+    // of the default panel is a deliberate no-op, and a kiosk that re-scrolls
+    // on every ignored press develops a twitch.
+    let mut model = canonical_model();
+    let before = current_focus(&model);
+    model.state = on_key_for(&model, TvKey::Back).state;
+    assert_eq!(
+        scroll_target(before.as_ref(), current_focus(&model).as_ref()),
+        None,
+        "a press that moved nothing still asked for a scroll"
     );
 }
