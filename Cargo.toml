@@ -55,7 +55,7 @@ sqlx = { version = "=0.8.6", features = [
 axum = { version = "=0.8.9", features = ["ws"], optional = true }
 tower-http = { version = "=0.6.8", features = ["fs", "trace"], optional = true }
 chrono = { version = "0.4", optional = true }
-reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false, optional = true }
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "http2"], default-features = false, optional = true }
 jsonwebtoken = { version = "9", optional = true }
 tracing = { version = "0.1", optional = true }
 uuid = { version = "1", features = ["v4"], optional = true }

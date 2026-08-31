@@ -503,8 +503,8 @@ pub fn session_from_headers(headers: &axum::http::HeaderMap) -> Option<String> {
 }
 
 /// Is this request same-origin (by `Origin`, falling back to
-/// `Sec-Fetch-Site`, against the `Host` it was actually sent to), or does it
-/// carry no origin signal at all?
+/// `Sec-Fetch-Site`, against the authority it was actually sent to), or does
+/// it carry no origin signal at all?
 ///
 /// A cookie is ambient — the browser attaches it to *every* request to the
 /// origin that set it, cross-site ones included — which is exactly the
@@ -519,13 +519,29 @@ pub fn session_from_headers(headers: &axum::http::HeaderMap) -> Option<String> {
 /// on a browser's cookie jar in the first place, and PURPLE's default 9
 /// ("no lockout") extends to "never refuse a legitimate direct client that
 /// simply does not send a browser header".
-pub fn same_origin_or_absent(headers: &axum::http::HeaderMap) -> bool {
+///
+/// `uri` is the request's own URI. HTTP/1.1 carries the authority in a
+/// `Host` header; **HTTP/2 carries it in the `:authority` pseudo-header,
+/// which hyper exposes as the URI's authority and never as a `Host`
+/// header.** Owner checklist step 4 (2026-08-31): `tls.rs` offers h2 first
+/// and every phone takes it, so reading only `Host` made this gate compare
+/// `Origin` against an empty string and refuse every same-origin setup and
+/// login from a real browser with 403 — while an HTTP/1.1 `curl` sailed
+/// through and made the hub look healthy.
+pub fn same_origin_or_absent(headers: &axum::http::HeaderMap, uri: &axum::http::Uri) -> bool {
     if let Some(site) = headers
         .get("sec-fetch-site")
         .and_then(|value| value.to_str().ok())
     {
         if site != "same-origin" && site != "none" {
             return false;
+        }
+        // Fetch Metadata is set by the browser itself (a forbidden header
+        // name — no page can forge it), so its own "same-origin" verdict is
+        // authoritative; the `Origin`/authority comparison below only has
+        // to carry browsers that do not send it (Safari before 16.4).
+        if site == "same-origin" {
+            return true;
         }
     }
 
@@ -536,11 +552,12 @@ pub fn same_origin_or_absent(headers: &axum::http::HeaderMap) -> bool {
         return true;
     };
     let origin_authority = origin.split("://").nth(1).unwrap_or(origin);
-    let host = headers
+    let authority = headers
         .get(axum::http::header::HOST)
         .and_then(|value| value.to_str().ok())
-        .unwrap_or("");
-    origin_authority.eq_ignore_ascii_case(host)
+        .filter(|host| !host.is_empty())
+        .or_else(|| uri.authority().map(|authority| authority.as_str()));
+    authority.is_some_and(|authority| origin_authority.eq_ignore_ascii_case(authority))
 }
 
 /// The check a server fn falls back to when its explicit `auth: SessionToken`
@@ -693,33 +710,86 @@ mod tests {
         );
     }
 
+    /// An HTTP/1.1 request URI: origin-form, no authority — the authority
+    /// is in the `Host` header (or nowhere).
+    fn h1_uri() -> axum::http::Uri {
+        axum::http::Uri::from_static("/api/setup")
+    }
+
     #[test]
     fn same_origin_or_absent_allows_no_origin_and_matching_origin() {
         // No browser-origin signal at all (curl, the WS test harness): allowed.
-        assert!(same_origin_or_absent(&headers(&[])));
+        assert!(same_origin_or_absent(&headers(&[]), &h1_uri()));
 
         // Origin matches Host: same-origin.
-        assert!(same_origin_or_absent(&headers(&[
-            ("host", "10.0.0.5:8443"),
-            ("origin", "https://10.0.0.5:8443"),
-        ])));
+        assert!(same_origin_or_absent(
+            &headers(&[
+                ("host", "10.0.0.5:8443"),
+                ("origin", "https://10.0.0.5:8443"),
+            ]),
+            &h1_uri()
+        ));
 
         // Sec-Fetch-Site says same-origin even without an Origin header.
-        assert!(same_origin_or_absent(&headers(&[(
-            "sec-fetch-site",
-            "same-origin"
-        )])));
+        assert!(same_origin_or_absent(
+            &headers(&[("sec-fetch-site", "same-origin")]),
+            &h1_uri()
+        ));
     }
 
     #[test]
     fn same_origin_or_absent_rejects_cross_origin() {
-        assert!(!same_origin_or_absent(&headers(&[
-            ("host", "10.0.0.5:8443"),
-            ("origin", "https://evil.example"),
-        ])));
-        assert!(!same_origin_or_absent(&headers(&[(
-            "sec-fetch-site",
-            "cross-site"
-        )])));
+        assert!(!same_origin_or_absent(
+            &headers(&[
+                ("host", "10.0.0.5:8443"),
+                ("origin", "https://evil.example"),
+            ]),
+            &h1_uri()
+        ));
+        assert!(!same_origin_or_absent(
+            &headers(&[("sec-fetch-site", "cross-site")]),
+            &h1_uri()
+        ));
+        // Origin present but nothing to compare it against: refuse, as before.
+        assert!(!same_origin_or_absent(
+            &headers(&[("origin", "https://10.0.0.5:8443")]),
+            &h1_uri()
+        ));
+    }
+
+    /// Owner checklist step 4 (2026-08-31): over HTTP/2 there is no `Host`
+    /// header — hyper puts `:authority` in the request URI — and the gate
+    /// was refusing every phone's same-origin setup/login with 403.
+    #[test]
+    fn same_origin_or_absent_reads_the_authority_from_the_uri_under_http2() {
+        let h2_uri = axum::http::Uri::from_static("https://10.0.0.5:8443/api/setup");
+
+        // Safari < 16.4 style: Origin, no Sec-Fetch-Site, no Host.
+        assert!(same_origin_or_absent(
+            &headers(&[("origin", "https://10.0.0.5:8443")]),
+            &h2_uri
+        ));
+        assert!(!same_origin_or_absent(
+            &headers(&[("origin", "https://evil.example")]),
+            &h2_uri
+        ));
+
+        // Chrome/Safari 16.4+ style: the browser's own same-origin verdict
+        // is enough even when neither Host nor authority is available.
+        assert!(same_origin_or_absent(
+            &headers(&[
+                ("origin", "https://10.0.0.5:8443"),
+                ("sec-fetch-site", "same-origin"),
+            ]),
+            &h1_uri()
+        ));
+        // ...but its cross-site verdict still wins over a matching Origin.
+        assert!(!same_origin_or_absent(
+            &headers(&[
+                ("origin", "https://10.0.0.5:8443"),
+                ("sec-fetch-site", "cross-site"),
+            ]),
+            &h2_uri
+        ));
     }
 }

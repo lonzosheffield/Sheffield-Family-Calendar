@@ -835,3 +835,72 @@ fn tls_g_the_join_qr_svg_decodes_to_the_https_phone_url() {
         assert_eq!(decode_qr_svg(&svg, 512), live);
     }
 }
+
+// ---------------------------------------------------------------------------
+// (h) Same-origin POST over HTTP/2 passes the origin gate
+// ---------------------------------------------------------------------------
+
+/// Owner checklist step 4 (2026-08-31): every phone negotiates HTTP/2 with
+/// the `:8443` listener (`tls.rs` offers `h2` first), and under h2 there is
+/// no `Host` header — the authority rides in `:authority`, which hyper
+/// exposes on the request URI. `auth::same_origin_or_absent` compared
+/// `Origin` against `Host` alone, so every real browser's same-origin setup
+/// and login came back `403 cross-origin ... not allowed` while an HTTP/1.1
+/// `curl` passed. This drives the real listener with a real h2 client
+/// (reqwest + rustls negotiate it over ALPN) and asserts the gate lets a
+/// same-origin request through to the actual code check.
+#[tokio::test]
+async fn tls_h_same_origin_setup_over_http2_reaches_the_code_check_not_403() {
+    let config = isolated_config("h2-origin");
+    let certs = SelfSignedCa::open(config.pki_dir()).expect("the local CA opens");
+    let (addr, _resolver) = spawn_https_origin(&config, &certs).await;
+    let origin = format!("https://127.0.0.1:{}", addr.port());
+
+    let client = reqwest::Client::builder()
+        // The leaf is issued for the LAN addresses, not loopback (tls_d);
+        // trust is not what this test is about.
+        .danger_accept_invalid_certs(true)
+        .build()
+        .expect("reqwest client builds");
+    let send = |site: Option<&'static str>, origin_header: String| {
+        let mut request = client
+            .post(format!("{origin}/api/setup"))
+            .header("origin", origin_header)
+            .header("content-type", "application/json")
+            .body(r#"{"setup_code":"000000","pin":"246810"}"#);
+        if let Some(site) = site {
+            request = request.header("sec-fetch-site", site);
+        }
+        request.send()
+    };
+
+    // Safari < 16.4 shape: Origin only.
+    let response = send(None, origin.clone()).await.expect("request completes");
+    assert_eq!(
+        response.version(),
+        reqwest::Version::HTTP_2,
+        "the client must have negotiated HTTP/2 for this test to mean anything"
+    );
+    assert_eq!(
+        response.status(),
+        reqwest::StatusCode::UNAUTHORIZED,
+        "a same-origin POST /api/setup over h2 must reach the code check (401 for a wrong code), not the origin gate (403): {}",
+        response.text().await.unwrap_or_default()
+    );
+
+    // Modern browser shape: Origin + Sec-Fetch-Site: same-origin.
+    let response = send(Some("same-origin"), origin.clone())
+        .await
+        .expect("request completes");
+    assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+    // The gate itself still works over h2: a foreign Origin is refused.
+    let response = send(None, "https://evil.example".to_string())
+        .await
+        .expect("request completes");
+    assert_eq!(
+        response.status(),
+        reqwest::StatusCode::FORBIDDEN,
+        "a cross-origin POST /api/setup must still be refused over h2"
+    );
+}

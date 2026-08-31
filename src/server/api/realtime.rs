@@ -780,8 +780,12 @@ pub fn spawn_midnight_tick() {
 /// applies (`auth::same_origin_or_absent`). A request with no such header at
 /// all (a non-browser client — `curl`, the `tokio-tungstenite` test harness)
 /// is unaffected: there is no ambient-cookie risk to guard against there.
-pub async fn ws_handler(headers: HeaderMap, upgrade: WebSocketUpgrade) -> Response {
-    if !crate::server::auth::same_origin_or_absent(&headers) {
+pub async fn ws_handler(
+    headers: HeaderMap,
+    uri: axum::http::Uri,
+    upgrade: WebSocketUpgrade,
+) -> Response {
+    if !crate::server::auth::same_origin_or_absent(&headers, &uri) {
         return (
             StatusCode::FORBIDDEN,
             "cross-origin websocket upgrades are not allowed",

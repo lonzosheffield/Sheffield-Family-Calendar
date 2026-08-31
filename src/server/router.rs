@@ -326,8 +326,8 @@ struct SetupRequest {
 /// `Sec-Fetch-Site` says it came from somewhere else) and the same
 /// `Set-Cookie` shape on success, since success here is exactly a first
 /// sign-in.
-async fn setup_handler(headers: HeaderMap, Json(body): Json<SetupRequest>) -> Response {
-    if !crate::server::auth::same_origin_or_absent(&headers) {
+async fn setup_handler(headers: HeaderMap, uri: Uri, Json(body): Json<SetupRequest>) -> Response {
+    if !crate::server::auth::same_origin_or_absent(&headers, &uri) {
         return (
             StatusCode::FORBIDDEN,
             "cross-origin setup requests are not allowed",
@@ -370,8 +370,8 @@ async fn setup_handler(headers: HeaderMap, Json(body): Json<SetupRequest>) -> Re
 /// it did not originate same-origin (`auth::same_origin_or_absent`).
 ///
 /// [Q1-02/03 backoff gate]: crate::server::auth::verify_pin
-async fn login_handler(headers: HeaderMap, Json(body): Json<LoginRequest>) -> Response {
-    if !crate::server::auth::same_origin_or_absent(&headers) {
+async fn login_handler(headers: HeaderMap, uri: Uri, Json(body): Json<LoginRequest>) -> Response {
+    if !crate::server::auth::same_origin_or_absent(&headers, &uri) {
         return (
             StatusCode::FORBIDDEN,
             "cross-origin login requests are not allowed",
