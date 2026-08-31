@@ -45,6 +45,8 @@ fn init_test_env() -> PathBuf {
     static ONCE: std::sync::Once = std::sync::Once::new();
     let base = std::env::temp_dir().join(format!("familyhub-photo-tests-{}", std::process::id()));
     ONCE.call_once(|| {
+        // Windows reuses PIDs: wipe any leftover scratch dir from an earlier run first.
+        let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).expect("test scratch directory is creatable");
 
         let db_path = base.join("family.db");

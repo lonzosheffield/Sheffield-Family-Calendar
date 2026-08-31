@@ -56,6 +56,8 @@ fn init_test_env() {
     ONCE.get_or_init(|| {
         let base =
             std::env::temp_dir().join(format!("familyhub-loop-tests-{}", std::process::id()));
+        // Windows reuses PIDs: wipe any leftover scratch dir from an earlier run first.
+        let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).expect("test scratch directory is creatable");
         let db_path = base.join("family.db");
         let url = format!(
