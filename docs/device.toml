@@ -27,3 +27,4 @@ lan = "10.0.0.0/24"
 ip = "10.0.0.246"                            # current DHCP lease on the wired ASIX USB adapter; owner reserves it on the Xfinity gateway (checklist step 2)
 mac = "A0:CE:C8:EB:78:03"
 adapter = "ASIX USB to Gigabit Ethernet Family Adapter (wired)"
+install_dir = 'C:\Program Files\FamilyHub'   # checklist step 3 done 2026-08-31: service FamilyHub AUTO_START + RUNNING after reboot, /health db=true migration_version=4, 3 firewall rules, AC sleep/hibernate/display = never

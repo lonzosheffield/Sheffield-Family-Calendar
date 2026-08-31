@@ -644,6 +644,19 @@ pub fn configure_power_plan(runner: &dyn CommandRunner) -> Vec<CommandOutcome> {
 /// independent of how chatty a burst of INFO/DEBUG events gets.
 const FLUSH_EVERY_N_LINES: u32 = 64;
 
+/// How long a buffered, sub-WARN line may sit in memory before the
+/// background flusher started by [`ServiceLogger::spawn_periodic_flush`]
+/// writes it to disk anyway. Owner checklist step 3 (2026-08-31) found the
+/// deployed service's log frozen at its first WARN: the INFO lines after it
+/// (the rest of startup, the midnight backup) sat in the `BufWriter` for
+/// hours because nothing reached the 64-line threshold, and the reboot then
+/// killed the process without `Drop` — so the log said nothing about the
+/// very run the owner was told to read about. Two seconds bounds that loss
+/// in time the way [`FLUSH_EVERY_N_LINES`] bounds it in volume; one `flush`
+/// syscall every two seconds is nothing like the per-line hot-path flush
+/// Q1-05 removed.
+const FLUSH_INTERVAL: Duration = Duration::from_secs(2);
+
 /// `raw` — `config.log_level` (Q2-05: `FAMILY_HUB_LOG`, else `[log] level` in
 /// `familyhub.toml`), already resolved by `server::config` — parsed into a
 /// level. `trace`/`debug`/`warn`/`error` (case-insensitive) raise or lower
@@ -743,6 +756,24 @@ impl ServiceLogger {
             let _ = file.writer.flush();
             file.lines_since_flush = 0;
         }
+    }
+
+    /// Start a background thread that calls [`flush`](Self::flush) every
+    /// `interval` for as long as this logger is alive. It holds only a
+    /// `Weak`, so it ends on its own once the last `Arc` is dropped rather
+    /// than pinning the logger for ever. Only the real binary
+    /// (`install_global_logger`) starts one; unit tests flush explicitly.
+    pub fn spawn_periodic_flush(self: &std::sync::Arc<Self>, interval: Duration) {
+        let weak = std::sync::Arc::downgrade(self);
+        let _ = std::thread::Builder::new()
+            .name("familyhub-log-flush".into())
+            .spawn(move || loop {
+                std::thread::sleep(interval);
+                match weak.upgrade() {
+                    Some(logger) => logger.flush(),
+                    None => break,
+                }
+            });
     }
 
     /// Append one formatted line, rotating first if this write would push
@@ -949,6 +980,7 @@ fn install_global_logger(config: &FamilyHubConfig) -> io::Result<std::sync::Arc<
         &config.log_dir(),
         level_from(config.log_level.as_deref()),
     )?);
+    logger.spawn_periodic_flush(FLUSH_INTERVAL);
     if tracing::subscriber::set_global_default(logger.clone()).is_err() {
         eprintln!(
             "a tracing subscriber was already installed; familyhub.log will not receive events"
@@ -1124,13 +1156,17 @@ mod scm {
     /// runtime is built here, inside it).
     fn run_service() -> windows_service::Result<()> {
         let config = FamilyHubConfig::load();
-        let _logger = install_global_logger(&config);
+        let logger = install_global_logger(&config);
         tracing::info!("FamilyHub service: starting");
 
         let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
         let event_handler = move |control_event| -> ServiceControlHandlerResult {
             match control_event {
-                ServiceControl::Stop => {
+                // Shutdown (owner checklist step 3, 2026-08-31): without it
+                // the service was registered IGNORES_SHUTDOWN, so a reboot
+                // killed the process outright — no "stopped" line, no flush
+                // of anything buffered since the last WARN.
+                ServiceControl::Stop | ServiceControl::Shutdown => {
                     let _ = stop_tx.send(());
                     ServiceControlHandlerResult::NoError
                 }
@@ -1175,7 +1211,7 @@ mod scm {
         status_handle.set_service_status(ServiceStatus {
             service_type: ServiceType::OWN_PROCESS,
             current_state: ServiceState::Running,
-            controls_accepted: ServiceControlAccept::STOP,
+            controls_accepted: ServiceControlAccept::STOP | ServiceControlAccept::SHUTDOWN,
             exit_code: ServiceExitCode::Win32(0),
             checkpoint: 0,
             wait_hint: Duration::default(),
@@ -1218,6 +1254,13 @@ mod scm {
             process_id: None,
         })?;
         tracing::info!("FamilyHub service: stopped");
+        // The global subscriber keeps its own `Arc` to the logger for the
+        // life of the process, so `Drop` (and its flush) never runs here —
+        // flush the "stopped" line and whatever is buffered before it
+        // explicitly, or a clean Stop/Shutdown ends the log mid-story.
+        if let Ok(logger) = &logger {
+            logger.flush();
+        }
         Ok(())
     }
 }
@@ -1657,6 +1700,41 @@ mod tests {
             "{contents:?}"
         );
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Owner checklist step 3 (2026-08-31): an INFO line that never meets a
+    /// WARN or a 64-line batch must still reach disk on its own, on the
+    /// timer, or the deployed log shows nothing about the current run.
+    #[test]
+    fn periodic_flusher_writes_buffered_info_lines_to_disk_without_a_warn() {
+        let dir = scratch_dir("log-periodic-flush");
+        let logger = Arc::new(ServiceLogger::open(&dir, level_from(None)).expect("open logger"));
+        logger.spawn_periodic_flush(Duration::from_millis(50));
+
+        tracing::subscriber::with_default(logger.clone(), || {
+            tracing::info!("checklist-3 info line reaches disk on the timer");
+        });
+        // No `logger.flush()` and no WARN: only the background flusher can
+        // get this line to disk. Allow it several intervals.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let mut contents = String::new();
+        while std::time::Instant::now() < deadline {
+            contents = std::fs::read_to_string(logger.log_path()).unwrap_or_default();
+            if contents.contains("checklist-3 info line") {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        assert!(
+            contents.contains("checklist-3 info line reaches disk on the timer"),
+            "{contents:?}"
+        );
+
+        // Let the flusher thread notice the last `Arc` is gone before the
+        // directory goes away under it.
+        drop(logger);
+        std::thread::sleep(Duration::from_millis(150));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

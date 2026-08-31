@@ -491,23 +491,50 @@ fn write_private(path: &Path, contents: &str) -> io::Result<()> {
     Ok(())
 }
 
+/// The `icacls /grant:r` operands for a private key: SYSTEM and
+/// Administrators by well-known SID (those always resolve), plus the
+/// interactive user running the hub from a profile — named `DOMAIN\user` so
+/// an Entra/AzureAD account resolves too — but **never** a machine account.
+/// Owner checklist step 3 (2026-08-31): under the installed service
+/// (LocalSystem) `USERNAME` is `<HOST>$`, which `icacls` cannot map; error
+/// 1332 failed the whole command and both keys kept the inherited
+/// `BUILTIN\Users:(RX)` — readable by every local account — on the one
+/// deployment that matters. SYSTEM already holds full control there, so the
+/// user grant is simply omitted.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn key_acl_grants(username: Option<&str>, userdomain: Option<&str>) -> Vec<String> {
+    let mut grants = vec![
+        "*S-1-5-18:(F)".to_string(),     // NT AUTHORITY\SYSTEM
+        "*S-1-5-32-544:(F)".to_string(), // BUILTIN\Administrators
+    ];
+    let user = username
+        .map(str::trim)
+        .filter(|u| !u.is_empty() && !u.ends_with('$') && !u.eq_ignore_ascii_case("SYSTEM"));
+    if let Some(user) = user {
+        let principal = match userdomain.map(str::trim).filter(|d| !d.is_empty()) {
+            Some(domain) => format!("{domain}\\{user}"),
+            None => user.to_string(),
+        };
+        grants.push(format!("{principal}:(F)"));
+    }
+    grants
+}
+
 #[cfg(windows)]
 fn restrict_key_permissions(path: &Path) {
     // `icacls` is a Windows built-in, not a project dependency: this is not
     // a new non-Rust component (docs/NON_RUST.md), it is the OS's own ACL
     // API surfaced as a command. The alternative — the `windows` crate's
     // `SetNamedSecurityInfoW` — would add a large dependency for one call.
+    let grants = key_acl_grants(
+        std::env::var("USERNAME").ok().as_deref(),
+        std::env::var("USERDOMAIN").ok().as_deref(),
+    );
     let result = std::process::Command::new("icacls.exe")
         .arg(path)
         .arg("/inheritance:r")
         .arg("/grant:r")
-        .arg("*S-1-5-18:(F)") // NT AUTHORITY\SYSTEM
-        .arg("*S-1-5-32-544:(F)") // BUILTIN\Administrators
-        .arg("/grant:r")
-        .arg(format!(
-            "{}:(F)",
-            std::env::var("USERNAME").unwrap_or_else(|_| "%USERNAME%".to_string())
-        ))
+        .args(&grants)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status();
@@ -517,7 +544,7 @@ fn restrict_key_permissions(path: &Path) {
             tracing::debug!(path = %path.display(), "restricted private-key ACL");
         }
         Ok(status) => {
-            tracing::warn!(path = %path.display(), ?status, "icacls did not restrict the private-key ACL");
+            tracing::warn!(path = %path.display(), ?status, ?grants, "icacls did not restrict the private-key ACL");
         }
         Err(err) => {
             tracing::warn!(path = %path.display(), %err, "could not run icacls to restrict the private-key ACL");
@@ -536,6 +563,37 @@ fn restrict_key_permissions(path: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn key_acl_grants_omit_the_machine_account_under_the_service() {
+        let system_and_admins = vec!["*S-1-5-18:(F)", "*S-1-5-32-544:(F)"];
+        assert_eq!(
+            key_acl_grants(Some("HUB-PC$"), Some("WORKGROUP")),
+            system_and_admins
+        );
+        assert_eq!(key_acl_grants(None, None), system_and_admins);
+        assert_eq!(key_acl_grants(Some(""), Some("X")), system_and_admins);
+        assert_eq!(
+            key_acl_grants(Some("SYSTEM"), Some("NT AUTHORITY")),
+            system_and_admins
+        );
+    }
+
+    #[test]
+    fn key_acl_grants_name_the_interactive_user_with_their_domain() {
+        assert_eq!(
+            key_acl_grants(Some("LonzoSheffield"), Some("AzureAD")),
+            vec![
+                "*S-1-5-18:(F)",
+                "*S-1-5-32-544:(F)",
+                "AzureAD\\LonzoSheffield:(F)"
+            ]
+        );
+        assert_eq!(
+            key_acl_grants(Some("dev"), None).last().map(String::as_str),
+            Some("dev:(F)")
+        );
+    }
 
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
