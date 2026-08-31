@@ -24,5 +24,6 @@ screen_off_timeout_ms = 300000              # 5 min  -> runbook sets to never
 
 [server]
 lan = "10.0.0.0/24"
-# The server PC's reserved IP goes here once the owner sets the DHCP reservation (Appendix A2).
-# ip = "10.0.0.x"
+ip = "10.0.0.246"                            # current DHCP lease on the wired ASIX USB adapter; owner reserves it on the Xfinity gateway (checklist step 2)
+mac = "A0:CE:C8:EB:78:03"
+adapter = "ASIX USB to Gigabit Ethernet Family Adapter (wired)"
