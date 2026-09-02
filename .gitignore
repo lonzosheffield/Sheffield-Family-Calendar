@@ -10,3 +10,6 @@ service-account.json
 .env
 .claude/worktrees/
 /scratch
+
+# AmblesideOnline schedules are licensed for family use only; never publish them (repo is public)
+docs/homeschool/curriculum/
