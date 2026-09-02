@@ -61,6 +61,49 @@ pub const SETTINGS_GLYPH: &str = "⚙️";
 /// The "Add a phone" / join-QR overlay glyph.
 pub const ADD_PHONE_GLYPH: &str = "📱";
 
+// ---- Homeschool (docs/homeschool/PLAN_HOMESCHOOL.md, Boss pre-wave-A) ----
+
+/// The School panel/tab glyph — the owner asked for a house.
+pub const HOMESCHOOL_GLYPH: &str = "🏠";
+/// A curriculum reading (a chapter, a passage, a story) — category `reading`.
+pub const READING_GLYPH: &str = "📖";
+/// Daily work (copywork, phonics, recitation, …) — category `daily`.
+pub const DAILY_WORK_GLYPH: &str = "✏️";
+/// Weekly work (art, handicrafts, nature study, …) — category `weekly`.
+pub const WEEKLY_WORK_GLYPH: &str = "🎨";
+/// The term's free-reading list — category `free_read`.
+pub const FREE_READ_GLYPH: &str = "📚";
+/// A parent-added task pinned to a date (`lesson_extras`).
+pub const EXTRA_TASK_GLYPH: &str = "📌";
+
+/// Map a homeschool subject category to its glyph. One glyph per *kind*
+/// of work, not per subject (white team W-17): a hurried parent scans the
+/// kind. Unknown → `✅`, like [`icon_glyph`].
+pub fn category_glyph(category: &str) -> &'static str {
+    match category {
+        "daily" => DAILY_WORK_GLYPH,
+        "reading" => READING_GLYPH,
+        "weekly" => WEEKLY_WORK_GLYPH,
+        "free_read" => FREE_READ_GLYPH,
+        _ => "✅",
+    }
+}
+
+/// A few subjects earn their own glyph on top of the category one; keyed
+/// by the subject's `icon_name` from the curriculum file. Unknown → the
+/// category glyph.
+pub fn subject_glyph(icon_name: Option<&str>, category: &str) -> &'static str {
+    match icon_name {
+        Some("math") => "🔢",
+        Some("nature") => "🌿",
+        Some("music") => "🎵",
+        Some("bible") => "📜",
+        Some("poetry") => "🪶",
+        Some("body") => "🏃🏾",
+        _ => category_glyph(category),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -96,6 +139,21 @@ mod tests {
         for unknown in ["", "not-a-real-icon", "toilet", "GRADUATION-CAP"] {
             assert_eq!(icon_glyph(unknown), "✅", "icon_name {unknown:?}");
         }
+    }
+
+    #[test]
+    fn every_homeschool_category_maps_to_a_non_ascii_glyph_and_unknown_falls_back() {
+        for category in ["daily", "reading", "weekly", "free_read"] {
+            let glyph = category_glyph(category);
+            assert!(!glyph.is_ascii(), "category {category:?} → {glyph:?}");
+            assert_ne!(glyph, "✅", "category {category:?} should not fall back");
+        }
+        assert_eq!(category_glyph("exam"), "✅");
+        assert_eq!(subject_glyph(Some("math"), "daily"), "🔢");
+        assert_eq!(subject_glyph(Some("unknown"), "reading"), READING_GLYPH);
+        assert_eq!(subject_glyph(None, "weekly"), WEEKLY_WORK_GLYPH);
+        assert_eq!(HOMESCHOOL_GLYPH, "🏠");
+        assert!(!EXTRA_TASK_GLYPH.is_ascii());
     }
 
     #[test]

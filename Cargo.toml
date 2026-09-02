@@ -82,6 +82,11 @@ argon2 = { version = "=0.6.0", optional = true }
 # is what makes `DTSTART;TZID=America/New_York:...` resolve real DST offsets.
 rrule = { version = "=0.14.0", optional = true }
 
+# HS1 (docs/homeschool/PLAN_HOMESCHOOL.md H5) — curriculum files are real TOML
+# with arrays of tables, which the flat hand parser in config.rs cannot read.
+# Server-only: the wasm client never sees a curriculum file.
+toml = { version = "=1.1.5", optional = true }
+
 # T1.3 — TLS + PKI + dual listener + mDNS (PLAN v2 D3′, PURPLE_TEAM.md §P5.4).
 # `ring`, never `aws-lc-rs`: aws-lc-rs needs CMake + NASM on Windows. Every
 # crate below therefore turns its default features off, because both
@@ -177,6 +182,7 @@ server = [
     "dep:if-addrs",
     "dep:argon2",
     "dep:rrule",
+    "dep:toml",
     "dep:windows-service",
 ]
 

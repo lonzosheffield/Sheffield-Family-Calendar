@@ -204,7 +204,7 @@ With one boy enrolled, Together is simply his list.
 ### H5 — Content pipeline (N1, R-2, P-14, P-17, W-8)
 
 - Dependency: **`toml` is not a dependency today** (`src/server/config.rs` deliberately hand-parses flat
-  keys). Boss pre-A micro-commit adds `toml` pinned to the current 0.9.x on crates.io at commit time,
+  keys). Boss pre-A micro-commit adds `toml =1.1.5` (the current release on crates.io on 2026-09-02),
   `server` feature only, and records the pin in `docs/PLAN.md` §5.8.
 - **File format** (`docs/homeschool/CURRICULUM_FORMAT.md`, committed; example uses invented books):
   `[curriculum] slug name weeks term_weeks? source_note?` · `[[subject]] name category source? days?
@@ -584,7 +584,9 @@ Boss micro-commits (each a one-purpose commit, baseline re-run after):
 - **pre-A:** pinned `toml` dep + `docs/PLAN.md` §5.8 row (R-2); `CURRICULUM_FORMAT.md` skeleton;
   the glyph set in `glyphs.rs` — `HOMESCHOOL_GLYPH 🏠`, `READING_GLYPH 📖`, `DAILY_WORK_GLYPH ✏️`,
   `WEEKLY_WORK_GLYPH 🎨`, `FREE_READ_GLYPH 📚`, `fn category_glyph(&str) -> &'static str` (unknown → ✅),
-  plus specials `Math 🔢`, `Nature 🌿`, `Composer/Hymn/Folksong 🎵` (P-8, W-17).
+  `EXTRA_TASK_GLYPH 📌`, and `fn subject_glyph(icon_name: Option<&str>, category) -> &'static str` with
+  specials `math 🔢`, `nature 🌿`, `music 🎵`, `bible 📜`, `poetry 🪶`, `body 🏃🏾` keyed by the subject's
+  `icon` in the TOML (P-8, W-17). **Landed** in `glyphs.rs` before wave A.
 - **post-A / pre-B:** `db.rs::pools()` loader call; placeholder `MaximizedView::Homeschool =>
   TvPanel::Routine` in `tv/model.rs::from_view` (HS6 replaces; P-5); the **Isaiah enrollment seed** (Q1 answered; D-6): a boot-time `seed_enrollments()` beside the loader
   that runs `INSERT … ON CONFLICT (profile_id) DO NOTHING` (never upsert — a reboot must not reset
