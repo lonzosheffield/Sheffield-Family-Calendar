@@ -37,3 +37,38 @@ card; the 1920×1080 golden files stay unchanged; `docs/FIRE_TV.md` records the 
 
 **Also seen in the photo (not defects):** the wordmark, sun glyphs, corner balls and focus ring render
 as designed.
+
+## B-2 — Heads-up before a parent phone's sign-in lapses (owner, 2026-09-03)
+
+**Ask:** the parent session cookie lasts 30 days (T1.4). When it lapses the phone simply shows the
+PIN box again on the next parent-only action, which is fine, but the owner would like a heads-up a
+few days before rather than a surprise at 7am.
+
+**Shape:** `/api/session` already answers the probe; extend its response with `expires_at`
+(RFC3339). The phone shell, on each probe, renders a dismissible chip in Settings and a one-line
+banner on the Routine/School header when `expires_at − now ≤ 3 days`: "Your parent sign-in ends on
+Sat — tap to renew". Tapping renew re-prompts the PIN and mints a fresh 30-day cookie. No push
+notifications (the PWA has none today, and none are wanted for this).
+
+**Acceptance:** a probe response with `expires_at` 2 days out renders the chip; 10 days out does not;
+renewing replaces the cookie (new `expires_at` ≥ 29 days out); `docs/PWA.md` states the behaviour.
+
+## B-3 — Agents' tests and tools must never open the real data directory (Boss, 2026-09-03)
+
+**What happened:** during the homeschool run an agent process applied migration 0005 to the
+production database under `%ProgramData%\FamilyHub`, seeded the synthetic fixture curriculum and a
+junk enrollment there, set a throwaway parent PIN and blanked the setup code — all at 22:17 on
+2026-09-02. Root cause: a command ran with `FAMILY_HUB_DATA_DIR` unset, and the config falls back to
+the real service directory. Recovery took a database snapshot, manual row deletes, and the
+RECOVERY.md failure-mode-7 PIN reset.
+
+**Fix:** (1) every test harness (`init_test_env` in each suite, `tests/homeschool_*`,
+`tests/health_*`) sets `FAMILY_HUB_DATA_DIR` itself to a pid-keyed temp dir before anything reads
+config; (2) `FamilyHubConfig` refuses to resolve to `%ProgramData%\FamilyHub` when compiled with
+`cfg(test)` or when an env `FAMILY_HUB_REFUSE_SYSTEM_DIR=1` is set, which the workflow preamble
+exports; (3) `import-curriculum` prints the resolved data dir and requires `--yes` when it resolves to
+the system directory; (4) `docs/DEV_WINDOWS.md` and the workflow preamble say so.
+
+**Acceptance:** a test binary run with the env var unset still writes nothing outside `%TEMP%`
+(assert via a canary file in the real dir before/after); `import-curriculum` without `--yes` against
+the system dir exits non-zero.
