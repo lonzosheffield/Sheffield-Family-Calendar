@@ -534,8 +534,18 @@ pub fn School() -> Element {
                     ordinal,
                     text,
                 } => {
-                    let _ = upsert_assignment(subject_id, week, ordinal, text, None, String::new())
-                        .await;
+                    // `days: None` leaves the row inheriting the subject's days;
+                    // HS5-qa3 wires the Year cell sheet's per-week override here.
+                    let _ = upsert_assignment(
+                        subject_id,
+                        week,
+                        ordinal,
+                        text,
+                        None,
+                        None,
+                        String::new(),
+                    )
+                    .await;
                 }
                 SchoolAction::AddExtra {
                     user_id,

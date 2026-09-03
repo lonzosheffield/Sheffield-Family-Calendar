@@ -1306,6 +1306,12 @@ pub async fn set_paused(
 }
 
 /// Create or rewrite one week's text for one subject (H6 row action 6).
+///
+/// `days` is that week's **override** of the subject's own days (H3 rule 1;
+/// the QH3-04 amendment of 2026-09-03 recorded in `PLAN_HOMESCHOOL.md` HS4
+/// "Do"). `None` writes `NULL`, the row's way of saying "inherit the subject's
+/// days". A bad string is rejected by `parse_days` **before any write**, the
+/// same rule `set_subject_schedule` follows for H7 accept (i).
 #[server(endpoint = "upsert_assignment")]
 pub async fn upsert_assignment(
     subject_id: i64,
@@ -1313,11 +1319,18 @@ pub async fn upsert_assignment(
     ordinal: i64,
     text: String,
     detail: Option<String>,
+    days: Option<String>,
     auth: String,
 ) -> Result<(), ServerFnError> {
     #[cfg(feature = "server")]
     {
         crate::server::api::profiles::require_session_or_cookie(&auth).await?;
+        // H7: rejected before anything is written, exactly as for
+        // `set_subject_schedule`'s `days`.
+        if let Some(letters) = days.as_deref() {
+            sched::parse_days(letters).map_err(|e| validation_error(&e.to_string()))?;
+        }
+
         let pool = crate::server::db::pool()
             .await
             .map_err(super::to_server_error)?;
@@ -1326,16 +1339,24 @@ pub async fn upsert_assignment(
             return Err(validation_error("week is out of range for this curriculum"));
         }
 
-        hs::upsert_assignment(pool, subject_id, week, ordinal, &text, detail.as_deref())
-            .await
-            .map_err(super::to_server_error)?;
+        hs::upsert_assignment(
+            pool,
+            subject_id,
+            week,
+            ordinal,
+            &text,
+            detail.as_deref(),
+            days.as_deref(),
+        )
+        .await
+        .map_err(super::to_server_error)?;
 
         super::realtime::publish(&ServerMessage::CurriculumUpdated { curriculum_id });
         Ok(())
     }
     #[cfg(not(feature = "server"))]
     {
-        let _ = (subject_id, week, ordinal, text, detail, auth);
+        let _ = (subject_id, week, ordinal, text, detail, days, auth);
         unreachable!("server function bodies only run on the server")
     }
 }

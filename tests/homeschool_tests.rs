@@ -11,7 +11,7 @@
 //! | f | `toggle_lesson_together` on two boys sharing a week writes exactly two rows | `hs4_f_*` |
 //! | g | `set_school_week` reaches `weeks + 1` (year complete) and Back returns to `weeks` | `hs4_g_*` |
 //! | h | `mark_all_done` ticks only the unticked and is idempotent | `hs4_h_*` |
-//! | i | `set_subject_schedule(days = "Th")` errors and writes nothing | `hs4_i_*` |
+//! | i | `set_subject_schedule(days = "Th")` errors and writes nothing; (QA round 3, QH3-04) `upsert_assignment(days = "Th")` likewise, and a good string lands in `assignments.days` | `hs4_i_*` |
 //! | j | `get_homeschool_today` with nobody enrolled / paused | `hs4_j_*` |
 //! | k | `add_extra` / `toggle_extra` / `delete_extra` authorization and date rules | `hs4_k_*` |
 //! | l | `get_week_grid` / `get_month` boundary rules | `hs4_l_*` |
@@ -905,6 +905,117 @@ async fn hs4_i_set_subject_schedule_rejects_th_and_writes_nothing() {
         .await
         .expect("days after");
     assert_eq!(before, after, "a rejected call must write nothing");
+}
+
+/// (i), second half — QA round 3 QH3-04, the amendment recorded in
+/// `docs/homeschool/PLAN_HOMESCHOOL.md` HS4 "Do" (2026-09-03):
+/// `upsert_assignment` now carries the week's own `days` override, and the
+/// string goes through `parse_days` **before any write**, exactly as
+/// `set_subject_schedule`'s does.
+#[tokio::test]
+async fn hs4_i_upsert_assignment_rejects_a_bad_days_string_and_writes_nothing() {
+    let _guard = hs4_lock().await;
+    let pool = db::pool().await.expect("pool");
+    let curriculum_id = load_fixture(pool).await;
+    let painting = subject_id(pool, curriculum_id, "Painting").await;
+    let token = parent_session().await;
+
+    // A row no other test can observe: H3 rule 4 gives a `weekly` subject one
+    // occurrence carrying `rows[0]`, so a second ordinal is inert. It is
+    // deleted again below, before this test's assertions run.
+    let (week, ordinal) = (3_i64, 2_i64);
+
+    // 1. "Th" is two letters, not Thursday: rejected, and nothing written.
+    let rejected = api::upsert_assignment(
+        painting,
+        week,
+        ordinal,
+        "a still life".to_string(),
+        None,
+        Some("Th".to_string()),
+        token.clone(),
+    )
+    .await;
+    let after_reject: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM assignments WHERE subject_id = ?1 AND week = ?2 AND ordinal = ?3",
+    )
+    .bind(painting)
+    .bind(week)
+    .bind(ordinal)
+    .fetch_one(pool)
+    .await
+    .expect("row count after the rejected call");
+
+    // 2. A good string lands in `assignments.days` (the per-week override).
+    api::upsert_assignment(
+        painting,
+        week,
+        ordinal,
+        "a still life".to_string(),
+        None,
+        Some("MW".to_string()),
+        token.clone(),
+    )
+    .await
+    .expect("a valid days string is accepted");
+    let written: (Option<String>,) = sqlx::query_as(
+        "SELECT days FROM assignments WHERE subject_id = ?1 AND week = ?2 AND ordinal = ?3",
+    )
+    .bind(painting)
+    .bind(week)
+    .bind(ordinal)
+    .fetch_one(pool)
+    .await
+    .expect("days after the accepted call");
+
+    // 3. `None` puts the row back on the subject's own days (NULL = inherit),
+    //    which is what `days = excluded.days` in the ON CONFLICT clause buys.
+    api::upsert_assignment(
+        painting,
+        week,
+        ordinal,
+        "a still life".to_string(),
+        None,
+        None,
+        token,
+    )
+    .await
+    .expect("clearing the override is accepted");
+    let cleared: (Option<String>,) = sqlx::query_as(
+        "SELECT days FROM assignments WHERE subject_id = ?1 AND week = ?2 AND ordinal = ?3",
+    )
+    .bind(painting)
+    .bind(week)
+    .bind(ordinal)
+    .fetch_one(pool)
+    .await
+    .expect("days after the override was cleared");
+
+    // Leave the fixture exactly as the rest of the suite expects it.
+    sqlx::query("DELETE FROM assignments WHERE subject_id = ?1 AND week = ?2 AND ordinal = ?3")
+        .bind(painting)
+        .bind(week)
+        .bind(ordinal)
+        .execute(pool)
+        .await
+        .expect("clean up the test row");
+
+    let error = rejected
+        .expect_err("'Th' is not a valid day letter")
+        .to_string();
+    assert!(
+        error.contains("day letters"),
+        "the error must name the day letters: {error}"
+    );
+    assert_eq!(
+        after_reject.0, 0,
+        "a rejected days string must write nothing at all"
+    );
+    assert_eq!(written.0.as_deref(), Some("MW"));
+    assert_eq!(
+        cleared.0, None,
+        "None must write NULL — the row inherits the subject's days"
+    );
 }
 
 // ---------------------------------------------------------------------------

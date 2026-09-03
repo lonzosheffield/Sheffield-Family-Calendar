@@ -646,6 +646,15 @@ pub async fn unenroll(
 
 /// Create or rewrite one week's text for one subject (H6 row action 6: tapping
 /// a daily subject with no row is how "Math: lesson 14" gets typed in).
+///
+/// `days` is the row's **per-week override** of the subject's own days (H3 rule
+/// 1: `assignment.days ∨ subject.days`), the QH3-04 amendment of 2026-09-03.
+/// `None` writes `NULL`, which is how a row says "inherit the subject's days" —
+/// so a caller that means to leave the override alone must hand back the value
+/// it read. Like [`set_subject_schedule`], the string must already have passed
+/// the caller's `parse_days` check (H7: "days strings pass `parse_days` in the
+/// loader **and** in both server fns that write them"); the schema's `GLOB` is
+/// the belt to that braces.
 pub async fn upsert_assignment(
     executor: impl sqlx::SqliteExecutor<'_>,
     subject_id: i64,
@@ -653,14 +662,16 @@ pub async fn upsert_assignment(
     ordinal: i64,
     text: &str,
     detail: Option<&str>,
+    days: Option<&str>,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
         r#"
-        INSERT INTO assignments (subject_id, week, ordinal, text, detail)
-        VALUES (?1, ?2, ?3, ?4, ?5)
+        INSERT INTO assignments (subject_id, week, ordinal, text, detail, days)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6)
         ON CONFLICT (subject_id, week, ordinal) DO UPDATE SET
             text   = excluded.text,
-            detail = excluded.detail
+            detail = excluded.detail,
+            days   = excluded.days
         "#,
     )
     .bind(subject_id)
@@ -668,6 +679,7 @@ pub async fn upsert_assignment(
     .bind(ordinal)
     .bind(text)
     .bind(detail)
+    .bind(days)
     .execute(executor)
     .await?;
     Ok(())

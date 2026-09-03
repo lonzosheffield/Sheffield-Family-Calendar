@@ -135,6 +135,27 @@ async fn assignment_text(pool: &SqlitePool, subject_id: i64, week: i64, ordinal:
     row.0
 }
 
+/// QA round 3, QH3-02: the second line under a reading row. The storage fn must
+/// keep a `detail` it is handed, so that HS5's inline edit can carry the value
+/// it already has in hand instead of nulling it.
+async fn assignment_detail(
+    pool: &SqlitePool,
+    subject_id: i64,
+    week: i64,
+    ordinal: i64,
+) -> Option<String> {
+    let row: (Option<String>,) = sqlx::query_as(
+        "SELECT detail FROM assignments WHERE subject_id = ?1 AND week = ?2 AND ordinal = ?3",
+    )
+    .bind(subject_id)
+    .bind(week)
+    .bind(ordinal)
+    .fetch_one(pool)
+    .await
+    .expect("assignment detail");
+    row.0
+}
+
 /// A config rooted at a scratch directory — never the owner's real data dir.
 fn scratch_config(data_dir: PathBuf) -> FamilyHubConfig {
     FamilyHubConfig {
@@ -381,13 +402,27 @@ async fn a_parent_edit_survives_a_reload_and_replace_restores_the_file_text() {
     let old_tales = subject_id(&pool, curriculum, "Old Tales").await;
     let from_file = assignment_text(&pool, old_tales, 2, 1).await;
 
-    // The parent retypes week 2 on the phone.
-    hs::upsert_assignment(&pool, old_tales, 2, 1, "ch. 2 (only the first half)", None)
-        .await
-        .expect("parent edit");
+    // The parent retypes week 2 on the phone, handing back the `detail` the row
+    // already carried (QA round 3, QH3-02: the client has it in `LessonOccurrence`).
+    hs::upsert_assignment(
+        &pool,
+        old_tales,
+        2,
+        1,
+        "ch. 2 (only the first half)",
+        Some("stop at the bridge"),
+        None,
+    )
+    .await
+    .expect("parent edit");
     assert_eq!(
         assignment_text(&pool, old_tales, 2, 1).await,
         "ch. 2 (only the first half)"
+    );
+    assert_eq!(
+        assignment_detail(&pool, old_tales, 2, 1).await,
+        Some("stop at the bridge".to_string()),
+        "the storage fn must keep a detail it is handed (QH3-02)"
     );
 
     // Reboot: the loader must leave it exactly as the parent left it.
