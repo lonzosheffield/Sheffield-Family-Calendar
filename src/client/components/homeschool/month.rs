@@ -19,6 +19,7 @@
 use dioxus::prelude::*;
 
 use crate::client::components::glyphs;
+use crate::client::components::homeschool::today::BoyChips;
 use crate::shared::homeschool::Weekday;
 use crate::shared::types::{MonthDay, MonthView};
 
@@ -78,13 +79,27 @@ pub fn month_weeks(days: &[MonthDay]) -> Vec<MonthWeek> {
 pub fn MonthPanel(
     month: MonthView,
     label: String,
+    /// Every enrolled boy. Month always shows exactly one of them, so with
+    /// more than one enrolled the chip is a **required selector** (D-4) — not
+    /// an optional filter, and never an "Everyone".
+    boys: Vec<(i64, String)>,
+    on_boy_filter: EventHandler<Option<i64>>,
     on_open_day: EventHandler<String>,
     on_step: EventHandler<i32>,
 ) -> Element {
+    let user_id = month.user_id;
     let weeks = month_weeks(&month.days);
 
     rsx! {
         div { class: "flex flex-col gap-3", "data-month": "{month.year}-{month.month}",
+            if boys.len() > 1 {
+                BoyChips {
+                    boys: boys.clone(),
+                    selected: Some(user_id),
+                    allow_everyone: false,
+                    on_select: on_boy_filter,
+                }
+            }
             div { class: "flex items-center justify-between",
                 button {
                     class: "rounded-xl bg-white px-3 py-2 text-sm font-bold text-sheffield-dark ring-1 ring-slate-200",

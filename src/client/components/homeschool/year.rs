@@ -28,6 +28,7 @@ use dioxus::prelude::*;
 use crate::client::components::glyphs;
 use crate::client::components::homeschool::row::{part_label, weekday_short};
 use crate::client::components::homeschool::settings::{SHEET_CARD_CLASS, SHEET_SCRIM_CLASS};
+use crate::client::components::homeschool::today::BoyChips;
 use crate::client::components::homeschool::SchoolAction;
 use crate::client::components::mobile::session;
 use crate::shared::homeschool::{date_for, LogStatus};
@@ -87,6 +88,10 @@ pub fn YearPanel(
     /// The `week_started_on` this grid is laid out against (HS4's synthetic
     /// anchor for a non-current week).
     anchor: String,
+    /// Every enrolled boy, for the chip strip (H6: "a boy chip filters Year
+    /// exactly as it filters Today"). Empty or single → no strip.
+    boys: Vec<(i64, String)>,
+    on_boy_filter: EventHandler<Option<i64>>,
     on_select_week: EventHandler<i64>,
     on_action: EventHandler<SchoolAction>,
 ) -> Element {
@@ -100,6 +105,14 @@ pub fn YearPanel(
 
     rsx! {
         div { class: "flex flex-col gap-4",
+            if boys.len() > 1 {
+                BoyChips {
+                    boys: boys.clone(),
+                    selected: Some(user_id),
+                    allow_everyone: false,
+                    on_select: on_boy_filter,
+                }
+            }
             div {
                 class: "flex flex-wrap gap-2",
                 role: "group",

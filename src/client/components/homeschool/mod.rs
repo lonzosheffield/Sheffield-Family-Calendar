@@ -52,8 +52,8 @@ use crate::server::api::{
 };
 use crate::shared::homeschool::{Category, LogStatus};
 use crate::shared::types::{
-    CurriculumSummary, DayItem, EnrollmentView, HomeschoolTodayView, MonthView, SubjectSetting,
-    WeekGrid,
+    profile_name, CurriculumSummary, DayItem, EnrollmentView, HomeschoolTodayView, MonthView,
+    SubjectSetting, WeekGrid,
 };
 
 /// Which of the three panes the tab is showing. **Today is the tab** (H6), so
@@ -292,29 +292,52 @@ pub fn School() -> Element {
         Some(Ok(Some(view))) => Some(view.clone()),
         _ => None,
     };
-    let enrollments: Vec<EnrollmentView> = match &*enrollments_res.read_unchecked() {
-        Some(Ok(rows)) => rows.clone(),
-        _ => Vec::new(),
-    };
     let curricula: Vec<CurriculumSummary> = match &*curricula_res.read_unchecked() {
         Some(Ok(rows)) => rows.clone(),
         _ => Vec::new(),
     };
 
-    let focus = focused_boy(boy_filter(), &enrollments);
-    let enrollment = focus.and_then(|user_id| {
-        enrollments
-            .iter()
-            .find(|row| row.user_id == user_id && row.enrolled)
-            .cloned()
+    // **Everything a resource keys on is a [`Memo`], never a plain local.**
+    // Dioxus 0.7's `use_resource` reruns only when a signal it read *inside*
+    // its own closure changes. A value computed above the closure and captured
+    // by copy is invisible to that machinery, so tapping a week in the Year
+    // picker, stepping the month or choosing a boy chip re-rendered the tab
+    // but left the fetched grid/month on whatever the first render asked for
+    // until an unrelated `homeschool_version` bump happened to restart them
+    // (QA round 1, QH1-02). Reading a memo inside the closure subscribes the
+    // resource to it, which is what makes the panes refetch.
+    let enrollments_memo = use_memo(move || match &*enrollments_res.read() {
+        Some(Ok(rows)) => rows.clone(),
+        _ => Vec::<EnrollmentView>::new(),
     });
-    let current_week = enrollment.as_ref().map(|row| row.current_week).unwrap_or(1);
-    let grid_week = selected_week().unwrap_or(current_week);
+    let focus = use_memo(move || focused_boy(boy_filter(), &enrollments_memo()));
+    let enrollment = use_memo(move || {
+        focus().and_then(|id| {
+            enrollments_memo()
+                .into_iter()
+                .find(|row| row.user_id == id && row.enrolled)
+        })
+    });
+    let current_week = use_memo(move || enrollment().map(|row| row.current_week).unwrap_or(1));
+    let grid_week = use_memo(move || selected_week().unwrap_or(current_week()));
+    // The boy chips every pane offers: the enrolled boys, in enrollment order,
+    // named the way every other surface names them (H6).
+    let boys = use_memo(move || {
+        enrollments_memo()
+            .into_iter()
+            .filter(|row| row.enrolled)
+            .map(|row| {
+                let name = u32::try_from(row.user_id)
+                    .map(profile_name)
+                    .unwrap_or("Family");
+                (row.user_id, name.to_string())
+            })
+            .collect::<Vec<(i64, String)>>()
+    });
 
-    let settings_curriculum = enrollment.as_ref().map(|row| row.curriculum_id);
     let mut subjects_res = use_resource(move || async move {
         let _version = (bus.homeschool_version)();
-        match settings_curriculum {
+        match enrollment().map(|row| row.curriculum_id) {
             Some(curriculum_id) => get_subject_settings(curriculum_id).await,
             None => Ok(Vec::new()),
         }
@@ -326,8 +349,9 @@ pub fn School() -> Element {
 
     let mut grid_res = use_resource(move || async move {
         let _version = (bus.homeschool_version)();
-        match focus {
-            Some(user_id) => get_week_grid(user_id, grid_week).await.map(Some),
+        let week = grid_week();
+        match focus() {
+            Some(user_id) => get_week_grid(user_id, week).await.map(Some),
             None => Ok(None),
         }
     });
@@ -336,13 +360,20 @@ pub fn School() -> Element {
         _ => None,
     };
 
-    let cursor = month_cursor()
-        .or_else(|| mutation_date.as_deref().and_then(year_month_of))
-        .unwrap_or((2026, 1));
+    let cursor = use_memo(move || {
+        month_cursor()
+            .or_else(|| {
+                RoutineDateState::resolve((bus.today)(), (*today_fetch.read()).clone())
+                    .date()
+                    .and_then(year_month_of)
+            })
+            .unwrap_or((2026, 1))
+    });
     let mut month_res = use_resource(move || async move {
         let _version = (bus.homeschool_version)();
-        match focus {
-            Some(user_id) => get_month(user_id, cursor.0, cursor.1).await.map(Some),
+        let (year, month) = cursor();
+        match focus() {
+            Some(user_id) => get_month(user_id, year, month).await.map(Some),
             None => Ok(None),
         }
     });
@@ -607,17 +638,19 @@ pub fn School() -> Element {
                     }
                 },
                 SchoolPane::Year => rsx! {
-                    if let (Some(grid), Some(enrollment), Some(user_id)) = (
+                    if let (Some(grid), Some(row), Some(user_id)) = (
                         grid.clone(),
-                        enrollment.clone(),
-                        focus,
+                        enrollment(),
+                        focus(),
                     )
                     {
                         YearPanel {
                             grid,
                             user_id,
-                            current_week,
-                            anchor: enrollment.week_started_on.clone(),
+                            current_week: current_week(),
+                            anchor: row.week_started_on.clone(),
+                            boys: boys(),
+                            on_boy_filter: move |next| boy_filter.set(next),
                             on_select_week: move |week| selected_week.set(Some(week)),
                             on_action: dispatch,
                         }
@@ -629,10 +662,13 @@ pub fn School() -> Element {
                     if let Some(month) = month.clone() {
                         MonthPanel {
                             month,
-                            label: month_label(cursor.0, cursor.1),
+                            label: month_label(cursor().0, cursor().1),
+                            boys: boys(),
+                            on_boy_filter: move |next| boy_filter.set(next),
                             on_open_day: move |date| open_day.set(Some(date)),
                             on_step: move |delta: i32| {
-                                month_cursor.set(Some(step_month(cursor.0, cursor.1, delta)));
+                                let (year, month) = cursor();
+                                month_cursor.set(Some(step_month(year, month, delta)));
                             },
                         }
                     } else {
@@ -643,7 +679,7 @@ pub fn School() -> Element {
 
             if settings_open() {
                 SchoolSettingsSheet {
-                    enrollments: enrollments.clone(),
+                    enrollments: enrollments_memo(),
                     curricula: curricula.clone(),
                     subjects: subjects.clone(),
                     on_action: dispatch,
@@ -651,16 +687,20 @@ pub fn School() -> Element {
                 }
             }
 
-            if let (Some(date), Some(user_id)) = (sheet_date.clone(), focus) {
+            if let (Some(date), Some(user_id)) = (sheet_date.clone(), focus()) {
                 DaySheet {
                     date: date.clone(),
-                    week: current_week,
+                    week: current_week(),
                     in_current_week: month
                         .as_ref()
                         .and_then(|month| {
                             month.days.iter().find(|day| day.date == date)
                         })
                         .is_some_and(|day| day.in_current_week),
+                    // QH1-07: a date *before* the span is not "not dealt out
+                    // yet" — it has already been and gone.
+                    before_span: enrollment()
+                        .is_some_and(|row| date.as_str() < row.week_started_on.as_str()),
                     user_id,
                     items: day_view
                         .as_ref()

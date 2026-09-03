@@ -5,7 +5,9 @@
 //! 1. that date's curriculum items, **but only when the date lies inside the
 //!    current week's span** — a future week has not been dealt out until the
 //!    parent finishes the previous one, and the sheet says so in as many
-//!    words rather than showing an empty list that looks like a bug;
+//!    words rather than showing an empty list that looks like a bug. A date
+//!    *behind* the span gets its own line instead: it is not waiting on a
+//!    week, it has already gone by (QA round 1, QH1-07);
 //! 2. the boy's parent-added tasks for that date, which are independent of the
 //!    curriculum pointer and therefore render on **any** date;
 //! 3. the parent-only **Add task** form: boy · title · category · text.
@@ -41,12 +43,24 @@ pub fn not_dealt_out_line(week: i64) -> String {
     format!("Not dealt out yet — finish week {week} first.")
 }
 
+/// The line a date **before** the current week's span shows instead.
+///
+/// A past date is not waiting on anything: telling a parent who tapped last
+/// Tuesday to "finish week 2 first" asks them to finish a week that has
+/// already gone by (QA round 1, QH1-07). A past week's plan is deliberately
+/// not reconstructed (H6), so what the sheet can honestly show there is the
+/// tasks the parent added themselves.
+pub const BEFORE_SPAN_LINE: &str = "Before this week — only tasks you added are shown.";
+
 #[component]
 pub fn DaySheet(
     date: String,
     /// The boy's `current_week` — the week a parent must finish first.
     week: i64,
     in_current_week: bool,
+    /// The date falls **before** `week_started_on`, so it is behind the span
+    /// rather than ahead of it.
+    before_span: bool,
     user_id: i64,
     items: Vec<DayItem>,
     on_action: EventHandler<SchoolAction>,
@@ -83,7 +97,11 @@ pub fn DaySheet(
 
                 if !in_current_week {
                     p { class: "mt-3 rounded-2xl bg-sheffield-sun/20 p-4 text-sm font-semibold text-slate-800",
-                        "{not_dealt_out_line(week)}"
+                        if before_span {
+                            "{BEFORE_SPAN_LINE}"
+                        } else {
+                            "{not_dealt_out_line(week)}"
+                        }
                     }
                 }
 

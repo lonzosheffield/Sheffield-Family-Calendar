@@ -958,7 +958,13 @@ fn hs5_g_the_school_module_names_no_colour_the_palette_has_not_declared() {
 // ---------------------------------------------------------------------------
 
 #[component]
-fn YearHarness(grid: WeekGrid, current_week: i64, anchor: String, parent: bool) -> Element {
+fn YearHarness(
+    grid: WeekGrid,
+    current_week: i64,
+    anchor: String,
+    parent: bool,
+    boys: Vec<(i64, String)>,
+) -> Element {
     use_context_provider(|| {
         Signal::new(Some(if parent {
             SessionState::Parent
@@ -972,10 +978,58 @@ fn YearHarness(grid: WeekGrid, current_week: i64, anchor: String, parent: bool) 
             user_id: 1,
             current_week,
             anchor,
+            boys,
+            on_boy_filter: move |_: Option<i64>| {},
             on_select_week: move |_: i64| {},
             on_action: move |_: SchoolAction| {},
         }
     }
+}
+
+/// The two boys the QH1-05 chip assertions are built on: the pane is drawn for
+/// `user_id: 1`, so Isaiah is the selected chip and Nathaniel the offer.
+fn fixture_boys() -> Vec<(i64, String)> {
+    vec![(1, "Isaiah".to_string()), (2, "Nathaniel".to_string())]
+}
+
+/// The markup of the boy-chip strip: from its container marker to the marker
+/// of the pane content that always follows it. Scoping matters because
+/// `LessonRow` carries an `aria-pressed` of its own, and "exactly one chip is
+/// pressed" is an assertion about the chips.
+fn chip_strip<'a>(html: &'a str, until: &str) -> &'a str {
+    let start = html
+        .find("data-boy-chips=\"true\"")
+        .unwrap_or_else(|| panic!("the pane must render a chip strip: {html}"));
+    let end = html[start..]
+        .find(until)
+        .unwrap_or_else(|| panic!("the chip strip must sit above {until}: {html}"))
+        + start;
+    &html[start..end]
+}
+
+/// The chip assertions QH1-05 pins, shared by Year and Month: two boys, two
+/// chips, exactly one of them pressed, and no `Everyone` — Year is filtered by
+/// the chip and Month *requires* it (H6, §4 default 17 / D-4).
+fn assert_chip_strip(html: &str, until: &str) {
+    let strip = chip_strip(html, until);
+    assert_eq!(
+        count(strip, "data-boy-chip="),
+        2,
+        "one chip per enrolled boy: {strip}"
+    );
+    assert_eq!(
+        count(strip, "aria-pressed=\"true\""),
+        1,
+        "exactly one chip is the boy on screen: {strip}"
+    );
+    assert!(
+        strip.contains("data-boy-chip=\"1\"") && strip.contains("data-boy-chip=\"2\""),
+        "both enrolled boys are reachable without going back to Today: {strip}"
+    );
+    assert!(
+        !html.contains("Everyone"),
+        "Year and Month are about exactly one boy, so there is no Everyone: {html}"
+    );
 }
 
 /// The fixture's week `week` as a grid, anchored the way HS4 anchors it:
@@ -995,7 +1049,13 @@ fn hs5_h_the_year_view_lays_the_fixture_week_out_as_a_subject_by_day_grid() {
     let (grid, anchor) = fixture_grid(2, 2);
     assert!(grid.dated, "week 2 is the current week, so it is dated");
     let html = dioxus::ssr::render_element(rsx! {
-        YearHarness { grid: grid.clone(), current_week: 2, anchor, parent: false }
+        YearHarness {
+            grid: grid.clone(),
+            current_week: 2,
+            anchor,
+            parent: false,
+            boys: Vec::new(),
+        }
     });
 
     // The week picker: one entry per week of the curriculum, the current week
@@ -1077,11 +1137,60 @@ fn hs5_h_the_year_view_lays_the_fixture_week_out_as_a_subject_by_day_grid() {
 }
 
 #[test]
+fn hs5_h_two_enrolled_boys_each_get_a_chip_on_the_year_pane() {
+    // QH1-05: H6 says "a boy chip filters Year exactly as it filters Today",
+    // but the chips lived inside `TodayPanel` alone, so the second boy's Year
+    // was reachable only by going back to Today, tapping his chip and toggling
+    // Year again. Dormant while only Isaiah is enrolled; live the day
+    // Nathaniel is.
+    let (grid, anchor) = fixture_grid(2, 2);
+    let html = dioxus::ssr::render_element(rsx! {
+        YearHarness {
+            grid,
+            current_week: 2,
+            anchor,
+            parent: false,
+            boys: fixture_boys(),
+        }
+    });
+    assert_chip_strip(&html, "data-year-picker");
+    assert!(
+        slice_at(&html, "data-boy-chip", "1").contains("aria-pressed=\"true\""),
+        "the pane is drawn for boy 1, so his is the pressed chip: {html}"
+    );
+    println!("year: two chips, Isaiah pressed, no Everyone");
+}
+
+#[test]
+fn hs5_h_a_single_enrolled_boy_is_offered_no_chip_to_press() {
+    let (grid, anchor) = fixture_grid(2, 2);
+    let html = dioxus::ssr::render_element(rsx! {
+        YearHarness {
+            grid,
+            current_week: 2,
+            anchor,
+            parent: false,
+            boys: vec![(1, "Isaiah".to_string())],
+        }
+    });
+    assert!(
+        !html.contains("data-boy-chips="),
+        "one boy is not a choice: {html}"
+    );
+}
+
+#[test]
 fn hs5_k_a_week_that_has_not_been_dealt_out_is_neither_dated_nor_tickable() {
     let (grid, anchor) = fixture_grid(3, 2);
     assert!(!grid.dated, "week 3 is not the current week (D-5)");
     let html = dioxus::ssr::render_element(rsx! {
-        YearHarness { grid, current_week: 2, anchor, parent: true }
+        YearHarness {
+            grid,
+            current_week: 2,
+            anchor,
+            parent: true,
+            boys: Vec::new(),
+        }
     });
 
     assert!(
@@ -1103,6 +1212,7 @@ fn hs5_k_a_week_that_has_not_been_dealt_out_is_neither_dated_nor_tickable() {
             current_week: 2,
             anchor: dated_anchor,
             parent: true,
+            boys: Vec::new(),
         }
     });
     assert!(dated_html.contains("data-lesson-check="), "{dated_html}");
@@ -1161,11 +1271,13 @@ fn fixture_month() -> MonthView {
 }
 
 #[component]
-fn MonthHarness(month: MonthView) -> Element {
+fn MonthHarness(month: MonthView, boys: Vec<(i64, String)>) -> Element {
     rsx! {
         MonthPanel {
             month,
             label: month_label(2026, 9),
+            boys,
+            on_boy_filter: move |_: Option<i64>| {},
             on_open_day: move |_: String| {},
             on_step: move |_: i32| {},
         }
@@ -1176,7 +1288,7 @@ fn MonthHarness(month: MonthView) -> Element {
 fn hs5_i_the_month_view_counts_only_what_it_can_honestly_count() {
     let month = fixture_month();
     let html = dioxus::ssr::render_element(rsx! {
-        MonthHarness { month: month.clone() }
+        MonthHarness { month: month.clone(), boys: Vec::new() }
     });
 
     assert_eq!(
@@ -1244,6 +1356,32 @@ fn hs5_i_the_month_view_counts_only_what_it_can_honestly_count() {
     );
 }
 
+#[test]
+fn hs5_i_the_month_chip_is_a_required_selector_never_an_everyone() {
+    // QH1-05 / D-4: "Month view always shows exactly one boy … the chip is a
+    // required selector". Two boys enrolled, two chips, one of them pressed,
+    // and no way to ask for both at once.
+    let month = fixture_month();
+    let html = dioxus::ssr::render_element(rsx! {
+        MonthHarness { month: month.clone(), boys: fixture_boys() }
+    });
+    assert_eq!(month.user_id, 1, "the fixture month is boy 1's");
+    assert_chip_strip(&html, "aria-label=\"Previous month\"");
+    assert!(
+        slice_at(&html, "data-boy-chip", "1").contains("aria-pressed=\"true\""),
+        "the month is boy 1's, so his is the pressed chip: {html}"
+    );
+
+    let alone = dioxus::ssr::render_element(rsx! {
+        MonthHarness { month, boys: vec![(1, "Isaiah".to_string())] }
+    });
+    assert!(
+        !alone.contains("data-boy-chips="),
+        "with one boy enrolled there is nothing to select: {alone}"
+    );
+    println!("month: two chips, one pressed, no Everyone");
+}
+
 // ---------------------------------------------------------------------------
 // (j) the day sheet
 // ---------------------------------------------------------------------------
@@ -1253,6 +1391,7 @@ fn DaySheetHarness(
     date: String,
     week: i64,
     in_current_week: bool,
+    before_span: bool,
     items: Vec<DayItem>,
     parent: bool,
 ) -> Element {
@@ -1268,6 +1407,7 @@ fn DaySheetHarness(
             date,
             week,
             in_current_week,
+            before_span,
             user_id: 1,
             items,
             on_action: move |_: SchoolAction| {},
@@ -1295,6 +1435,7 @@ fn hs5_j_only_a_parent_is_offered_the_add_task_form() {
             date: FIXTURE_TUESDAY.to_string(),
             week: 2,
             in_current_week: true,
+            before_span: false,
             items: items.clone(),
             parent: true,
         }
@@ -1318,6 +1459,7 @@ fn hs5_j_only_a_parent_is_offered_the_add_task_form() {
             date: FIXTURE_TUESDAY.to_string(),
             week: 2,
             in_current_week: true,
+            before_span: false,
             items,
             parent: false,
         }
@@ -1339,6 +1481,7 @@ fn hs5_j_a_future_day_says_it_has_not_been_dealt_out_and_shows_extras_only() {
             date: "2026-09-24".to_string(),
             week: 2,
             in_current_week: false,
+            before_span: false,
             items,
             parent: true,
         }
@@ -1357,4 +1500,116 @@ fn hs5_j_a_future_day_says_it_has_not_been_dealt_out_and_shows_extras_only() {
         html.contains("data-extra-row=\"91\""),
         "the parent's own task is still there: {html}"
     );
+}
+
+#[test]
+fn hs5_j_a_past_day_says_it_is_behind_the_week_not_that_it_is_waiting_on_one() {
+    // QH1-07: every date outside the span, past ones included, used to say
+    // "Not dealt out yet — finish week 2 first.", so tapping last Tuesday told
+    // the parent to finish a week that had already gone by. A past date is
+    // behind the span, and what the sheet can honestly show there is the
+    // tasks the parent added themselves (a past week's plan is deliberately
+    // not reconstructed, H6).
+    let items = vec![DayItem::Extra(fixture_extra("2026-09-01"))];
+    let html = dioxus::ssr::render_element(rsx! {
+        DaySheetHarness {
+            date: "2026-09-01".to_string(),
+            week: 2,
+            in_current_week: false,
+            before_span: true,
+            items,
+            parent: true,
+        }
+    });
+
+    assert_eq!(
+        count(
+            &html,
+            "Before this week \u{2014} only tasks you added are shown."
+        ),
+        1,
+        "the past-date wording, once: {html}"
+    );
+    assert!(
+        !html.contains("Not dealt out yet"),
+        "a day that has already passed is not waiting on a week: {html}"
+    );
+    assert!(
+        !html.contains("data-lesson-row="),
+        "no curriculum rows on a day outside the span: {html}"
+    );
+    assert!(
+        html.contains("data-extra-row=\"91\""),
+        "the parent's own task is still there: {html}"
+    );
+    println!("day sheet: 2026-09-01 reads `Before this week`, no curriculum rows");
+}
+
+// ---------------------------------------------------------------------------
+// QH1-02 — the resources really do read the signals they key on
+// ---------------------------------------------------------------------------
+
+/// The body of one `use_resource(` block in `School()`: from the `let mut
+/// <name> = use_resource(` line to the `});` that closes it.
+///
+/// A source-shape guard in the style of `tv_tests::tv_sources`, and for the
+/// same reason: the defect it pins is invisible to an SSR test. Every pane is
+/// rendered with plain props, so a render assertion cannot see whether the
+/// *tab* refetches when a signal changes — only that the props it was handed
+/// came out right. Dioxus 0.7's `use_resource` subscribes to exactly the
+/// signals read inside its own closure, so "the closure reads it" is the
+/// property, and reading it here is the check.
+fn resource_body<'a>(source: &'a str, name: &str) -> &'a str {
+    let opener = format!("let mut {name} = use_resource(");
+    let start = source
+        .find(&opener)
+        .unwrap_or_else(|| panic!("`School()` must still declare {name}"));
+    let rest = &source[start..];
+    let end = rest
+        .find("\n    });")
+        .unwrap_or_else(|| panic!("{name}'s resource must close with a `}});` line"));
+    &rest[..end]
+}
+
+#[test]
+fn hs5_qa1_the_year_and_month_resources_read_the_signals_they_are_keyed_on() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("client")
+        .join("components")
+        .join("homeschool")
+        .join("mod.rs");
+    let source = std::fs::read_to_string(&path).expect("the School tab's source is readable");
+
+    let grid = resource_body(&source, "grid_res");
+    for read in ["grid_week()", "focus()"] {
+        assert!(
+            grid.contains(read),
+            "`grid_res` must read {read} inside its own closure, or tapping a \
+             week in the Year picker re-renders without refetching: {grid}"
+        );
+    }
+
+    let month = resource_body(&source, "month_res");
+    for read in ["cursor()", "focus()"] {
+        assert!(
+            month.contains(read),
+            "`month_res` must read {read} inside its own closure, or stepping \
+             the month re-renders without refetching: {month}"
+        );
+    }
+
+    // And the values themselves are memos, not plain locals computed above the
+    // closures — a plain local is captured by copy and never re-read.
+    for memo in [
+        "let focus = use_memo(",
+        "let grid_week = use_memo(",
+        "let cursor = use_memo(",
+    ] {
+        assert!(
+            source.contains(memo),
+            "{memo}…) is what makes the read above reactive: {path:?}"
+        );
+    }
+    println!("grid_res reads grid_week()/focus(); month_res reads cursor()/focus()");
 }

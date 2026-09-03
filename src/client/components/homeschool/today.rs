@@ -39,6 +39,59 @@ use crate::shared::types::{
 /// The phone's section heading, unchanged from the Routine tab's own.
 pub const SECTION_HEADING_CLASS: &str = "text-lg font-bold text-sheffield-dark";
 
+/// A boy chip the surface is currently filtered to.
+pub const CHIP_ON_CLASS: &str =
+    "rounded-full bg-sheffield-dark px-3 py-2 text-sm font-bold text-white";
+/// A boy chip that is merely on offer.
+pub const CHIP_OFF_CLASS: &str =
+    "rounded-full bg-white px-3 py-2 text-sm font-semibold text-sheffield-dark ring-1 ring-slate-200";
+
+/// The boy chips (H6). **One chip strip, three panes.**
+///
+/// Today lets a parent stand back to **Everyone**; Year is filtered by the
+/// same chip ("a boy chip filters Year exactly as it filters Today"), and
+/// Month "always shows exactly one boy … the chip is a required selector"
+/// (§4 default 17 / D-4). `allow_everyone` is the whole difference, which is
+/// why the markup lives here once rather than three times — before QA round 1
+/// (QH1-05) it lived only inside `TodayPanel`, so the second boy's Year and
+/// Month were reachable only by going back to Today and toggling.
+#[component]
+pub fn BoyChips(
+    boys: Vec<(i64, String)>,
+    /// The boy the surface is on, or `None` for Everyone (Today only).
+    selected: Option<i64>,
+    allow_everyone: bool,
+    on_select: EventHandler<Option<i64>>,
+) -> Element {
+    rsx! {
+        div {
+            class: "flex flex-wrap gap-2",
+            role: "group",
+            aria_label: "Whose school",
+            "data-boy-chips": "true",
+            if allow_everyone {
+                button {
+                    class: if selected.is_none() { CHIP_ON_CLASS } else { CHIP_OFF_CLASS },
+                    "data-boy-chip": "everyone",
+                    aria_pressed: if selected.is_none() { "true" } else { "false" },
+                    onclick: move |_| on_select.call(None),
+                    "Everyone"
+                }
+            }
+            for (user_id , name) in boys.clone() {
+                button {
+                    key: "{user_id}",
+                    class: if selected == Some(user_id) { CHIP_ON_CLASS } else { CHIP_OFF_CLASS },
+                    "data-boy-chip": "{user_id}",
+                    aria_pressed: if selected == Some(user_id) { "true" } else { "false" },
+                    onclick: move |_| on_select.call(Some(user_id)),
+                    "{name}"
+                }
+            }
+        }
+    }
+}
+
 /// Every day item of one group, oldest first — the order the occurrence rule
 /// itself produces.
 fn group_items(group: &TogetherGroup) -> Vec<&DayItem> {
@@ -154,20 +207,11 @@ pub fn TodayPanel(
     rsx! {
         div { class: "flex flex-col gap-4",
             if chips.len() > 1 {
-                div { class: "flex flex-wrap gap-2", role: "group", aria_label: "Whose school",
-                    button {
-                        class: if boy_filter.is_none() { "rounded-full bg-sheffield-dark px-3 py-2 text-sm font-bold text-white" } else { "rounded-full bg-white px-3 py-2 text-sm font-semibold text-sheffield-dark ring-1 ring-slate-200" },
-                        onclick: move |_| on_boy_filter.call(None),
-                        "Everyone"
-                    }
-                    for (user_id , name) in chips.clone() {
-                        button {
-                            key: "{user_id}",
-                            class: if boy_filter == Some(user_id) { "rounded-full bg-sheffield-dark px-3 py-2 text-sm font-bold text-white" } else { "rounded-full bg-white px-3 py-2 text-sm font-semibold text-sheffield-dark ring-1 ring-slate-200" },
-                            onclick: move |_| on_boy_filter.call(Some(user_id)),
-                            "{name}"
-                        }
-                    }
+                BoyChips {
+                    boys: chips.clone(),
+                    selected: boy_filter,
+                    allow_everyone: true,
+                    on_select: on_boy_filter,
                 }
             }
 
