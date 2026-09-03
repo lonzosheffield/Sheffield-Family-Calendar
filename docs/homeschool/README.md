@@ -14,3 +14,9 @@ Helpful, if you have it:
 - Which days of the week each subject is done, if that is fixed.
 - Any weekly/daily pacing already written into the curriculum (e.g. "Lesson 12
   on day 45"), so "what do we do today" can be computed rather than typed in.
+
+## Transcription status
+
+- HS2a: AO Year 1 transcription weeks 1-18 done 2026-09-02, file in the
+  gitignored `curriculum/` directory (`ao-year-1.toml`). Weeks 19-36 remain
+  for HS2b.
