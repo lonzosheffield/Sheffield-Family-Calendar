@@ -3209,3 +3209,7 @@ micro-commit before HS8's fresh-context QA loop runs — HS8's own checklist
 against a file that is not there. Not blocking HS7's own Accept clauses
 (none of which name `tests/curriculum_tests.rs`), but blocking a true
 "every HS task landed" claim for the wave as a whole.
+
+**Boss, wave D close (2026-09-03): HS-10 applied.** `tests/curriculum_tests.rs` re-applied
+from `hs/HS2b` (`657a588`) as a Boss micro-commit; 9/9 green with the gitignored files present.
+HS8 can now audit HS2b's contract against the committed file.

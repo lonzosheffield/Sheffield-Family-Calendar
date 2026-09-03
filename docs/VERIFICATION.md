@@ -1016,6 +1016,29 @@ test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fin
 
 ### Transcript — HS2 (HS2a + HS2b transcription; `tests/curriculum_tests.rs` not on `main`, see HS-10 above)
 
+**Boss, wave D close (2026-09-03):** HS-10 applied — `tests/curriculum_tests.rs`
+re-applied from `hs/HS2b` (`657a588`) onto `main` as its own micro-commit and run
+against the gitignored files present on this machine (its own N1 guard (h) walks
+every tracked file, HS7's new docs included):
+
+```
+> cargo test --features server --test curriculum_tests
+running 9 tests
+test sha256_self_test::sha256_matches_the_well_known_empty_and_abc_vectors ... ok
+test every_spot_check_row_matches_its_week_and_subject_by_contains ... ok
+test the_chapter_sequence_subject_s_chapters_appear_once_each_in_non_decreasing_week_order ... ok
+test the_two_ordinals_subject_has_two_rows_every_week_except_the_expect_file_s_exceptions ... ok
+test term_note_counts_hold ... ok
+test every_subject_s_days_are_within_the_five_day_school_week_and_shared_matches_its_category ... ok
+test the_expect_file_s_weeks_subject_count_and_every_week_list_hold ... ok
+test the_hs1_loader_accepts_the_file_as_both_a_parse_and_a_real_database_insert ... ok
+test no_assignment_text_from_the_toml_appears_in_any_tracked_file ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.27s
+```
+
+The import-curriculum evidence HS7 gathered before the file landed follows unchanged.
+
 The gitignored `curriculum/ao-year-1.toml` (N1) is present on this machine
 (HS2a wave A + HS2b wave B). Verified with the shipped, real subcommand
 against a fresh scratch data directory — no test file, no curriculum text in
