@@ -856,6 +856,18 @@ async fn hs4_h_mark_all_done_ticks_only_unticked_items_and_is_idempotent() {
         "mark_all_done must tick the remaining unticked items"
     );
 
+    let (shared_rows,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM lesson_log l JOIN subjects s ON s.id = l.subject_id WHERE l.profile_id = ?1 AND s.shared = 1",
+    )
+    .bind(BOY)
+    .fetch_one(pool)
+    .await
+    .expect("count shared rows");
+    assert_eq!(
+        shared_rows, 0,
+        "H6 item 4: Mark all done is the boy's own block, never the Together rows"
+    );
+
     // The hand-ticked row must still read 'skipped' — mark_all_done never
     // touches an item that already has a status.
     let (status,): (String,) =

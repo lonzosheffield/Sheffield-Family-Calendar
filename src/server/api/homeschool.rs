@@ -878,7 +878,8 @@ pub async fn mark_all_done(
         let mut to_tick: Vec<(i64, Option<i64>, String)> = Vec::new();
         for item in today.due_today.iter().chain(today.catch_up.iter()) {
             if let DayItem::Lesson(occurrence) = item {
-                if occurrence.status.is_none() {
+                // H6 item 4: the control sits on the boy's own block; a shared read-aloud is Together's to tick.
+                if occurrence.status.is_none() && !occurrence.shared {
                     to_tick.push((
                         occurrence.subject_id,
                         occurrence.assignment_id,
