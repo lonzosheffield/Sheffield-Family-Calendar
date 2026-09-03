@@ -796,11 +796,19 @@ pub const EXTRA_CATCH_UP_DAYS: i32 = 14;
 
 /// H3 rule 10 — fold the boy's parent-added tasks into his Today lists.
 ///
-/// * dated `date` → `due_today`; dated in `[date − 14, date)` and unfinished →
-///   `catch_up`; a finished extra → `done`; anything else is in no list.
+/// The checks run in H3 rule 10's own order — `due_today` first — so that a
+/// **ticked** extra dated `date` stays in `due_today` carrying its status,
+/// exactly as [`today_view`] keeps a ticked lesson there. It is listed in
+/// `done` as well; the two lists overlap by design, and a boy on the TV can
+/// therefore untick a mis-tick instead of watching the row vanish (D-2).
+///
+/// * dated `date` → `due_today` (ticked or not); dated in `[date − 14, date)`
+///   and **unfinished** → `catch_up`; a finished extra → `done` as well;
+///   anything else is in no list.
 /// * an extra counts in `done_count` / `skipped_count` / `total_count`
 ///   **only** while it is dated inside `week_span`, and drops out again once
-///   the span has passed.
+///   the span has passed. An extra dated `date` and ticked is counted once,
+///   despite appearing in two lists.
 ///
 /// Extras are per boy and per date, never Together (§4 default 16).
 pub fn merge_extras(
@@ -828,9 +836,11 @@ pub fn merge_extras(
         }
         if extra.status.is_some() {
             today.done.push(DayItem::Extra(extra.clone()));
-        } else if extra.scheduled_date == date {
+        }
+        if extra.scheduled_date == date {
             today.due_today.push(DayItem::Extra(extra.clone()));
-        } else if extra.scheduled_date.as_str() < date
+        } else if extra.status.is_none()
+            && extra.scheduled_date.as_str() < date
             && earliest
                 .as_deref()
                 .is_some_and(|floor| extra.scheduled_date.as_str() >= floor)
@@ -1974,6 +1984,8 @@ mod tests {
             extra(5, &at(-1), Some(LogStatus::Done)), // done
             extra(6, &at(9), None),                   // no list, no count
             extra(7, &at(1), None),                   // no list, counted
+            // QH1-03: ticked today — `due_today` **and** `done`, counted once.
+            extra(8, date, Some(LogStatus::Done)),
         ];
 
         let mut today = BoyToday {
@@ -1988,14 +2000,24 @@ mod tests {
         };
         merge_extras(&mut today, &extras, date, (&span_from, &span_to));
 
-        assert_eq!(titles(&today.due_today), vec!["Task 1"]);
+        assert_eq!(
+            titles(&today.due_today),
+            vec!["Task 1", "Task 8"],
+            "QH1-03: a ticked extra dated today keeps its place in due_today, \
+             so the boy can untick it on the TV"
+        );
         assert_eq!(titles(&today.catch_up), vec!["Task 2", "Task 3"]);
-        assert_eq!(titles(&today.done), vec!["Task 5"]);
+        assert_eq!(
+            titles(&today.done),
+            vec!["Task 5", "Task 8"],
+            "and is listed in done as well — the two lists overlap by design"
+        );
 
-        // Counted: 1 (today), 5 (yesterday, done) and 7 (tomorrow) are inside
-        // `[date − 2, date + 4]`. 2, 3, 4 are before it and 6 is after it.
-        assert_eq!(today.total_count, 3);
-        assert_eq!(today.done_count, 1);
+        // Counted: 1 (today), 5 (yesterday, done), 7 (tomorrow) and 8 (today,
+        // done) are inside `[date − 2, date + 4]`. 2, 3, 4 are before it and 6
+        // is after it. Task 8 appears in two lists and is still counted once.
+        assert_eq!(today.total_count, 4);
+        assert_eq!(today.done_count, 2);
         assert_eq!(today.skipped_count, 0);
 
         for item in today
@@ -2030,7 +2052,12 @@ mod tests {
         };
         merge_extras(&mut today, &extras, date, ("2026-09-07", "2026-09-13"));
 
-        assert!(today.due_today.is_empty());
+        assert_eq!(
+            titles(&today.due_today),
+            vec!["Task 2"],
+            "another boy's task is ignored; the skipped one is dated today and \
+             so keeps its place in due_today (QH1-03)"
+        );
         assert_eq!(titles(&today.done), vec!["Task 2"]);
         assert_eq!((today.total_count, today.skipped_count), (1, 1));
     }

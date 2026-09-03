@@ -438,7 +438,7 @@ appears in `catch_up` on a later day and never twice in `due_today`; Saturday wi
 `catch_up` and counts in `skipped_count`; `paused` → everything empty; (c) `date_for` with
 `week_started_on` a Wednesday puts Mon/Tue in the following week; `last_school_day` correct for
 `MTWRF` and `MTWR`; (d) `every_server_message().len()` = previous + 2; protocol doc test green;
-(e) `cargo clippy --target wasm32-unknown-unknown --all-targets -- -D warnings` exits 0 and
+(e) `cargo clippy --features web --target wasm32-unknown-unknown -- -D warnings` exits 0 and
 `grep -rn chrono src/shared/` is empty; (f) `parse_days("Th")`, `"MM"`, `"X"` → `Err`; (g) `week_grid`
 on the fixture week 2 has **6** rows (free_read excluded) × 5 cells, `Fables` row all empty, `Twice Told`
 both rows in the Tuesday cell; with `dated = false` every `scheduled_date` is advisory and the grid

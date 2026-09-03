@@ -206,11 +206,11 @@ pub fn step_month(year: i32, month: u32, delta: i32) -> (i32, u32) {
 
 /// The items one boy has on one date, as the day sheet renders them.
 ///
-/// `due_today` already holds every occurrence dated that day (ticked or not),
-/// and every *unfinished* extra; a finished extra lives in `done`, so it is
-/// pulled back in here rather than vanishing from the sheet the moment it is
-/// ticked.
-pub fn day_items(view: &HomeschoolTodayView, user_id: i64, date: &str) -> Vec<DayItem> {
+/// `due_today` holds every item dated that day — lessons and extras alike,
+/// ticked or not (H3 rule 10, corrected by QH1-03) — so the sheet is exactly
+/// that list. Nothing is pulled back out of `done`: a ticked extra never left
+/// `due_today` in the first place.
+pub fn day_items(view: &HomeschoolTodayView, user_id: i64) -> Vec<DayItem> {
     let mut out = Vec::new();
     for group in &view.groups {
         for boy in &group.boys {
@@ -218,15 +218,6 @@ pub fn day_items(view: &HomeschoolTodayView, user_id: i64, date: &str) -> Vec<Da
                 continue;
             }
             out.extend(boy.due_today.iter().cloned());
-            out.extend(
-                boy.done
-                    .iter()
-                    .filter(|item| match item {
-                        DayItem::Extra(extra) => extra.scheduled_date == date,
-                        DayItem::Lesson(_) => false,
-                    })
-                    .cloned(),
-            );
         }
     }
     out
@@ -704,7 +695,7 @@ pub fn School() -> Element {
                     user_id,
                     items: day_view
                         .as_ref()
-                        .map(|view| day_items(view, user_id, &date))
+                        .map(|view| day_items(view, user_id))
                         .unwrap_or_default(),
                     on_action: dispatch,
                     on_close: move |()| open_day.set(None),

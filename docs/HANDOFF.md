@@ -3213,3 +3213,52 @@ against a file that is not there. Not blocking HS7's own Accept clauses
 **Boss, wave D close (2026-09-03): HS-10 applied.** `tests/curriculum_tests.rs` re-applied
 from `hs/HS2b` (`657a588`) as a Boss micro-commit; 9/9 green with the gitignored files present.
 HS8 can now audit HS2b's contract against the committed file.
+
+---
+
+## From HS3-qa1 (QA round 1 fixes) → the record
+
+### QH1-09. HS3 accept (e) amended — the wasm clippy gate loses `--all-targets`
+
+**PLAN v2 §5.2 log entry.** `docs/homeschool/PLAN_HOMESCHOOL.md:441` (HS3 accept (e))
+named `cargo clippy --target wasm32-unknown-unknown --all-targets -- -D warnings`. That
+command cannot compile on this tree at all: `--all-targets` pulls the dev-dependencies in
+and `tokio-tungstenite` → `tokio/net` → `mio` has no wasm backend (`error: This wasm target
+is unsupported by mio`). H-HS3-3 above verified the failure is **pre-existing** — it
+reproduces with every HS3 change stashed — and no crate target of ours is affected: the
+wasm build is `--lib` only, both binaries are `required-features = ["server"]`, and every
+integration test is `#![cfg(feature = "server")]`.
+
+The gate the project actually runs, in `docs/BASELINE.md` and in every task's DONE
+criteria, is `cargo clippy --features web --target wasm32-unknown-unknown -- -D warnings`,
+which HS3 ran clean. The **contract text was the defect**, not the code.
+
+**Applied by HS3-qa1** (branch `hs/HS3-qa1`), per Fable's audit item QH1-09 and PLAN v2
+§5.2 ("Criteria change only by a Boss commit to this file, logged in `docs/HANDOFF.md`"):
+line 441 now reads `(e) cargo clippy --features web --target wasm32-unknown-unknown --
+-D warnings exits 0 and grep -rn chrono src/shared/ is empty`. No assertion was removed or
+weakened — the same two things are still proven, by the command that can actually run.
+This closes H-HS3-3. `docs/homeschool/reviews/PURPLE_HS.md` keeps the original wording
+deliberately: it is the historical record of what the purple team proposed, not the contract.
+
+### QH1-03. `merge_extras` ordering — one existing assertion corrected, not weakened
+
+`src/shared/homeschool.rs::merge_extras` tested `extra.status.is_some()` **before**
+`scheduled_date == date`, so a ticked extra left `due_today` and lived only in `done` —
+H3 rule 10 orders the checks `due_today` first, and `today_view` keeps a ticked *lesson*
+in `due_today` with its status. The consequence was the D-2 hazard on the TV: a mis-ticked
+parent task vanished from the boy's list and could not be unticked there.
+
+Fixing it made
+`hs3_i_merge_extras_ignores_another_boys_task_and_counts_a_skipped_one`'s
+`assert!(today.due_today.is_empty())` false — that assertion encoded the defect (its extra
+is dated *today* and skipped). It is now `assert_eq!(titles(&today.due_today), vec!["Task 2"])`,
+which still proves the test's stated subject (another boy's task is ignored) and additionally
+proves the corrected placement. Every other assertion in the file is byte-identical, and
+`hs3_i_merge_extras_files_each_task_by_its_date_and_counts_only_the_current_span` gained a
+case rather than losing one. Flagging it here so the Boss sees the single changed assertion
+without reading the diff.
+
+`day_items` in `src/client/components/homeschool/mod.rs` loses its `boy.done` pull-back —
+and with it its now-unused `date` parameter — because a ticked extra no longer leaves
+`due_today`, which is what that workaround existed to undo.
