@@ -23,6 +23,7 @@
 use dioxus::prelude::*;
 
 use crate::client::components::glyphs;
+use crate::client::components::homeschool::day_sheet::EXTRA_TITLE_MAX;
 use crate::shared::homeschool::{Category, LogStatus, Weekday};
 use crate::shared::types::{ExtraTask, LessonOccurrence};
 
@@ -246,14 +247,25 @@ pub fn LessonRow(
 /// It leads with 📌 rather than its category glyph so a boy on the television
 /// and a parent on the phone both see at a glance which rows came from the
 /// curriculum and which came from mum.
+///
+/// H6's Month view promises "extras can be edited, deleted, ticked or skipped
+/// from the same sheet". Before QA round 2 (QH2-02) the row offered a checkbox
+/// and **Delete** only, so the two halves of that sentence the server had
+/// already implemented — `update_extra` and `toggle_extra(status)` — had no way
+/// in from the phone at all.
 #[component]
 pub fn ExtraRow(
     extra: ExtraTask,
     #[props(default = false)] catch_up: bool,
     #[props(default = false)] can_edit: bool,
     on_toggle: EventHandler<bool>,
+    on_skip: EventHandler<()>,
+    on_edit: EventHandler<String>,
     on_delete: EventHandler<()>,
 ) -> Element {
+    let mut editing = use_signal(|| false);
+    let mut draft = use_signal(|| extra.title.clone());
+
     let status = extra.status;
     let done = matches!(status, Some(LogStatus::Done));
 
@@ -283,11 +295,41 @@ pub fn ExtraRow(
                     span { class: "mt-0.5 block text-sm text-slate-600", "{text}" }
                 }
                 if can_edit {
-                    button {
-                        class: "mt-2 text-xs font-semibold text-red-700",
-                        aria_label: "Delete {extra.title}",
-                        onclick: move |_| on_delete.call(()),
-                        "Delete"
+                    div { class: "mt-2 flex gap-3 text-xs font-semibold text-sheffield-dark",
+                        button {
+                            onclick: move |_| {
+                                let next = !editing();
+                                editing.set(next);
+                            },
+                            "Edit title"
+                        }
+                        button { onclick: move |_| on_skip.call(()), "Skip" }
+                        button {
+                            class: "text-red-700",
+                            aria_label: "Delete {extra.title}",
+                            onclick: move |_| on_delete.call(()),
+                            "Delete"
+                        }
+                    }
+                    if editing() {
+                        div { class: "mt-2 flex items-center gap-2",
+                            input {
+                                class: "w-full rounded-xl border border-slate-200 bg-white p-2 text-sm text-slate-800",
+                                r#type: "text",
+                                maxlength: "{EXTRA_TITLE_MAX}",
+                                aria_label: "Title of {extra.title}",
+                                value: "{draft}",
+                                oninput: move |event| draft.set(event.value()),
+                            }
+                            button {
+                                class: "shrink-0 rounded-xl bg-sheffield-dark px-3 py-2 text-sm font-bold text-white",
+                                onclick: move |_| {
+                                    editing.set(false);
+                                    on_edit.call(draft());
+                                },
+                                "Save"
+                            }
+                        }
                     }
                 }
             }

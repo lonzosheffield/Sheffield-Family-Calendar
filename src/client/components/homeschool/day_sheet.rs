@@ -152,6 +152,39 @@ pub fn DaySheet(
                                             })
                                     }
                                 },
+                                on_skip: {
+                                    let extra_id = extra.id;
+                                    move |()| {
+                                        on_action
+                                            .call(SchoolAction::ToggleExtra {
+                                                user_id,
+                                                extra_id,
+                                                completed: true,
+                                                status: LogStatus::Skipped,
+                                            })
+                                    }
+                                },
+                                on_edit: {
+                                    let extra = extra.clone();
+                                    move |title: String| {
+                                        let title: String = title
+                                            .trim()
+                                            .chars()
+                                            .take(EXTRA_TITLE_MAX)
+                                            .collect();
+                                        if title.is_empty() {
+                                            return;
+                                        }
+                                        on_action
+                                            .call(SchoolAction::UpdateExtra {
+                                                extra_id: extra.id,
+                                                title,
+                                                category: extra.category,
+                                                text: extra.text.clone(),
+                                                scheduled_date: extra.scheduled_date.clone(),
+                                            });
+                                    }
+                                },
                                 on_delete: {
                                     let extra_id = extra.id;
                                     move |()| on_action.call(SchoolAction::DeleteExtra { extra_id })

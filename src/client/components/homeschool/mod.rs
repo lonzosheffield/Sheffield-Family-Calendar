@@ -48,7 +48,7 @@ use crate::server::api::{
     add_extra, delete_extra, enroll as enroll_boy, get_enrollments, get_homeschool_today,
     get_month, get_subject_settings, get_week_grid, list_curricula, mark_all_done, set_paused,
     set_school_week, set_subject_schedule, today as today_date, toggle_extra, toggle_lesson,
-    toggle_lesson_together, unenroll, upsert_assignment,
+    toggle_lesson_together, unenroll, update_extra, upsert_assignment,
 };
 use crate::shared::homeschool::{Category, LogStatus};
 use crate::shared::types::{
@@ -136,6 +136,17 @@ pub enum SchoolAction {
         title: String,
         category: Category,
         text: Option<String>,
+    },
+    /// Re-title or re-file one parent-added task (H6 Month view: "extras can
+    /// be edited, deleted, ticked or skipped from the same sheet"). The server
+    /// side has always been there; QA round 2 (QH2-02) found the client half
+    /// missing entirely.
+    UpdateExtra {
+        extra_id: i64,
+        title: String,
+        category: Category,
+        text: Option<String>,
+        scheduled_date: String,
     },
     DeleteExtra {
         extra_id: i64,
@@ -386,6 +397,14 @@ pub fn School() -> Element {
         _ => None,
     };
 
+    // The one thing on this tab that can fail with nothing to show for it.
+    // A Together tick is deliberately **not** queued offline (H6: the fan-out
+    // needs the group membership only the server holds), so an expired parent
+    // cookie, an unreachable hub or a boy moved to another week has to say so
+    // out loud — `docs/PWA.md` promises the parent a message, and QA round 2
+    // (QH2-03) found the failure being dropped on the floor instead.
+    let mut notice = use_signal(|| Option::<String>::None);
+
     // One dispatcher for every pane. Each arm is the same shape the Routine
     // tab's toggles already use: call the server function, queue it with its
     // own date and a key when the call fails, then refetch.
@@ -453,8 +472,9 @@ pub fn School() -> Element {
                     completed,
                 } => {
                     // Never queued (H6): the fan-out needs a group membership
-                    // only the server holds.
-                    let _ = toggle_lesson_together(
+                    // only the server holds. So the failure is shown, not
+                    // swallowed (QH2-03).
+                    if let Err(err) = toggle_lesson_together(
                         curriculum_id,
                         week,
                         subject_id,
@@ -465,7 +485,12 @@ pub fn School() -> Element {
                         new_idempotency_key(),
                         String::new(),
                     )
-                    .await;
+                    .await
+                    {
+                        notice.set(Some(format!(
+                            "Couldn't tick that for everyone — {err}. Sign in as a parent and try again."
+                        )));
+                    }
                 }
                 SchoolAction::ToggleExtra {
                     user_id,
@@ -527,6 +552,23 @@ pub fn School() -> Element {
                         text,
                         date,
                         new_idempotency_key(),
+                        String::new(),
+                    )
+                    .await;
+                }
+                SchoolAction::UpdateExtra {
+                    extra_id,
+                    title,
+                    category,
+                    text,
+                    scheduled_date,
+                } => {
+                    let _ = update_extra(
+                        extra_id,
+                        title,
+                        category,
+                        text,
+                        scheduled_date,
                         String::new(),
                     )
                     .await;
@@ -611,6 +653,20 @@ pub fn School() -> Element {
                             },
                             "{label}"
                         }
+                    }
+                }
+            }
+
+            if let Some(message) = notice() {
+                div {
+                    class: "flex items-center justify-between gap-3 rounded-2xl bg-sheffield-sun px-4 py-3 text-sm font-semibold text-slate-800",
+                    role: "alert",
+                    "data-school-notice": "true",
+                    span { "{message}" }
+                    button {
+                        class: "rounded-xl bg-white px-3 py-1 text-sm font-bold text-sheffield-dark",
+                        onclick: move |_| notice.set(None),
+                        "OK"
                     }
                 }
             }

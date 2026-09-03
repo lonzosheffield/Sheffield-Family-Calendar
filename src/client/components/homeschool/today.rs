@@ -27,6 +27,7 @@ use std::collections::BTreeMap;
 use dioxus::prelude::*;
 
 use crate::client::components::glyphs;
+use crate::client::components::homeschool::day_sheet::EXTRA_TITLE_MAX;
 use crate::client::components::homeschool::enroll::NoSchoolPlan;
 use crate::client::components::homeschool::row::{ExtraRow, LessonRow};
 use crate::client::components::homeschool::SchoolAction;
@@ -426,7 +427,14 @@ fn TogetherRow(
                         completed,
                     })
             },
-            on_skip: move |()| {},
+            on_skip: {
+                let slot = slot.clone();
+                move |()| {
+                    for action in together_row_actions(&slot, week, LogStatus::Skipped, None) {
+                        on_action.call(action);
+                    }
+                }
+            },
             on_edit: move |text: String| {
                 if let Some(ordinal) = edit_ordinal {
                     on_action
@@ -438,9 +446,53 @@ fn TogetherRow(
                         });
                 }
             },
-            on_note: move |_: String| {},
+            on_note: {
+                let slot = slot.clone();
+                move |note: String| {
+                    let status = slot.occurrence.status.unwrap_or(LogStatus::Done);
+                    let note = (!note.trim().is_empty()).then(|| note.trim().to_string());
+                    for action in together_row_actions(&slot, week, status, note) {
+                        on_action.call(action);
+                    }
+                }
+            },
         }
     }
+}
+
+/// **Skip** and **Note** on a Together row, fanned out to every boy it covers.
+///
+/// A shared read-aloud has no single owner, so there is no one `user_id` to
+/// hand `toggle_lesson`. But each covered boy's copy of the occurrence *is* a
+/// valid per-boy target — the same triple `toggle_lesson` validates against his
+/// own current week — so skipping or annotating the row is exactly one
+/// `ToggleLesson` per boy. Before QA round 2 (QH2-01) the two handlers were
+/// empty closures while `LessonRow` still drew the buttons, so a parent could
+/// press Skip on a read-aloud the family was not doing and watch nothing
+/// happen: the row stayed in Together catch-up until Finish week.
+///
+/// Ticking is **not** done this way: `toggle_lesson_together` is one
+/// transaction over the group the server holds (H4), and it is the only
+/// mutation that can honestly claim "everyone".
+pub fn together_row_actions(
+    slot: &TogetherOccurrence,
+    week: i64,
+    status: LogStatus,
+    note: Option<String>,
+) -> Vec<SchoolAction> {
+    slot.user_ids
+        .iter()
+        .map(|user_id| SchoolAction::ToggleLesson {
+            user_id: *user_id,
+            week,
+            subject_id: slot.occurrence.subject_id,
+            assignment_id: slot.occurrence.assignment_id,
+            scheduled_date: slot.occurrence.scheduled_date.clone(),
+            completed: true,
+            status,
+            note: note.clone(),
+        })
+        .collect()
 }
 
 fn edit_ordinal_for(
@@ -654,6 +706,32 @@ pub fn DayItemRow(
                                 status: LogStatus::Done,
                             })
                     },
+                    on_skip: move |()| {
+                        on_action
+                            .call(SchoolAction::ToggleExtra {
+                                user_id,
+                                extra_id,
+                                completed: true,
+                                status: LogStatus::Skipped,
+                            })
+                    },
+                    on_edit: {
+                        let extra = extra.clone();
+                        move |title: String| {
+                            let title: String = title.trim().chars().take(EXTRA_TITLE_MAX).collect();
+                            if title.is_empty() {
+                                return;
+                            }
+                            on_action
+                                .call(SchoolAction::UpdateExtra {
+                                    extra_id: extra.id,
+                                    title,
+                                    category: extra.category,
+                                    text: extra.text.clone(),
+                                    scheduled_date: extra.scheduled_date.clone(),
+                                });
+                        }
+                    },
                     on_delete: move |()| on_action.call(SchoolAction::DeleteExtra { extra_id }),
                 }
             }
@@ -713,7 +791,7 @@ pub const TAB_GLYPH: &str = glyphs::HOMESCHOOL_GLYPH;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shared::homeschool::TermNote;
+    use crate::shared::homeschool::{Category, TermNote, Weekday};
 
     fn group(week: i64, can_finish_week: bool, days_on_week: u32) -> TogetherGroup {
         TogetherGroup {
@@ -777,6 +855,86 @@ mod tests {
         let mut complete = group(4, true, 20);
         complete.year_complete = true;
         assert_eq!(nudge_line(&complete), None);
+    }
+
+    fn together_slot(user_ids: Vec<i64>) -> TogetherOccurrence {
+        TogetherOccurrence {
+            occurrence: LessonOccurrence {
+                subject_id: 3,
+                assignment_id: Some(32),
+                week: 2,
+                scheduled_date: "2026-09-08".into(),
+                weekday: Weekday::Tue,
+                category: Category::Reading,
+                title: "Old Tales".into(),
+                text: Some("ch. 2 'The Long Road'".into()),
+                detail: None,
+                source: None,
+                icon_name: None,
+                part: Some((1, 2)),
+                shared: true,
+                sort_order: 3,
+                status: None,
+                note: None,
+            },
+            user_ids,
+            done_user_ids: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn together_skip_and_note_fan_out_to_every_covered_boy() {
+        // QH2-01: a shared read-aloud has no single owner, so Skip and Note
+        // become one `toggle_lesson` per boy the row covers — the two handlers
+        // were empty closures while the buttons were on screen.
+        let slot = together_slot(vec![1, 2]);
+
+        let skipped = together_row_actions(&slot, 2, LogStatus::Skipped, None);
+        assert_eq!(skipped.len(), 2, "one per covered boy: {skipped:?}");
+        assert_eq!(
+            skipped,
+            vec![
+                SchoolAction::ToggleLesson {
+                    user_id: 1,
+                    week: 2,
+                    subject_id: 3,
+                    assignment_id: Some(32),
+                    scheduled_date: "2026-09-08".into(),
+                    completed: true,
+                    status: LogStatus::Skipped,
+                    note: None,
+                },
+                SchoolAction::ToggleLesson {
+                    user_id: 2,
+                    week: 2,
+                    subject_id: 3,
+                    assignment_id: Some(32),
+                    scheduled_date: "2026-09-08".into(),
+                    completed: true,
+                    status: LogStatus::Skipped,
+                    note: None,
+                },
+            ]
+        );
+
+        let noted =
+            together_row_actions(&slot, 2, LogStatus::Done, Some("stopped at p. 40".into()));
+        assert_eq!(noted.len(), 2, "one per covered boy: {noted:?}");
+        for (action, expected_user) in noted.iter().zip([1, 2]) {
+            match action {
+                SchoolAction::ToggleLesson {
+                    user_id,
+                    status,
+                    note,
+                    ..
+                } => {
+                    assert_eq!(*user_id, expected_user);
+                    assert_eq!(*status, LogStatus::Done);
+                    assert_eq!(note.as_deref(), Some("stopped at p. 40"));
+                }
+                other => panic!("a Together note is a per-boy lesson toggle: {other:?}"),
+            }
+        }
     }
 
     #[test]

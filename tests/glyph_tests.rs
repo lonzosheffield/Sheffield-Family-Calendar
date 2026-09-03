@@ -732,6 +732,46 @@ fn hs5_c_a_paused_group_says_school_is_out_and_a_finished_year_celebrates() {
     assert!(html.contains("Year complete"), "{html}");
 }
 
+#[test]
+fn hs5_c_a_boy_paused_inside_a_live_group_gets_schools_out_not_nothing_left() {
+    // QH1-04's phone half, named at last by round 2 (QH2-07). A boy with no
+    // rows *and* no work at all inside a group that is not paused is a boy
+    // whose own enrollment is paused — "Nothing left for Nathaniel today."
+    // would congratulate him on finishing a day he never started.
+    let mut view = fixture_today_view();
+    {
+        let boy = &mut view.groups[0].boys[1];
+        assert_eq!(boy.name, "Nathaniel", "the fixture's second boy");
+        boy.due_today.clear();
+        boy.catch_up.clear();
+        boy.done.clear();
+        boy.done_count = 0;
+        boy.skipped_count = 0;
+        boy.total_count = 0;
+    }
+    let html = render_today(view, false);
+
+    assert!(
+        html.contains("School&#39;s out for Nathaniel"),
+        "a boy with nothing dealt out to him is out of school, not finished: {html}"
+    );
+    assert!(
+        !html.contains("Nothing left for Nathaniel"),
+        "and he is never told he is done: {html}"
+    );
+
+    // His brother's own block is untouched: the group itself is live.
+    let isaiah = slice_at(&html, "data-school-boy", "1");
+    assert!(
+        isaiah.contains("data-lesson-row"),
+        "the boy still enrolled keeps his rows: {isaiah}"
+    );
+    assert!(
+        !isaiah.contains("School&#39;s out for"),
+        "and is not swept up in his brother's pause: {isaiah}"
+    );
+}
+
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -1454,6 +1494,17 @@ fn hs5_j_only_a_parent_is_offered_the_add_task_form() {
         "three kinds of task, and free reading is not one of them: {parent_html}"
     );
 
+    // QH2-02: H6 says extras can be "edited, deleted, ticked or skipped from
+    // the same sheet". Before round 2 the row offered a checkbox and Delete
+    // only, so two of those four verbs had no way in from the phone at all.
+    let parent_extra = slice_at(&parent_html, "data-extra-row", "91");
+    for affordance in [">Skip<", ">Edit title<", ">Delete<"] {
+        assert!(
+            parent_extra.contains(affordance),
+            "a parent's extra row offers {affordance}: {parent_extra}"
+        );
+    }
+
     let signed_out_html = dioxus::ssr::render_element(rsx! {
         DaySheetHarness {
             date: FIXTURE_TUESDAY.to_string(),
@@ -1468,6 +1519,14 @@ fn hs5_j_only_a_parent_is_offered_the_add_task_form() {
         !signed_out_html.contains("Add task"),
         "a signed-out phone is not offered a form the hub would refuse: {signed_out_html}"
     );
+    let signed_out_extra = slice_at(&signed_out_html, "data-extra-row", "91");
+    for affordance in [">Skip<", ">Edit title<", ">Delete<"] {
+        assert!(
+            !signed_out_extra.contains(affordance),
+            "editing an extra is a parent action (H7), so {affordance} is not \
+             on offer signed out: {signed_out_extra}"
+        );
+    }
 }
 
 #[test]
@@ -1611,5 +1670,27 @@ fn hs5_qa1_the_year_and_month_resources_read_the_signals_they_are_keyed_on() {
             "{memo}…) is what makes the read above reactive: {path:?}"
         );
     }
+    // QH2-03: a Together tick is deliberately never queued offline (H6), so
+    // the one thing it must not do is fail in silence — `docs/PWA.md` promises
+    // the parent "a message". `let _ = toggle_lesson_together(…)` threw the
+    // error away and left the box empty with no word why.
+    let together_start = source
+        .find("SchoolAction::ToggleTogether {")
+        .expect("`School()` must still dispatch a Together tick");
+    let arm = &source[together_start..];
+    let arm_end = arm
+        .find("SchoolAction::ToggleExtra {")
+        .expect("the Together arm is followed by the extra arm");
+    let arm = &arm[..arm_end];
+    assert!(
+        arm.contains("notice.set("),
+        "a failed Together tick must set the notice banner: {arm}"
+    );
+    assert!(
+        !arm.contains("let _ = toggle_lesson_together"),
+        "a Together tick's error may not be discarded: {arm}"
+    );
+
     println!("grid_res reads grid_week()/focus(); month_res reads cursor()/focus()");
+    println!("the Together arm sets notice.set(…) instead of discarding the error");
 }
