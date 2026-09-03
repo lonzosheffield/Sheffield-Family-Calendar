@@ -588,6 +588,23 @@ fn school_card(text: String) -> Element {
     }
 }
 
+/// The routine's 8/8 chip, in the School panel's words (§2.4) — drawn on its
+/// own for the boy with no rows left, and above the list for a day whose rows
+/// are all ticked (QH1-04).
+fn celebration_chip(done: u32, total: u32) -> Element {
+    rsx! {
+        div { class: "flex shrink-0 items-center gap-8",
+            p {
+                id: "tv-school-count",
+                class: "{TV_HEADING} shrink-0 rounded-full bg-sheffield-sun px-8 py-1 font-poster font-bold text-slate-800",
+                "{done} / {total}"
+                span { class: "select-none", "aria-hidden": "true", " {ROUTINE_GLYPH}" }
+            }
+            p { class: "{TV_HEADING} text-slate-800", "School work all done!" }
+        }
+    }
+}
+
 fn homeschool_panel(model: &TvModel, focused: Option<&FocusId>) -> Element {
     match school(model).state {
         TvSchoolState::Loading => school_card("Loading today's school…".to_string()),
@@ -597,22 +614,19 @@ fn homeschool_panel(model: &TvModel, focused: Option<&FocusId>) -> Element {
         TvSchoolState::NoSchoolToday => school_card(format!("No school today {}", ball_glyph(1))),
         TvSchoolState::YearComplete => school_card(format!("Year complete {YEAR_COMPLETE_GLYPH}")),
         // The routine's 8/8 chip, in the School panel's words (§2.4).
-        TvSchoolState::AllDone { done, total } => rsx! {
-            div { class: "flex shrink-0 items-center gap-8",
-                p {
-                    id: "tv-school-count",
-                    class: "{TV_HEADING} shrink-0 rounded-full bg-sheffield-sun px-8 py-1 font-poster font-bold text-slate-800",
-                    "{done} / {total}"
-                    span { class: "select-none", "aria-hidden": "true", " {ROUTINE_GLYPH}" }
-                }
-                p { class: "{TV_HEADING} text-slate-800", "School work all done!" }
-            }
-        },
+        TvSchoolState::AllDone { done, total } => celebration_chip(done, total),
         TvSchoolState::Day {
             due_today,
             catch_up,
-            ..
+            done,
+            total,
+            celebrate,
         } => rsx! {
+            // QH1-04: a fully ticked day still has rows — the chip sits above
+            // them so the celebration is seen and a mis-tick stays undoable.
+            if celebrate {
+                {celebration_chip(done, total)}
+            }
             ul { class: "flex min-h-0 flex-1 flex-col gap-5 overflow-auto",
                 if !due_today.is_empty() {
                     {section_label("TODAY")}

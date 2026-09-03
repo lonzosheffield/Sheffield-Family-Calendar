@@ -54,6 +54,7 @@ use family_calendar::client::components::tv::style::{
 use family_calendar::client::components::tv::surface::TvSurface;
 use family_calendar::server::db::SHEFFIELD_MORNING_ROUTINE;
 use family_calendar::server::health::STALENESS_THRESHOLD;
+use family_calendar::shared::homeschool::LogStatus;
 use family_calendar::shared::types::{
     CalendarEvent, DayItem, LessonOccurrence, MaximizedView, ServerMessage, FAMILY_PROFILE_COUNT,
 };
@@ -1894,4 +1895,97 @@ fn hs6_h_a_parent_added_task_is_pinned_and_tickable_from_the_remote() {
     ] {
         assert!(shell.contains(needle), "{path} never calls `{needle}`");
     }
+}
+
+/// (i) QH1-04 — the two sentences a boy with nothing on the screen can be
+/// told, told apart.
+///
+/// `today_view` keeps a ticked occurrence in `due_today`, so a day whose work
+/// is finished still has twelve rows to draw: the celebration chip therefore
+/// goes **above** the list, not instead of it, and every row stays focusable
+/// so a mis-tick is one `Enter` from undone. The other way to reach an empty
+/// screen is a boy whose own enrollment is paused inside a group that is not
+/// (`api/homeschool.rs`'s group `paused` is an `all(...)`): he has no rows and
+/// no work, and "0 / 0 School work all done!" would be a lie about a day he
+/// never started.
+#[test]
+fn hs6_i_a_fully_ticked_day_celebrates_and_a_boy_with_no_work_gets_no_school_today() {
+    // --- every row ticked -------------------------------------------------
+    // H3 rule 8 keeps only *unlogged* past work in `catch_up`, so a day whose
+    // work is finished has nothing left over from yesterday — the twelve rows
+    // the panel walks arrive in one list, every one of them logged.
+    let mut view = canonical_school();
+    {
+        let boy = &mut view.groups[0].boys[0];
+        let left_over: Vec<DayItem> = std::mem::take(&mut boy.catch_up);
+        boy.due_today.extend(left_over);
+        for item in boy.due_today.iter_mut() {
+            match item {
+                DayItem::Lesson(lesson) => lesson.status = Some(LogStatus::Done),
+                DayItem::Extra(extra) => extra.status = Some(LogStatus::Done),
+            }
+        }
+        boy.done_count = 12;
+        boy.total_count = 12;
+    }
+    let mut model = school_model();
+    model.homeschool = Some(view);
+
+    let html = render(&model);
+    let chip = tags(&html)
+        .into_iter()
+        .find(|tag| tag.attr("id") == Some("tv-school-count"))
+        .expect("a finished day never showed the celebration chip");
+    assert_eq!(chip.name, "p");
+    assert!(
+        html.contains("12 / 12") && html.contains("School work all done!"),
+        "the chip lost its count or its sentence:\n{html}"
+    );
+
+    // ...and it celebrated *over* the work, not instead of it.
+    let body = body_order(&model);
+    assert_eq!(
+        body.len(),
+        CANONICAL_SCHOOL_LESSON_ROWS + 1,
+        "a finished day stopped being tickable: {body:?}"
+    );
+    assert_eq!(
+        TvLayout::of(&model).body_len(TvPanel::Homeschool),
+        CANONICAL_SCHOOL_LESSON_ROWS + 1
+    );
+    let ids = rendered_focus_ids(&html);
+    for focus in &body {
+        assert!(
+            ids.contains(&focus.dom_id()),
+            "{} left the DOM once the day was finished",
+            focus.dom_id()
+        );
+    }
+
+    // --- a boy with no rows and no work -----------------------------------
+    let mut view = canonical_school();
+    {
+        let boy = &mut view.groups[0].boys[0];
+        boy.due_today.clear();
+        boy.catch_up.clear();
+        boy.done.clear();
+        boy.done_count = 0;
+        boy.total_count = 0;
+    }
+    // The group itself is *not* paused — that is exactly the case the group's
+    // `all(...)` hides, and the one that used to render "0 / 0".
+    assert!(!view.groups[0].paused && view.is_school_day);
+    let mut model = school_model();
+    model.homeschool = Some(view);
+
+    let html = render(&model);
+    assert!(
+        html.contains("No school today"),
+        "a boy with no work was told he had finished some:\n{html}"
+    );
+    assert!(
+        !html.contains("tv-school-count") && !html.contains("School work all done!"),
+        "the celebration chip fired for a boy who never started:\n{html}"
+    );
+    assert!(body_order(&model).is_empty());
 }

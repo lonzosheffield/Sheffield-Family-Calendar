@@ -486,7 +486,14 @@ fn BoyBlock(
                     }
                 }
             }
-            if due_today.is_empty() && catch_up.is_empty() {
+            if due_today.is_empty() && catch_up.is_empty() && boy.total_count == 0 {
+                // QH1-04: no rows *and* no work is a boy whose own enrollment
+                // is paused inside a group that is not — "nothing left" would
+                // claim he finished a day he never started.
+                p { class: "rounded-2xl bg-white p-4 text-sm text-slate-600 ring-1 ring-slate-100",
+                    "School's out for {boy.name} ⚽"
+                }
+            } else if due_today.is_empty() && catch_up.is_empty() {
                 p { class: "rounded-2xl bg-white p-4 text-sm text-slate-600 ring-1 ring-slate-100",
                     "Nothing left for {boy.name} today."
                 }

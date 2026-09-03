@@ -494,6 +494,11 @@ pub enum TvSchoolState {
         catch_up: Vec<DayItem>,
         done: u32,
         total: u32,
+        /// Every row on the screen is logged (QH1-04). `today_view` keeps a
+        /// ticked occurrence in `due_today`, so a finished day still has rows
+        /// to draw — the celebration chip goes **above** them rather than
+        /// replacing them, which keeps a mis-tick one `Enter` from undone.
+        celebrate: bool,
     },
 }
 
@@ -555,15 +560,30 @@ pub fn school(model: &TvModel) -> TvSchool {
 
     let due_today = his_own(&boy.due_today);
     let catch_up = his_own(&boy.catch_up);
+    // QH1-04: nothing to draw is two different sentences. A boy whose own
+    // enrollment is paused inside a two-boy group has no rows *and* no work
+    // (`total_count == 0`; the group's `paused` is `all(...)`, so the card
+    // above did not fire) — for him it is "No school today", not "0 / 0 all
+    // done!". Only a boy who had work reaching zero rows has finished it.
     if due_today.is_empty() && catch_up.is_empty() {
         return TvSchool {
             week,
-            state: TvSchoolState::AllDone {
-                done: boy.done_count,
-                total: boy.total_count,
+            state: if boy.total_count == 0 {
+                TvSchoolState::NoSchoolToday
+            } else {
+                TvSchoolState::AllDone {
+                    done: boy.done_count,
+                    total: boy.total_count,
+                }
             },
         };
     }
+
+    let celebrate = catch_up.is_empty()
+        && due_today.iter().all(|item| match item {
+            DayItem::Lesson(lesson) => lesson.status.is_some(),
+            DayItem::Extra(extra) => extra.status.is_some(),
+        });
 
     TvSchool {
         week,
@@ -572,6 +592,7 @@ pub fn school(model: &TvModel) -> TvSchool {
             catch_up,
             done: boy.done_count,
             total: boy.total_count,
+            celebrate,
         },
     }
 }
