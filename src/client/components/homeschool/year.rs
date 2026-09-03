@@ -80,6 +80,25 @@ pub fn entry_days(row: &WeekGridRow, days: &[Weekday], assignment_id: Option<i64
     }
 }
 
+/// Which `days` the cell sheet's **text** Save writes back.
+///
+/// The days control is prefilled with the row's *resolved* days, so writing
+/// that back on a text-only edit pinned a floating row and dropped its rule-5
+/// part labels (QA round 5, QH5-02) — while the row's stored value is `None`,
+/// meaning "inherit the subject's". But writing the stored value back
+/// *unconditionally* threw away a days edit the parent had typed and not yet
+/// saved (QA round 6, QH6-03), which the pre-QH5-02 code did land. So: the
+/// stored value while the control still shows its prefill, the parent's own
+/// value once they have changed it — and never a blank string, which the
+/// schema's `GLOB` would take (the one thing the deleted `pinned_days` guarded).
+pub fn text_save_days(stored: Option<&str>, prefill: &str, typed: &str) -> Option<String> {
+    if typed.trim() == prefill.trim() {
+        return stored.map(str::to_string);
+    }
+    let typed = typed.trim();
+    (!typed.is_empty()).then(|| typed.to_string())
+}
+
 /// The Year pane.
 #[component]
 pub fn YearPanel(
@@ -314,9 +333,11 @@ pub fn YearCellSheet(
 ///
 /// Both parent controls write the **same row** — `upsert_assignment` replaces
 /// `text`, `detail` and `days` together — so each of them sends all three: the
-/// text control carries the days on screen, the days control carries the text
-/// on screen, and neither can quietly erase the other's value or the source's
-/// `detail` (QH3-02, QH3-04).
+/// days control carries the text on screen, and the text control carries the
+/// row's stored `days` while the days control is untouched (QH5-02: its prefill
+/// is the *resolved* days, which would pin a floating row) and the parent's own
+/// value once they have changed it (QH6-03). Neither can quietly erase the
+/// other's value or the source's `detail` (QH3-02, QH3-04).
 #[component]
 fn CellEntry(
     occurrence: LessonOccurrence,
@@ -337,6 +358,9 @@ fn CellEntry(
     // inherit the subject's), never the resolved days the control displays —
     // otherwise a text edit pins a floating row and drops its part labels.
     let stored_days = occurrence.days.as_deref().map(days_to_string);
+    // The value the days control was prefilled with, so a Save can tell an
+    // untouched control from one the parent has changed (QH5-02 / QH6-03).
+    let prefill = entry_days.clone();
     let title = occurrence.title.clone();
     let body = occurrence
         .text
@@ -366,6 +390,7 @@ fn CellEntry(
                         onclick: {
                             let detail = detail.clone();
                             let stored_days = stored_days.clone();
+                            let prefill = prefill.clone();
                             move |_| {
                                 on_action
                                     .call(SchoolAction::EditAssignment {
@@ -374,7 +399,11 @@ fn CellEntry(
                                         ordinal,
                                         text: draft(),
                                         detail: detail.clone(),
-                                        days: stored_days.clone(),
+                                        days: text_save_days(
+                                            stored_days.as_deref(),
+                                            &prefill,
+                                            &days(),
+                                        ),
                                     })
                             }
                         },
@@ -496,6 +525,20 @@ mod tests {
         // A row the grid does not hold falls back to the grid's own columns
         // rather than to nothing, which the server would reject.
         assert_eq!(days_to_string(&entry_days(&row, &days, Some(99))), "MTWRF");
+    }
+
+    #[test]
+    fn a_text_save_leaves_an_untouched_days_control_alone_and_honours_a_changed_one() {
+        // QH5-02: untouched → the row's stored value; `None` keeps it floating.
+        assert_eq!(text_save_days(None, "MW", "MW"), None);
+        assert_eq!(text_save_days(None, "MW", " MW "), None);
+        assert_eq!(text_save_days(Some("M"), "M", "M"), Some("M".to_string()));
+        // QH6-03: changed → what the parent typed, never silently discarded.
+        assert_eq!(text_save_days(None, "MW", "MF"), Some("MF".to_string()));
+        assert_eq!(text_save_days(Some("M"), "M", "W"), Some("W".to_string()));
+        // The deleted `pinned_days`'s one piece of value: blank is not a pin.
+        assert_eq!(text_save_days(Some("M"), "M", "   "), None);
+        assert_eq!(text_save_days(None, "MW", ""), None);
     }
 
     fn fixture_days(letters: &str) -> Vec<Weekday> {

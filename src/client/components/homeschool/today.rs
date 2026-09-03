@@ -93,15 +93,28 @@ pub fn BoyChips(
 
 /// H2: "complete" is every occurrence and every in-span extra logged — the rows
 /// `header_chip_text` sums (H3 rule 8 + rule 10), so the chip and the nudge
-/// cannot disagree.
+/// cannot disagree — **and** a week the server will actually let the parent
+/// finish, so the nudge and the button cannot disagree either.
+///
+/// The second half is QA round 6, QH6-02: `sched::today_view` returns early on
+/// a paused enrollment, so a paused brother contributes `0` to both sums while
+/// `can_finish_week_with_extras` — which does not check `paused` — still reads
+/// his unfinished week and holds `all_can_finish` back. Without the gate the
+/// banner asked "Week N done — start week N+1?" with no **Finish week** button
+/// beside it. Dropping the old `total > 0` floor is part of the same gate: a
+/// week with nothing in it at all is "done" only when the server agrees it can
+/// be finished.
 pub fn week_is_complete(group: &TogetherGroup) -> bool {
+    if !group.can_finish_week {
+        return false;
+    }
     let logged: u32 = group
         .boys
         .iter()
         .map(|boy| boy.done_count + boy.skipped_count)
         .sum();
     let total: u32 = group.boys.iter().map(|boy| boy.total_count).sum();
-    total > 0 && logged >= total
+    logged >= total
 }
 
 /// H2's nudge line, or `None` when the week needs no nudging. Three sentences,
@@ -832,6 +845,32 @@ mod tests {
             nudge_line(&group(2, true, 4)).as_deref(),
             Some("Last school day of week 2 — finish it now, or carry the rest into next week")
         );
+    }
+
+    #[test]
+    fn a_paused_brothers_unfinished_week_never_calls_the_group_done() {
+        // QH6-02: `today_view` zeroes a paused boy's three counts, so the
+        // group's sums look complete while the server's `all_can_finish` —
+        // which does not check `paused` — withholds the Finish week button.
+        // The nudge must not ask a question the banner cannot answer.
+        let mut group = group(2, false, 3);
+        group.boys[0].done_count = 10;
+        group.boys[0].skipped_count = 1;
+        group.boys.push(BoyToday {
+            user_id: 2,
+            name: "Nathaniel".into(),
+            due_today: Vec::new(),
+            catch_up: Vec::new(),
+            done: Vec::new(),
+            done_count: 0,
+            skipped_count: 0,
+            total_count: 0,
+        });
+        assert!(
+            !week_is_complete(&group),
+            "QH6-02: a paused brother's zeroed counts must not read as a finished week"
+        );
+        assert_eq!(nudge_line(&group), None);
     }
 
     #[test]
