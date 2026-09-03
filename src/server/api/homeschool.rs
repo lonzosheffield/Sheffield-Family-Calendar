@@ -678,7 +678,11 @@ pub async fn get_month(user_id: i64, year: i32, month: u32) -> Result<MonthView,
         };
 
         let today = today_string();
-        Ok(sched::month_view(
+        // QH2-06: month_view falls back to the first extra's owner (or 0)
+        // for user_id when the boy is unenrolled with no extras, which
+        // names the wrong boy on the wire. Stamp the DTO with the user_id
+        // that was actually asked for.
+        let mut view = sched::month_view(
             enrollment.as_ref(),
             plan.as_ref(),
             &logs,
@@ -686,7 +690,9 @@ pub async fn get_month(user_id: i64, year: i32, month: u32) -> Result<MonthView,
             year,
             month,
             &today,
-        ))
+        );
+        view.user_id = user_id;
+        Ok(view)
     }
     #[cfg(not(feature = "server"))]
     {
@@ -1082,7 +1088,14 @@ pub async fn toggle_lesson_together(
                     assignment_id,
                     scheduled_date.clone(),
                 );
+                // QH2-04: same shape as QH1-01 — a boy whose row for this
+                // occurrence is already `skipped` must have it cleared
+                // before the Done row is written, or the ON CONFLICT DO
+                // NOTHING leaves him skipped while his brothers go done.
                 if completed {
+                    hs::clear_occurrence(&mut *tx, &key)
+                        .await
+                        .map_err(super::to_server_error)?;
                     hs::set_occurrence(&mut *tx, &key, LogStatus::Done.as_str(), None, &date)
                         .await
                         .map_err(super::to_server_error)?;

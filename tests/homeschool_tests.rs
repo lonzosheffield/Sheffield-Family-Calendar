@@ -715,6 +715,25 @@ async fn hs4_f_toggle_lesson_together_writes_exactly_the_two_boys_sharing_the_we
 
     let (subject, assignment, scheduled_date) = first_occurrence(TOGETHER_A, 2, "Old Tales").await;
 
+    // QH2-04: TOGETHER_B already has a `skipped` row for this triple. The
+    // Together tick must clear it, not leave it skipped while his brother
+    // goes done (ON CONFLICT DO NOTHING would silently no-op otherwise).
+    api::toggle_lesson(
+        TOGETHER_B,
+        subject,
+        assignment,
+        2,
+        scheduled_date.clone(),
+        true,
+        LogStatus::Skipped,
+        None,
+        today_string(),
+        format!("hs4-f-pre-{}", uuid_ish()),
+    )
+    .await
+    .expect("pre-seeding TOGETHER_B as skipped succeeds");
+    assert_eq!(log_row_count(pool, TOGETHER_B).await, 1);
+
     let token = parent_session().await;
     api::toggle_lesson_together(
         curriculum_id,
@@ -736,6 +755,23 @@ async fn hs4_f_toggle_lesson_together_writes_exactly_the_two_boys_sharing_the_we
         log_row_count(pool, SOLO).await,
         0,
         "a boy on a different week must be untouched"
+    );
+
+    let (together_b_status,): (String,) =
+        sqlx::query_as("SELECT status FROM lesson_log WHERE profile_id = ?1 AND subject_id = ?2")
+            .bind(TOGETHER_B)
+            .bind(subject)
+            .fetch_one(pool)
+            .await
+            .expect("exactly one lesson_log row for TOGETHER_B/subject");
+    assert_eq!(
+        together_b_status, "done",
+        "QH2-04: a previously-skipped boy must be flipped to done by the Together tick"
+    );
+    assert_eq!(
+        log_row_count(pool, TOGETHER_B).await,
+        1,
+        "QH2-04: clearing then re-setting must not leave a second row"
     );
 }
 
@@ -1117,6 +1153,19 @@ async fn hs4_l_get_month_fetches_the_current_week_plan_only_when_it_intersects_a
         .find(|d| d.date == "2026-09-10")
         .expect("the 10th is in the month");
     assert_eq!(extra_day.extras, 1);
+    // QH2-06: month_view's user_id falls back to the first extra's owner
+    // (here, UNENROLLED does have an extra, so this alone would still pass —
+    // the real bug is the boy with no extras at all, checked below).
+    assert_eq!(unenrolled_month.user_id, UNENROLLED);
+
+    // QH2-06: an unenrolled boy with *no* extras must still get the DTO
+    // stamped with the user_id that was actually asked for, not fall back
+    // to the first extra's owner (or 0).
+    const NO_EXTRAS: i64 = 4;
+    let no_extras_month = api::get_month(NO_EXTRAS, 2026, 9)
+        .await
+        .expect("month for an unenrolled boy with no extras is not an error");
+    assert_eq!(no_extras_month.user_id, NO_EXTRAS);
 }
 
 // ---------------------------------------------------------------------------
