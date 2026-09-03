@@ -3302,3 +3302,26 @@ HS5-qa1 (QH1-02, QH1-05, QH1-07), `71220b1` HS3-qa1 (QH1-03, QH1-09), `b5de105` 
   to the owners of `tests/realtime_tests.rs` (HS3/T1.2) and `tests/homeschool_db_tests.rs`
   (HS1); HS5's hypothesis — a stale board row in the shared `FAMILY_HUB_DATA_DIR`, the same
   class as `838e62f`'s pid-keyed scratch-dir wipe — is the first thing to check.
+
+## Boss, QA round 2 close (2026-09-03) — dispositions of the fixing wave's notes
+
+Landed on `main` as three squash commits, each followed by a green baseline (fmt, both clippy
+gates, full `cargo test --features server`, 33 binaries, 0 failed): `7fe7102` HS5-qa2 (QH2-01,
+-02, -03, -07), `b0f5b37` HS4-qa2 (QH2-04, QH2-06), `1d650db` HS1-qa2 (QH2-05 = QH1-08).
+Dispositions in `docs/qa/QA_HS_ROUND_2.md` "Boss close".
+
+* **HS1-qa2 note 1 (squash-merge `hs/HS1-qa2`, never `hs/HS1-qa1`; close the BLOCKED entry) —
+  applied.** `docs/BLOCKED.md` HS1-qa1 entry marked RESOLVED with the commit; `hs/HS1-qa1`'s
+  its worktree removed at this close; the branch stays for provenance (its exact diff lives on `main` now).
+* **HS1-qa2 note 2 (four flaky-under-load failures + 3478 leftover scratch dirs) — recorded** as
+  `docs/RESIDUAL.md` R-4 with the mechanism and the one-line fix for each, owners named. No code
+  change: none of the four failed in this close's four full runs after the pre-run wipe (41
+  leftovers this time).
+* **HS5-qa2 note (`whiteboard_tests` failed once under machine load, green on retry) — recorded**
+  under R-4's umbrella; not reproduced in any Boss baseline.
+* **HS4-qa2 note (`whiteboard_tests` / `realtime_tests` flakes only under contended, parallel
+  invocation) — recorded**, same.
+* **HS5-qa2 deviation, accepted:** QH2-02's optional `the_day_sheet_can_skip_and_retitle_an_extra`
+  unit test was not added (its only assertion — a `match` arm exists — is a compile-time fact,
+  and `hs5_j` proves the render); the `input`'s `aria_label` reads "Title of {title}" rather than
+  the audit's "Title for {title}". Neither weakens an Accept clause.

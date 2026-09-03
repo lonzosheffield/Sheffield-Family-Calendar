@@ -111,3 +111,21 @@ Severity: Critical / High / Med / Low. PASS requires zero Critical/High/Med.
 - Nothing here touches `migrations/`, the DTOs in `types.rs`, or a normative signature.
 - `dx build --platform web --release` was not re-run in this round (HS7's transcript stands; the wasm clippy gate, which is the compile half, passed here).
 - Residuals recorded by the wave (`docs/RESIDUAL.md` R-2/R-3, HANDOFF H-HS3-5 load-flaky tests) stand; neither flaky test failed in either full run here.
+
+## Boss close (2026-09-03)
+
+| Item | Fixed on | Squash commit on `main` | Note |
+| --- | --- | --- | --- |
+| QH2-01 | `hs/HS5-qa2` | `7fe7102` | `together_row_actions()` fans Skip/Note out to one `ToggleLesson` per covered boy; unit test `together_skip_and_note_fan_out_to_every_covered_boy`. |
+| QH2-02 | `hs/HS5-qa2` | `7fe7102` | `SchoolAction::UpdateExtra` + dispatch; `ExtraRow` gains Edit title / Skip; `hs5_j_*` asserts `>Skip<`, `>Edit title<`, `>Delete<` on the parent side and none signed out. The separate `the_day_sheet_can_skip_and_retitle_an_extra` unit test was not written — the `match` arm it would assert is proven at compile time and `hs5_j` covers the render; accepted. |
+| QH2-03 | `hs/HS5-qa2` | `7fe7102` | `notice` signal + `role="alert"` / `data-school-notice` banner (`bg-sheffield-sun` + `text-slate-800`); `hs5_qa1_*` source-shape guard extended. |
+| QH2-04 | `hs/HS4-qa2` | `b0f5b37` | `clear_occurrence` then `set_occurrence` on a Together tick; `hs4_f_*` pre-seeds `TOGETHER_B` skipped and asserts `done`, one row. |
+| QH2-05 | `hs/HS1-qa2` | `1d650db` | `076367f`'s two files replayed onto `main` (not a merge of `hs/HS1-qa1`); assertion shown load-bearing against the reverted loader. `docs/BLOCKED.md` HS1-qa1 entry closed. |
+| QH2-06 | `hs/HS4-qa2` | `b0f5b37` | `get_month` stamps `view.user_id = user_id`; `hs4_l_*` asserts `UNENROLLED` and an extras-less boy `4`. |
+| QH2-07 | `hs/HS5-qa2` | `7fe7102` | `hs5_c_a_boy_paused_inside_a_live_group_gets_schools_out_not_nothing_left` (SSR escapes the apostrophe: `School&#39;s out for Nathaniel`). |
+
+Every merge was followed by a green baseline (fmt, clippy server `--all-targets`, clippy web
+wasm, full `cargo test --features server`: 33 binaries, 0 failed, three times, plus the final
+baseline). N1 re-checked on each diff: no `Ambleside`, no string from the gitignored TOML, and
+`git ls-files docs/homeschool/curriculum/` empty. Suite flakiness under load is now
+`docs/RESIDUAL.md` R-4. Round 3 should re-audit QH2-01…-07 on `main`.

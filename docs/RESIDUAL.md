@@ -70,3 +70,41 @@ is a defect the QA loop (T3.5) is still owed; a residual is a deliberate
   wants the check to be exercisable from a clean checkout, it would need its
   own committed synthetic curriculum (mirroring `tests/fixtures/curricula/sample-year.toml`)
   loaded into a scratch directory rather than the real AO file.
+
+## R-4. The full suite is flaky under parallel load (pre-existing; four distinct failures catalogued)
+
+- **Origin:** HANDOFF H-HS3-5 (wave A), the HS5-qa1 / HS7-qa1 notes at the QA round 1 close,
+  and HS1-qa2's five-run study at the QA round 2 close (reproduced on `main` @ `0889f16`, so
+  not introduced by any HS branch). Each binary passes 4–5/5 in isolation; failures appear
+  only when `cargo test --features server` runs its ~33 binaries concurrently, worse while
+  another cargo build or a second full suite is running on the box.
+- **What ships:** the eight Boss baselines of the two QA closes (2026-09-03) were all green
+  after wiping `%TEMP%\familyhub-*` first — the round 2 close found 41 leftover scratch dirs
+  (HS1-qa2 found 3478 the day before), each a pid-keyed directory some earlier run never
+  removed (`838e62f` wipes them on reuse, not on exit).
+- **The four failures seen, with the mechanism and the fix each wants:**
+  1. `realtime_tests::t1_2_7_a_client_reconnects_and_resnapshots_within_thirty_seconds`
+     ("the snapshot replays the stroke drawn before the restart, left: 149, right: 1") and
+     its sibling `loop_tests::t2_6_phone_drives_the_tv_across_a_server_restart`: every test
+     in the binary shares one sqlite file and `DEFAULT_BOARD_ID`, so a concurrent sibling's
+     strokes land in the snapshot. Fix: a per-test board id (or a per-test data dir) in those
+     two binaries; owners HS3/T1.2.
+  2. `backup_tests::restore_drill_recreates_the_live_database_from_a_backup`:
+     `remove_with_sidecars` swallows `std::fs::remove_file`'s error, so a Windows delete
+     refused by a still-open handle leaves `assert!(!db_path.exists())` to fail. Fix:
+     retry-with-backoff on the removal, or assert on the removal result; owner T1.5.
+  3. `homeschool_db_tests::a_bad_file_beside_a_good_one_loads_exactly_one_curriculum_and_logs_the_path`:
+     the WARN line goes missing (1 of 4 loader lines captured). `tracing::subscriber::set_default`
+     is thread-local while callsite `Interest` is cached process-wide, so a sibling test that
+     hits `loader.rs`'s WARN callsite with no subscriber installed caches `Interest::never`
+     and the recorder never sees it. Fix: make the recorder the binary's global default, or
+     serialise that test; owner HS1.
+  4. Housekeeping: the leftover `%TEMP%\familyhub-*` directories above. Fix: remove the
+     scratch dir in a `Drop` guard (or a documented pre-run wipe in `docs/DEV_WINDOWS.md`).
+- **Why it is residual:** none of the four is a product defect — each is test isolation on a
+  shared box — and none failed in any Boss baseline once the scratch dirs were wiped. Fixing
+  them touches four binaries owned by four different tasks; the QA loop's DONE gate (two
+  consecutive green full runs) is met as is.
+- **Solution:** the four one-liners above, as one Haiku/Sonnet housekeeping task in the next
+  wave; until then, wipe `%TEMP%\familyhub-*` (keeping `familyhub-test`) before a full run and
+  never run two full suites at once.

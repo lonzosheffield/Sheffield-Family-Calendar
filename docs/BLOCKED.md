@@ -144,6 +144,15 @@ wave) or accepts the gap into `docs/RESIDUAL.md`.
 
 ## HS1-qa1 — QA round 1 fix QH1-08 (`import-curriculum` opens the pool before copying the file)
 
+> **RESOLVED 2026-09-03 (Boss, QA round 2 close):** landed as `HS1-qa2` — a fresh branch off
+> `main` carrying `git checkout 076367f -- src/server/homeschool/loader.rs tests/service_tests.rs`
+> (the audited two-file diff replayed, +18/−4, byte-identical to `hs/HS1-qa1`'s), never a merge of
+> `hs/HS1-qa1` itself (based on `c7c1339`, it would have reverted QH1-01…QH1-07). Squash-merged
+> to `main` as `1d650db`; baseline green (fmt, both clippy gates, full `cargo test --features
+> server`, 33 binaries, 0 failed). The new `service_tests` assertion was shown load-bearing: with
+> `loader.rs` reverted it fails with the exact QH1-08 symptom. QH1-08 / QH2-05 closed. The entry
+> below is kept for provenance; `hs/HS1-qa1` stays as a branch (provenance), its worktree is removed.
+
 - **Task:** HS1-qa1 (`src/server/homeschool/loader.rs`, `tests/service_tests.rs` owner),
   applying `docs/qa/QA_HS_ROUND_1.md` QH1-08: move `db::pool().await` above the
   `std::fs::copy` in `import_curriculum` so the command's own `insert_missing` report is
