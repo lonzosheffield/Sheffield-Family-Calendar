@@ -161,7 +161,7 @@ cargo run --features server --bin family-hub -- status
 cargo run --features server --bin family-hub -- tv-probe
 ```
 
-`install|uninstall|start|stop|status|run|tv-probe`, all through
+`install|uninstall|start|stop|status|run|tv-probe|import-curriculum`, all through
 `windows_service::service_manager` — no PowerShell scripts. Installing it for real is
 `docs/OWNER_CHECKLIST.md` step 3 and needs elevation; `run` needs neither.
 

@@ -2904,3 +2904,39 @@ cargo test --features server
   → realtime_tests: 18 passed; 0 failed (17 before + the HS3 sample-vector test)
   → 29 binaries, 0 failed, exit 0
 ```
+
+---
+
+## Boss post-A micro-commit (main, 2026-09-02) — what was applied, what remains
+
+Applied, in the one commit "Boss post-A: wire loader/seed, TvPanel placeholder":
+
+* **HS-1** — `db::pools()` now calls
+  `homeschool::load_and_seed(&pools.write, &FamilyHubConfig::load())` after `migrate`.
+  The seed uses the server-local run date for `week_started_on = started_on`, as H2/D-6 say.
+* **H-HS3-1** — the `MaximizedView::Homeschool => TvPanel::Routine` placeholder already
+  landed inside HS3 (exhaustive match); **not** applied a second time. HS6 replaces it.
+* **HS-3** — `loader::parse_days` is now a thin wrapper over
+  `crate::shared::homeschool::parse_days` (adds only the empty-string rejection and the
+  `char` shape); the loader's private `DAY_LETTERS` copy is gone. `"Th"`, `"MM"`, `"X"`,
+  `""` are still `Err`; the loader's own unit tests are unchanged.
+* **HS-5 (part)** — `import-curriculum` added to the subcommand lists in
+  `docs/DEV_WINDOWS.md`, `docs/RECOVERY.md` and `docs/PLAN.md` §3 D9.
+* Nothing else stopped compiling on the new enum variants — no further placeholder arms
+  were needed (HS5/HS6: nothing extra to replace).
+
+Recorded, not applied (owner named):
+
+* **HS-5 (rest) → HS7**: one line in `docs/OWNER_CHECKLIST.md` about
+  `FAMILY_HUB_CURRICULA_DIR` (default `<data>\curricula`). HS7 owns that file (one row).
+* **H-HS3-3 → HS7/HS8**: record the wasm clippy gate as
+  `cargo clippy --features web --target wasm32-unknown-unknown -- -D warnings` (no
+  `--all-targets`; dev-deps pull `mio`, which has no wasm backend). This is the form the
+  Boss baseline runs.
+* **H-HS3-4 → HS8**: `grep -rn chrono src/shared/` has one pre-existing doc-comment hit
+  (`types.rs`); the real assertion (no date crate in the shared tree) holds.
+* **H-HS3-5 → HS8 residuals**: `realtime_tests::t1_2_7…` and
+  `backup_tests::restore_drill…` are load-flaky (quiesce / retry-existence fixes suggested
+  in the HS3 section; do not relax either assertion). Both were green in every Boss
+  baseline run this wave.
+* **HS-4** stays a note to HS4 (`OccurrenceKey` struct; skip-after-tick = clear then set).

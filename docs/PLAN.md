@@ -88,7 +88,7 @@ Real break list (v1 was wrong): (1) no `server_fn` crate — server fns rewritte
 Deterministic focus order (golden file), thick `ring-sheffield-sun` focus ring, ≥ 28 px body / ≥ 44 px headings, 5 % overscan padding, no `hover:`-only affordances, key map `ArrowUp/Down/Left/Right/Enter/Backspace/MediaPlayPause` (**no Esc** — Fire TV remotes have none), `?keys=1` key-code debug overlay so the owner can report real codes, permanent "updated HH:MM" + red disconnected badge after 90 s of silence.
 
 ### D9 — Runs on this Windows 11 PC as a service
-`family-hub.exe install|uninstall|start|stop|status|run|tv-probe` via `windows-service::service_manager` (no PowerShell scripts). Tokio runtime built inside `service_main`; file + Event Log logging as the first statement; all paths absolute from `FAMILY_HUB_DATA_DIR` (default `%ProgramData%\FamilyHub`) and logged at startup. Docker not used (breaks mDNS). aarch64 CI job cut (code stays portable).
+`family-hub.exe install|uninstall|start|stop|status|run|tv-probe|import-curriculum` via `windows-service::service_manager` (no PowerShell scripts). Tokio runtime built inside `service_main`; file + Event Log logging as the first statement; all paths absolute from `FAMILY_HUB_DATA_DIR` (default `%ProgramData%\FamilyHub`) and logged at startup. Docker not used (breaks mDNS). aarch64 CI job cut (code stays portable).
 
 ---
 

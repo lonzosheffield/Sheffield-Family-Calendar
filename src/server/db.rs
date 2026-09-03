@@ -109,6 +109,16 @@ pub async fn pools() -> Result<&'static Pools, sqlx::Error> {
             let url = resolve_database_url().map_err(sqlx::Error::Io)?;
             let pools = open_pools(&url).await?;
             migrate(&pools.write).await?;
+            // HS1 handoff HS-1 (Boss post-A micro-commit, PLAN_HOMESCHOOL §3):
+            // scan `curricula_dir()` for `*.toml`, insert only the rows that
+            // are missing (never update, never delete), then seed the boys'
+            // enrollment with `INSERT … ON CONFLICT (profile_id) DO NOTHING`
+            // and the server-local run date. A bad curriculum file is
+            // warned about and skipped; only a broken database can fail here.
+            // Belongs to `pools()`, not `migrate()`, so tests that open their
+            // own pools are untouched.
+            crate::server::homeschool::load_and_seed(&pools.write, &FamilyHubConfig::load())
+                .await?;
             Ok(pools)
         })
         .await

@@ -20,11 +20,13 @@
 //!   directory is gitignored; the only curriculum this repository carries is
 //!   the invented `tests/fixtures/curricula/sample-year.toml`.
 //!
-//! `parse_days` is duplicated here rather than shared: HS3 owns the canonical
-//! `src/shared/homeschool.rs::parse_days` and lands in the same wave, so HS1
-//! cannot call it yet. `docs/HANDOFF.md` carries the request to collapse the
-//! two once both are on `main`; the letters, the order and the "no repeats"
-//! rule are identical by construction (H3 rule 1).
+//! `parse_days` here is a thin wrapper over the canonical
+//! `src/shared/homeschool.rs::parse_days` (HS3): same letters, same
+//! `M T W R F S U` order, same "no unknown letter, no repeat" rule (H3 rule 1).
+//! The one thing the wrapper adds is rejecting the empty string, which the
+//! shared rule accepts as "no day" but a curriculum file may never write
+//! (the schema's `GLOB '[MTWRFSU]*'` forbids it too). Collapsed by the Boss
+//! post-A micro-commit per `docs/HANDOFF.md` HS-3.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -39,8 +41,6 @@ use crate::server::config::FamilyHubConfig;
 pub const CATEGORIES: [&str; 4] = ["daily", "reading", "weekly", "free_read"];
 /// The three `term_notes.kind` values the schema's `CHECK` allows.
 pub const TERM_NOTE_KINDS: [&str; 3] = ["geography", "free_read", "poetry"];
-/// `M T W R F S U` — `R` is Thursday and `U` is Sunday (§4 default 3).
-pub const DAY_LETTERS: [char; 7] = ['M', 'T', 'W', 'R', 'F', 'S', 'U'];
 /// The schema default, and the family's school week (§4 default 2).
 pub const DEFAULT_DAYS: &str = "MTWRF";
 /// H5's default when a file omits `term_weeks`.
@@ -242,27 +242,20 @@ pub struct ValidatedTermNote {
 /// Rejects an empty string (the schema's `GLOB '[MTWRFSU]*'` does too), any
 /// letter outside the seven, and any repeat — `"Th"` is a mistake for Thursday
 /// (which is `R`), `"MM"` is a typo, and both must be told about rather than
-/// silently deduplicated (H3 rule 1).
+/// silently deduplicated (H3 rule 1). The letter rule itself is the shared
+/// [`crate::shared::homeschool::parse_days`]; only the empty-string rejection
+/// and the `char` shape (what the TOML and the `days` column carry) are local.
 pub fn parse_days(letters: &str) -> Result<Vec<char>, String> {
     if letters.is_empty() {
         return Err("a days string may not be empty".to_string());
     }
-    let mut seen = BTreeSet::new();
-    for ch in letters.chars() {
-        if !DAY_LETTERS.contains(&ch) {
-            return Err(format!(
-                "{ch:?} is not one of the day letters M T W R F S U (R = Thursday, U = Sunday)"
-            ));
-        }
-        if !seen.insert(ch) {
-            return Err(format!("the day letter {ch:?} appears more than once"));
-        }
-    }
-    Ok(DAY_LETTERS
-        .iter()
-        .copied()
-        .filter(|day| seen.contains(day))
-        .collect())
+    crate::shared::homeschool::parse_days(letters)
+        .map(|days| {
+            days.into_iter()
+                .map(crate::shared::homeschool::Weekday::letter)
+                .collect()
+        })
+        .map_err(|err| format!("{err} (R = Thursday, U = Sunday)"))
 }
 
 /// The canonical spelling of a validated days string, in `M T W R F S U` order.

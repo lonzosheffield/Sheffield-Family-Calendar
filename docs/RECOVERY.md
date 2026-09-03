@@ -14,7 +14,7 @@ television is a browser pointed at a URL. Nothing here needs a rebuild.
 | Everything the hub owns | `%ProgramData%\FamilyHub\` — `family.db`, `uploads\`, `screensaver\`, `backups\`, `pki\`, `logs\`, `setup-code.txt` (overridden by `FAMILY_HUB_DATA_DIR`; the service logs the resolved path at startup) |
 | Is the hub alive? | `http://<hub-ip>:8080/health` — JSON: `db`, `last_google_poll`, `cert_not_after`, `days_to_expiry`, `disk_free_bytes`, `ws_clients`, `uptime_seconds`, `migration_version` |
 | What it has been doing | `%ProgramData%\FamilyHub\logs\familyhub.log` (rotated at 10 MB × 5), mirrored to Event Viewer → Windows Logs → Application, source `FamilyHub` |
-| Service controls (elevated) | `family-hub.exe status` · `start` · `stop` · `install` · `uninstall` · `run` (foreground) · `tv-probe` |
+| Service controls (elevated) | `family-hub.exe status` · `start` · `stop` · `install` · `uninstall` · `run` (foreground) · `tv-probe` · `import-curriculum <path> [--replace]` (HS1) |
 | Log level | `info` by default; `$env:FAMILY_HUB_LOG` (`run` only — a shell's environment is not inherited by the installed service) or `[log]\nlevel = "debug"` in *familyhub.toml* (installed service — `stop`/`start` to apply) |
 
 **Triage in one move:** open `http://<hub-ip>:8080/health` from a phone or laptop.
