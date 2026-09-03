@@ -18,8 +18,24 @@ reports a smaller CSS viewport (typically 960×540 at device-pixel-ratio 2, or F
 "web content scale" is not 100 %), so every `px`-sized element paints at twice the intended size and
 the card overflows. `docs/FIRE_TV.md` says nothing about viewport scale today.
 
-**Verify first:** on the TV open `/tv?keys=1` (or Fully Kiosk's remote admin → JavaScript console) and
-read `window.innerWidth`, `window.innerHeight`, `devicePixelRatio`; record them in `docs/FIRE_TV.md`.
+**VERIFIED 2026-09-03 (Boss, live over adb — the hypothesis above is confirmed, and its
+Fully Kiosk clause is wrong).** No JavaScript console was needed; the device settled it:
+
+* `adb shell wm size` → physical `3840x2160`, **override `1920x1080`**; `adb shell wm density` → **320**
+  (= 2.0 dppx). So the WebView lays out at ~**960 CSS px** wide against a layout built for
+  `TV_RENDER_WIDTH_PX` = 1920 CSS px — every `px` element paints at 2×.
+* `src/client/app.rs:80-81` sets **one** viewport meta for *every* route, `/tv` included:
+  `width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no`. On this panel
+  `device-width` resolves to ~960 px. That single line is the whole defect.
+* Reproduced live: `docs/design/current-state/tv-clipped-fullykiosk-adb-2026-09-03.png` — the hub on
+  the television, clipped exactly as the owner's photo (one rail card, "Wake up and thank…" cut at the
+  right edge, the `0 /` chip severed).
+* **Fully Kiosk is not the cause and never was.** It was not installed when the owner took the B-1
+  photo (only Silk and the Chromium WebView were on the device), so the "web content scale is not
+  100 %" clause is dead. Independent proof: `tv-fullykiosk-welcome-clipped-2026-09-03.png` — Fully's
+  **own** welcome page is clipped the same way in the same WebView.
+
+So fix candidate 1 below is the right one, and it needs no device configuration.
 
 **Fix candidates (pick one, prefer the first that works without device configuration):**
 1. App-side, one line: serve `/tv` with `<meta name="viewport" content="width=1920">` so the WebView

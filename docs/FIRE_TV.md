@@ -120,8 +120,26 @@ launch-on-boot behaviour; the free build is not sufficient). No Play Store is
 involved on Fire OS — download the APK from the vendor on the PC and push it:
 
 ```powershell
-adb install .\fully-kiosk-plus.apk
+adb install .\Fully-Kiosk-Browser-v1.61.2.apk
 ```
+
+**There is no separate "Plus" APK.** Fully Kiosk Browser is one app; PLUS is a
+**licence key** activated inside it, and the key is bought against a **Device ID that
+the app only generates once it is installed and has been run on the device**. So the
+order is: sideload -> launch -> read the Device ID -> buy -> activate. An earlier
+version of this step said `adb install .\fully-kiosk-plus.apk`, which reads as though
+the licence arrives in the download and sends you hunting for a build that does not
+exist (the owner hit exactly this, 2026-09-03).
+
+Do **not** install `Fully-Single-App-Kiosk`. It is a different vendor product that
+locks the device to one *app*; it is not a browser and none of the settings below
+apply to it.
+
+**Done on this TV, 2026-09-03:** Fully Kiosk Browser 1.61.2 installed over adb, both
+appops below granted and verified `allow`. Its **Device ID is `8df9c4e3-9e8ee63c`**
+(shown bottom-left of Fully's own menu, beside the IP) - that is the string the
+vendor's purchase page asks for. It is *not* the Android ID (`7f7c24cdb24b32b2`);
+Fully derives its own.
 
 Fully Kiosk is a declared non-Rust component with a stated exit criterion —
 `docs/NON_RUST.md`.
@@ -166,12 +184,50 @@ On the TV, open Fully Kiosk → Settings:
 
 | Setting | Value |
 | --- | --- |
-| Start URL | `http://<hub-ip>:8080/tv` |
+| Start URL | `http://<hub-ip>:8080/tv` - **plain `http`, port 8080.** See the two warnings below |
 | Launch on boot | **on** |
 | Keep screen on | **on** |
 | **Screensaver** (Fully Kiosk's own) | **Never** — the hub has its own screensaver (idle 10 min, `docs/PLAN.md` D5), and two competing screensavers means the hub's never wins |
 | Screensaver timer / Daydream | 0 / disabled |
 | Kiosk mode / lock-down | on (PLUS) |
+
+#### `http`, never `https`, for the kiosk (the owner hit this 2026-09-03)
+
+The hub listens on **two** ports and they are not interchangeable:
+
+| Port | Speaks | For |
+| --- | --- | --- |
+| 8080 | plain HTTP | the TV kiosk - `GET /tv` answers **200 directly**, with no redirect to TLS |
+| 8443 | TLS, private-CA certificate | the phone PWA, whose service worker needs a secure context |
+
+Pointing the Start URL at `https://<hub-ip>:8080/tv` makes the WebView attempt a TLS
+handshake against the plain-HTTP listener. It fails as `ERR_SSL_PROTOCOL_ERROR`,
+visible in `adb logcat` as:
+
+```
+E chromium: [ERROR:net/socket/ssl_client_socket_impl.cc:896] handshake failed; returned -1, SSL error code 1, net_error -107
+```
+
+`net_error -107` **is** that error. It is not a certificate-trust failure: an untrusted
+private CA gives `ERR_CERT_AUTHORITY_INVALID` and a "your connection is not private"
+interstitial instead. `https://<hub-ip>:8443/tv` would work, but only after installing
+the hub's private CA on the TV, and the kiosk gains nothing from TLS.
+
+#### Viewport scale - the confirmed cause of `docs/BACKLOG.md` B-1
+
+Probed 2026-09-03 over adb: `wm size` -> physical `3840x2160`, **override `1920x1080`**;
+`wm density` -> **320** (= 2.0 dppx). The WebView therefore lays out at roughly
+**960 CSS px** wide while the kiosk is designed for `TV_RENDER_WIDTH_PX` = 1920 CSS px
+(`src/client/components/tv/style.rs`), so every `px`-sized element paints at 2x and
+overflows. Evidence:
+`docs/design/current-state/tv-clipped-fullykiosk-adb-2026-09-03.png` (the hub, clipped
+exactly as the owner's photo) and
+`tv-fullykiosk-welcome-clipped-2026-09-03.png` - **Fully Kiosk's own welcome page is
+clipped the same way**, which rules out anything in the hub's own markup as the cause.
+
+Fully Kiosk is **not** implicated: it was not installed at all when the owner took the
+B-1 photo (only Silk and the Chromium WebView were present), so B-1's original
+"Fully Kiosk's web content scale is not 100 %" hypothesis is dead.
 
 ### 5. Disable the **television's** sleep / power-saver timers
 
