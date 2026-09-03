@@ -70,6 +70,12 @@ fn validation_error(message: &str) -> ServerFnError {
     ServerFnError::new(message.to_string())
 }
 
+/// QH1-10: `toggle_lesson` and `toggle_extra` are LAN-open by contract
+/// (H7) — no session cookie bounds who can write a `note` — so this caps
+/// it the way the rest of the open surface caps its inputs.
+#[cfg(feature = "server")]
+const MAX_NOTE_CHARS: usize = 500;
+
 /// Today's date in `YYYY-MM-DD`, as seen by the server — the same clock every
 /// other mutation in this crate checks a caller's `date` against.
 #[cfg(feature = "server")]
@@ -713,6 +719,14 @@ pub async fn toggle_lesson(
 ) -> Result<(), ServerFnError> {
     #[cfg(feature = "server")]
     {
+        // QH1-10: the rest of the open surface caps its inputs; this one is
+        // LAN-open and unbounded without this check.
+        if note
+            .as_deref()
+            .is_some_and(|n| n.chars().count() > MAX_NOTE_CHARS)
+        {
+            return Err(validation_error("note is too long"));
+        }
         // Accept (m): rejected before any write, ahead of even the date check.
         if subject_id <= 0 {
             return Err(validation_error("subject_id must be a positive id"));
@@ -772,7 +786,14 @@ pub async fn toggle_lesson(
                 assignment_id,
                 scheduled_date.clone(),
             );
+            // QH1-01: an occurrence that already has a log row is always
+            // cleared first, so a Skip or a Note on an already-ticked row
+            // replaces its state instead of the INSERT ... ON CONFLICT DO
+            // NOTHING silently no-oping.
             if completed {
+                hs::clear_occurrence(&mut *tx, &key)
+                    .await
+                    .map_err(super::to_server_error)?;
                 hs::set_occurrence(&mut *tx, &key, status.as_str(), note.as_deref(), &date)
                     .await
                     .map_err(super::to_server_error)?;
@@ -919,6 +940,14 @@ pub async fn toggle_extra(
 ) -> Result<(), ServerFnError> {
     #[cfg(feature = "server")]
     {
+        // QH1-10: the rest of the open surface caps its inputs; this one is
+        // LAN-open and unbounded without this check.
+        if note
+            .as_deref()
+            .is_some_and(|n| n.chars().count() > MAX_NOTE_CHARS)
+        {
+            return Err(validation_error("note is too long"));
+        }
         check_date_window(&date)?;
 
         let pool = crate::server::db::pool()

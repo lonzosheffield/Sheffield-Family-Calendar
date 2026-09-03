@@ -16,6 +16,8 @@
 //! | k | `add_extra` / `toggle_extra` / `delete_extra` authorization and date rules | `hs4_k_*` |
 //! | l | `get_week_grid` / `get_month` boundary rules | `hs4_l_*` |
 //! | m | `toggle_lesson` with `subject_id <= 0` is rejected before any write | `hs4_m_*` |
+//! | n | (QA round 1, QH1-01) a Skip or a Note on an already-ticked row replaces its state | `hs4_n_*` |
+//! | — | (QA round 1, QH1-10) a note over 500 chars is rejected before any write | `hs4_d_*` |
 //!
 //! Harness follows `tests/routine_tests.rs` (a throwaway sqlite file per test
 //! process, the real production router on an ephemeral port for the WS
@@ -610,6 +612,30 @@ async fn hs4_d_toggle_lesson_succeeds_with_no_cookie_at_all() {
     .await;
     assert!(ok.is_ok(), "no cookie should be needed: {ok:?}");
     assert_eq!(log_row_count(pool, BOY).await, 1);
+
+    // QH1-10: a note over 500 chars is rejected before any write — the row
+    // count above stays at 1, unchanged by this call.
+    let too_long_note = "x".repeat(501);
+    let (subject, assignment, scheduled_date) = first_occurrence(BOY, 1, "Sums").await;
+    let rejected = api::toggle_lesson(
+        BOY,
+        subject,
+        assignment,
+        1,
+        scheduled_date,
+        true,
+        LogStatus::Done,
+        Some(too_long_note),
+        today_string(),
+        format!("hs4-d-{}", uuid_ish()),
+    )
+    .await;
+    assert!(rejected.is_err(), "a 501-char note must be rejected");
+    assert_eq!(
+        log_row_count(pool, BOY).await,
+        1,
+        "the rejected note must not have written anything"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1127,6 +1153,104 @@ async fn hs4_m_toggle_lesson_with_a_non_positive_subject_id_is_rejected_before_a
         log_row_count(pool, BOY).await,
         0,
         "nothing may be written for a non-positive subject_id"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// QH1-01: a Skip or a Note on an already-ticked occurrence replaces its
+// state instead of the INSERT ... ON CONFLICT DO NOTHING silently no-oping.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn hs4_n_a_skip_or_a_note_on_an_already_ticked_row_replaces_its_state() {
+    let _guard = hs4_lock().await;
+    let pool = db::pool().await.expect("pool");
+    reset_homeschool_state(pool).await;
+    let curriculum_id = load_fixture(pool).await;
+    let sums = subject_id(pool, curriculum_id, "Sums").await;
+    widen_to_every_day(pool, sums, false).await;
+
+    const BOY: i64 = 1;
+    enroll_direct(pool, BOY, curriculum_id, 1, "MTWRFSU", "2026-01-05").await;
+    let (subject, assignment, scheduled_date) = first_occurrence(BOY, 1, "Sums").await;
+
+    // Tick Done.
+    api::toggle_lesson(
+        BOY,
+        subject,
+        assignment,
+        1,
+        scheduled_date.clone(),
+        true,
+        LogStatus::Done,
+        None,
+        today_string(),
+        format!("hs4-n-{}", uuid_ish()),
+    )
+    .await
+    .expect("first tick succeeds");
+    assert_eq!(log_row_count(pool, BOY).await, 1);
+
+    // The same occurrence, now Skipped: must replace the row, not no-op.
+    api::toggle_lesson(
+        BOY,
+        subject,
+        assignment,
+        1,
+        scheduled_date.clone(),
+        true,
+        LogStatus::Skipped,
+        None,
+        today_string(),
+        format!("hs4-n-{}", uuid_ish()),
+    )
+    .await
+    .expect("skip over an already-ticked row succeeds");
+    let (status, note): (String, Option<String>) = sqlx::query_as(
+        "SELECT status, note FROM lesson_log WHERE profile_id = ?1 AND subject_id = ?2",
+    )
+    .bind(BOY)
+    .bind(subject)
+    .fetch_one(pool)
+    .await
+    .expect("exactly one lesson_log row for this boy/subject");
+    assert_eq!(status, "skipped");
+    assert_eq!(note, None);
+    assert_eq!(
+        log_row_count(pool, BOY).await,
+        1,
+        "skip must replace the row, not add a second one"
+    );
+
+    // The same occurrence again, Done with a note: must replace again.
+    api::toggle_lesson(
+        BOY,
+        subject,
+        assignment,
+        1,
+        scheduled_date,
+        true,
+        LogStatus::Done,
+        Some("p.40".to_string()),
+        today_string(),
+        format!("hs4-n-{}", uuid_ish()),
+    )
+    .await
+    .expect("done-with-note over an already-ticked row succeeds");
+    let (status, note): (String, Option<String>) = sqlx::query_as(
+        "SELECT status, note FROM lesson_log WHERE profile_id = ?1 AND subject_id = ?2",
+    )
+    .bind(BOY)
+    .bind(subject)
+    .fetch_one(pool)
+    .await
+    .expect("exactly one lesson_log row for this boy/subject");
+    assert_eq!(status, "done");
+    assert_eq!(note.as_deref(), Some("p.40"));
+    assert_eq!(
+        log_row_count(pool, BOY).await,
+        1,
+        "the note update must still be exactly one row"
     );
 }
 
