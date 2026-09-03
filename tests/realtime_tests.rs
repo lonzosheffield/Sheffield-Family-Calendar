@@ -59,6 +59,13 @@ type WsStream = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 /// whole test body: `realtime::sender()` is one process-wide channel and two
 /// concurrent tests would see each other's frames.
 async fn hub_lock() -> tokio::sync::MutexGuard<'static, ()> {
+    // HS9 (`docs/BACKLOG.md` B-3): pin the data directory in the first line of
+    // every test, not in `spawn_hub` — `realtime::reset_board()` is called
+    // before `spawn_hub()` in several tests below and opens the process-wide
+    // pool itself. With the environment unset that pool was the family's live
+    // `%ProgramData%\FamilyHub\family.db`, and `db::pools()` is a `OnceCell`,
+    // so the first opener won for the whole binary.
+    init_test_env();
     static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
         .lock()

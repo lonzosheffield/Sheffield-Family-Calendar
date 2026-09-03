@@ -23,7 +23,25 @@ fn family_hub_exe() -> &'static str {
     env!("CARGO_BIN_EXE_family-hub")
 }
 
+/// HS9 (`docs/BACKLOG.md` B-3): every child process below is given an
+/// explicit `FAMILY_HUB_DATA_DIR`, but a child also inherits this test
+/// process's environment — so pin it here too, once, rather than trusting the
+/// shell that launched `cargo test`. A future test that forgets the `.env()`
+/// call then still lands in `%TEMP%`, never in the family's live
+/// `%ProgramData%\FamilyHub`.
+fn init_test_env() -> PathBuf {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    let base = std::env::temp_dir().join(format!("familyhub-service-tests-{}", std::process::id()));
+    ONCE.call_once(|| {
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("test scratch directory is creatable");
+        std::env::set_var("FAMILY_HUB_DATA_DIR", &base);
+    });
+    base
+}
+
 fn scratch_data_dir(name: &str) -> PathBuf {
+    init_test_env();
     let dir = std::env::temp_dir().join(format!(
         "familyhub-service-cwd-{name}-{}",
         std::process::id()

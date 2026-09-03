@@ -53,7 +53,7 @@ notifications (the PWA has none today, and none are wanted for this).
 **Acceptance:** a probe response with `expires_at` 2 days out renders the chip; 10 days out does not;
 renewing replaces the cookie (new `expires_at` ≥ 29 days out); `docs/PWA.md` states the behaviour.
 
-## B-3 — Agents' tests and tools must never open the real data directory (Boss, 2026-09-03)
+## B-3 — Agents' tests and tools must never open the real data directory (Boss, 2026-09-03) — **DONE (HS9, 2026-09-03)**
 
 **What happened:** during the homeschool run an agent process applied migration 0005 to the
 production database under `%ProgramData%\FamilyHub`, seeded the synthetic fixture curriculum and a
@@ -72,3 +72,24 @@ the system directory; (4) `docs/DEV_WINDOWS.md` and the workflow preamble say so
 **Acceptance:** a test binary run with the env var unset still writes nothing outside `%TEMP%`
 (assert via a canary file in the real dir before/after); `import-curriculum` without `--yes` against
 the system dir exits non-zero.
+
+**Delivered (HS9, branch `hs/HS9`, 2026-09-03):** all four parts.
+(1) Every `init_test_env` harness in `tests/` now sets `FAMILY_HUB_DATA_DIR` to a pid-keyed
+`%TEMP%` directory itself — `font_tests`, `health_pool_closed_tests`, `homeschool_db_tests`,
+`http_tests`, `pwa_tests`, `router_tests`, `routine_tests`, `tls_tests`, `service_tests` and
+`config_tests` gained one; the other suites already had it. `whiteboard_tests`, `realtime_tests`,
+`loop_tests` and `homeschool_loop_tests` had one but called it too late — every test there runs
+`realtime::reset_board()`, which opens the process-wide pool, *before* `spawn_hub()` did the
+pinning, so those suites had genuinely been drawing on and compacting the family's real whiteboard
+(`docs/HANDOFF.md` H-HS9-1); the call moved into `hub_lock()`, the first line of every test. The unit test
+`every_integration_test_suite_sets_the_data_dir_itself` in `src/server/config.rs` re-audits the
+whole directory so a new suite cannot drop the line.
+(2) `FamilyHubConfig::from_sources` returns `Result<Self, ConfigError>`: resolving to
+`%ProgramData%\FamilyHub` is `ConfigError::SystemDataDirRefused` under `cfg(test)` or
+`FAMILY_HUB_REFUSE_SYSTEM_DIR=1`. `load()` panics with that message, `try_load()` hands it back;
+`family-hub.exe run` and `import-curriculum` use `try_load` and exit 1 with one line.
+(3) `import-curriculum` prints `data directory: <path>` on every run and the loader refuses the
+system directory without `--yes`, before it reads the file or opens a pool.
+(4) `docs/DEV_WINDOWS.md` "Never develop against the live data directory" and `docs/PLAN.md` §5.7.
+Verified: `cargo test --features server` with `FAMILY_HUB_DATA_DIR` unset left a canary file in
+`C:\ProgramData\FamilyHub` byte-identical and the directory listing unchanged.

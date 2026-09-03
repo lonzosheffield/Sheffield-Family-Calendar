@@ -170,7 +170,11 @@ P4.1 design pass when inspiration images arrive (default: T3.4's output ships). 
 4. Wave gate: every task PASS or BLOCKED; Boss re-scopes or records to `docs/RESIDUAL.md`. Boss never pauses for the owner.
 5. Whole-run halt only if `main`'s baseline goes red and can't be restored in one attempt, or ≥ 3 tasks in one wave are BLOCKED.
 6. Git: branch `phase-<N>/<task-id>` per task in its own worktree; agents never touch `main` and **never push**; Boss squash-merges (`<task-id>: summary` + passed assertions) and pushes at wave boundaries; no force-push, no `--no-verify`.
-7. Every agent shell begins: `$env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"; $env:RUST_BACKTRACE="1"; $env:FAMILY_HUB_DATA_DIR="$env:TEMP\familyhub-test"`. `~/.cargo/dx06` (dx 0.6.3) is not used.
+7. Every agent shell begins with these three lines (HS9 / `docs/BACKLOG.md` B-3 added the second and third; `~/.cargo/dx06`, dx 0.6.3, is not used):
+   - `$env:PATH = "$env:USERPROFILE\.cargo\bin;$env:USERPROFILE\scoop\shims;$env:APPDATA\npm;$env:PATH"; $env:RUST_BACKTRACE="1"`
+   - `$env:FAMILY_HUB_DATA_DIR="$env:TEMP\familyhub-test"` — every `cargo test`, `cargo run` and `family-hub.exe` invocation must have this pointing under `%TEMP%`.
+   - `$env:FAMILY_HUB_REFUSE_SYSTEM_DIR="1"` — turns a resolution of `%ProgramData%\FamilyHub` (the family's **live** service data) into a hard error instead of a silent fallback.
+   **Hard rule:** never run anything that opens `%ProgramData%\FamilyHub`. On 2026-09-02 an agent did, migrating the family's live database, seeding a fixture curriculum and resetting the parent PIN. Test harnesses now set the data dir themselves and `import-curriculum` needs `--yes` for that directory, but the shell preamble is still the first line of defence.
 8. **Version pins** (normative table with traps: `PURPLE_TEAM.md` §P5.4): `dioxus =0.7.10`, `dx 0.7.10`, `axum =0.8.9`, `sqlx =0.8.6`, `rustls =0.23.43` (`ring`), `tokio-rustls =0.26.4`, `rcgen =0.14.10`, `mdns-sd =0.21.0`, `fast_qr =0.13.1`, `argon2 =0.6.0`, `rrule =0.14.0`, `toml =1.1.5` (server-only, HS1), `windows-service =0.8.1`, `uuid 1`, `image 0.25`, dev `tokio-tungstenite 0.28`, Tailwind standalone 3.4.17.
 9. **Stated defaults** (36, normative: `PURPLE_TEAM.md` §P5.5): ports 8080/8443; TV origin HTTP; 6-digit PIN; leaf 397 d; one board, 2,000 strokes; backups 14; photo retention 30 d; upload route 25 MiB; staleness 90 s; week starts Sunday; server-local time everywhere; no Google service account assumed (fixtures); screensaver schedule off; log `info`, 10 MB×5.
 

@@ -210,6 +210,51 @@ from `FAMILY_HUB_DATA_DIR` (default `%ProgramData%\FamilyHub`), and logged at st
 
 ---
 
+## Never develop against the live data directory
+
+`%ProgramData%\FamilyHub` holds the family's **real** database, uploads, PKI and logs.
+On 2026-09-02 a command ran there by accident — with `FAMILY_HUB_DATA_DIR` unset, the
+config silently fell back to it — and migrated the live database, seeded a fixture
+curriculum and reset the parent PIN (`docs/BACKLOG.md` B-3; recovery is
+`docs/RECOVERY.md` failure mode 7). Three guard rails now stand in the way:
+
+1. **Your shell.** Start every development session with these two lines, on top of the
+   PATH setup in Step 1:
+
+   ```powershell
+   $env:FAMILY_HUB_DATA_DIR = "$env:TEMP\familyhub-test"
+   $env:FAMILY_HUB_REFUSE_SYSTEM_DIR = "1"
+   ```
+
+   With `FAMILY_HUB_REFUSE_SYSTEM_DIR=1`, resolving the data directory to
+   `%ProgramData%\FamilyHub` is a hard error naming both variables, so
+   `cargo run --features server --bin family-hub -- run` exits non-zero in a shell that
+   forgot the first line rather than opening the family's database.
+
+2. **The test suite sets its own.** Every `init_test_env` harness in `tests/` sets
+   `FAMILY_HUB_DATA_DIR` to a pid-keyed directory under `%TEMP%` before anything
+   resolves config, so `cargo test --features server` is safe even in a bare shell; the
+   crate's own unit tests refuse the system directory outright under `cfg(test)`. A unit
+   test in `src/server/config.rs` re-audits every suite, so a new test file copied from
+   an old one cannot quietly drop the line.
+
+3. **`import-curriculum` asks.** It prints the data directory it resolved on every run,
+   and refuses to import into `%ProgramData%\FamilyHub` unless you pass `--yes`:
+
+   ```powershell
+   # scratch: just works
+   family-hub.exe import-curriculum .\tests\fixtures\curricula\sample-year.toml
+
+   # the family's live data: deliberate, and only from an elevated prompt
+   family-hub.exe import-curriculum .\year.toml --yes
+   ```
+
+The installed service sets neither variable and is deliberately unaffected: `run`,
+`install` and the SCM-started service resolve `%ProgramData%\FamilyHub` exactly as
+before.
+
+---
+
 ## Testing
 
 Run all tests (requires `--features server`):

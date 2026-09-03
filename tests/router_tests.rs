@@ -50,6 +50,11 @@ fn init_test_env() -> PathBuf {
         let public = base.join("public");
         std::fs::create_dir_all(&public).expect("test public directory is creatable");
         std::env::set_var("DIOXUS_PUBLIC_PATH", &public);
+
+        // HS9 (`docs/BACKLOG.md` B-3): this harness — never the shell — pins
+        // the data directory, so nothing in this binary can resolve config to
+        // the family's live `%ProgramData%\FamilyHub`.
+        std::env::set_var("FAMILY_HUB_DATA_DIR", &base);
     });
     base
 }

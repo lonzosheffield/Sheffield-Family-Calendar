@@ -65,8 +65,9 @@ pub const LOG_FILE_NAME: &str = "familyhub.log";
 const USAGE: &str =
     "usage: family-hub.exe <install|uninstall|start|stop|status|run|tv-probe|import-curriculum>";
 /// HS1 (§2 H5): the curriculum bulk-import path. Kept next to [`USAGE`]
-/// so the two can never drift.
-const IMPORT_USAGE: &str = "usage: family-hub.exe import-curriculum <path> [--replace]";
+/// so the two can never drift. `--yes` is HS9's confirmation for the one
+/// case that can damage the family's live data (`docs/BACKLOG.md` B-3).
+const IMPORT_USAGE: &str = "usage: family-hub.exe import-curriculum <path> [--replace] [--yes]";
 
 // ---------------------------------------------------------------------------
 // CLI entry point (called by src/bin/family_hub.rs)
@@ -84,10 +85,21 @@ pub fn dispatch(args: &[String]) -> i32 {
         Some("start") => run_and_report(cmd_start()),
         Some("stop") => run_and_report(cmd_stop()),
         Some("status") => cmd_status(),
-        Some("run") => {
-            run_console(FamilyHubConfig::load());
-            0 // unreachable in practice: run_console serves forever.
-        }
+        // HS9 (B-3): `try_load` rather than `load` so a shell that exported
+        // `FAMILY_HUB_REFUSE_SYSTEM_DIR=1` and forgot `FAMILY_HUB_DATA_DIR`
+        // gets one clear line and a non-zero exit instead of a panic — or,
+        // worse, a server booted against the family's live database. The
+        // installed service sets neither variable and is unaffected.
+        Some("run") => match FamilyHubConfig::try_load() {
+            Ok(config) => {
+                run_console(config);
+                0 // unreachable in practice: run_console serves forever.
+            }
+            Err(err) => {
+                eprintln!("{err}");
+                1
+            }
+        },
         Some("tv-probe") => run_and_report(cmd_tv_probe()),
         // HS1 (§2 H5): validate a curriculum TOML, copy it into
         // `config.curricula_dir()`, and — with `--replace` — rewrite that
@@ -105,19 +117,26 @@ pub fn dispatch(args: &[String]) -> i32 {
     }
 }
 
-/// `family-hub.exe import-curriculum <path> [--replace]`.
+/// `family-hub.exe import-curriculum <path> [--replace] [--yes]`.
 ///
 /// Exits non-zero — writing neither the copy nor a single row — when the path
 /// does not exist or the file fails validation (§3 HS1 accept (g)). The real
 /// work lives in `homeschool::loader::import_curriculum`; this wrapper only
-/// parses the two arguments and owns the tokio runtime the async import needs,
+/// parses the arguments and owns the tokio runtime the async import needs,
 /// exactly as [`run_console`] does for the server itself.
+///
+/// HS9 (`docs/BACKLOG.md` B-3): the resolved data directory is printed on
+/// every invocation, and importing into the *live* service directory
+/// (`%ProgramData%\FamilyHub`) needs an explicit `--yes` — the loader owns
+/// that gate so it fires before a single byte is read or written.
 fn cmd_import_curriculum(args: &[String]) -> i32 {
     let mut path: Option<&str> = None;
     let mut replace = false;
+    let mut confirmed = false;
     for arg in args {
         match arg.as_str() {
             "--replace" => replace = true,
+            "--yes" => confirmed = true,
             other if other.starts_with("--") => {
                 eprintln!("unknown option {other:?}\n{IMPORT_USAGE}");
                 return 2;
@@ -143,11 +162,23 @@ fn cmd_import_curriculum(args: &[String]) -> i32 {
         }
     };
 
-    let config = FamilyHubConfig::load();
+    let config = match FamilyHubConfig::try_load() {
+        Ok(config) => config,
+        Err(err) => {
+            eprintln!("{err}");
+            return 1;
+        }
+    };
+    // HS9: say out loud which directory is about to be written to, before
+    // anything is. The recovery that prompted B-3 started with nobody
+    // knowing which database had been changed.
+    println!("data directory: {}", config.data_dir.display());
+
     let result = runtime.block_on(crate::server::homeschool::loader::import_curriculum(
         &config,
         std::path::Path::new(path),
         replace,
+        confirmed,
     ));
 
     match result {

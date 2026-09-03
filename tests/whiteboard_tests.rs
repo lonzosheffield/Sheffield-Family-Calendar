@@ -51,6 +51,15 @@ type WsStream = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 /// `seq` counter and the database are all process-wide, exactly the reason
 /// `tests/realtime_tests.rs::hub_lock` exists.
 async fn hub_lock() -> tokio::sync::MutexGuard<'static, ()> {
+    // HS9 (`docs/BACKLOG.md` B-3): pin the data directory here, in the first
+    // line of every test, rather than in `spawn_hub` — `realtime::reset_board`
+    // runs *before* `spawn_hub` in three of these tests and opens the
+    // process-wide pool itself. With the environment unset that pool was the
+    // family's live `%ProgramData%\FamilyHub\family.db`, and because
+    // `db::pools()` is a `OnceCell` the first opener won for the whole binary:
+    // these tests really were drawing 500 strokes on the family's whiteboard
+    // and then compacting it.
+    init_test_env();
     static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
     LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
         .lock()

@@ -217,6 +217,10 @@ const PHONE_STROKE: u32 = 0x0_9403;
 /// body keeps this test binary's other tests (if any are ever added) from
 /// interleaving with it.
 async fn hub_lock() -> tokio::sync::MutexGuard<'static, ()> {
+    // HS9 (`docs/BACKLOG.md` B-3): pin the data directory in the first line of
+    // every test, not in `spawn_hub` — `realtime::reset_board()` runs before
+    // `spawn_hub()` below and opens the process-wide pool itself.
+    init_test_env();
     static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
     LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
         .lock()

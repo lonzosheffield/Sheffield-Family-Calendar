@@ -9,6 +9,13 @@
 //!   3. Hard-coded defaults: `%ProgramData%\FamilyHub`, `0.0.0.0:8080`,
 //!      `0.0.0.0:8443`.
 //!
+//! HS9 (`docs/BACKLOG.md` B-3) adds one guard rail on top of step 3: in a
+//! process compiled with `cfg(test)`, or one that exports
+//! `FAMILY_HUB_REFUSE_SYSTEM_DIR=1`, resolving to `%ProgramData%\FamilyHub`
+//! — the family's live service data — is a [`ConfigError`], not a silent
+//! fallback. The installed service and a developer's `dx serve` set neither,
+//! so nothing about the real startup path changes.
+//!
 //! Every other module asks this type for a path (`db_path`, `upload_dir`,
 //! `screensaver_dir`, `pki_dir`, `log_dir`) instead of hard-coding one, so
 //! nothing is ever resolved relative to the process's current working
@@ -26,7 +33,7 @@
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Default HTTP bind address for the TV-facing kiosk origin (PLAN v2 D3′).
 pub const DEFAULT_HTTP_ADDR: &str = "0.0.0.0:8080";
@@ -58,8 +65,71 @@ const ENV_LOG_LEVEL: &str = "FAMILY_HUB_LOG";
 /// `C:\Windows\System32`), so [`FamilyHubConfig::curricula_dir`] is absolute
 /// whatever the environment says.
 const ENV_CURRICULA_DIR: &str = "FAMILY_HUB_CURRICULA_DIR";
+/// HS9 (`docs/BACKLOG.md` B-3): the guard rail added after an agent process
+/// silently resolved the data dir to `%ProgramData%\FamilyHub` — the family's
+/// **live** service data — migrated it, seeded a fixture curriculum and reset
+/// the parent PIN. When this is `1`, resolving to that system directory is a
+/// hard error instead of a silent fallback. The agent workflow preamble
+/// (`docs/PLAN.md` §5.7) exports it; the installed service never sets it, so
+/// `family-hub.exe run`/`install` keep working with no environment at all.
+pub const ENV_REFUSE_SYSTEM_DIR: &str = "FAMILY_HUB_REFUSE_SYSTEM_DIR";
 
 const CONFIG_FILE_NAME: &str = "familyhub.toml";
+
+/// The one way [`FamilyHubConfig::try_load`] can fail (HS9 / B-3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigError {
+    /// The data directory resolved to [`system_data_dir`] while this process
+    /// had opted out of ever touching it.
+    SystemDataDirRefused {
+        data_dir: PathBuf,
+        /// Why the refusal is in force, phrased for an error message.
+        reason: &'static str,
+    },
+}
+
+impl std::fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SystemDataDirRefused { data_dir, reason } => write!(
+                f,
+                "refusing to use the system data directory {} because {reason}: it holds the \
+                 family's live service data. Set {ENV_DATA_DIR} to a scratch directory \
+                 (for example %TEMP%\\familyhub-test) before running tests or tools, or unset \
+                 {ENV_REFUSE_SYSTEM_DIR} if you really are the service.",
+                data_dir.display()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ConfigError {}
+
+/// The hard-coded default data directory: `%ProgramData%\FamilyHub` on
+/// Windows. Public so a tool can ask "is the directory I resolved the live
+/// one?" without duplicating the platform logic (HS9 — `import-curriculum`
+/// gates itself on exactly this).
+pub fn system_data_dir() -> PathBuf {
+    default_data_dir()
+}
+
+/// Whether `path` names [`system_data_dir`]. Compared on a normalised key
+/// (trailing separators dropped, `/` folded to `\`, case-insensitive on
+/// Windows) so `C:/ProgramData/FamilyHub\` and `c:\programdata\familyhub`
+/// are the same directory — which, for a guard rail, they are.
+pub fn is_system_data_dir(path: &Path) -> bool {
+    fn key(path: &Path) -> String {
+        let text = path.to_string_lossy().replace('/', "\\");
+        let trimmed = text.trim_end_matches('\\').to_string();
+        if cfg!(windows) {
+            trimmed.to_lowercase()
+        } else {
+            trimmed
+        }
+    }
+
+    key(path) == key(&system_data_dir())
+}
 
 /// Fully resolved server configuration. Every path handed out by this type
 /// is absolute, rooted at [`FamilyHubConfig::data_dir`].
@@ -86,30 +156,53 @@ pub struct FamilyHubConfig {
 impl FamilyHubConfig {
     /// Resolve configuration from `familyhub.toml` (if one is found) and the
     /// process environment, environment variables taking precedence.
+    ///
+    /// Panics with [`ConfigError`]'s message when the data directory resolves
+    /// to the live service directory in a process that has refused it (HS9 /
+    /// B-3) — a loud stop is the whole point, and every caller that can do
+    /// better than a panic (`family-hub.exe run` / `import-curriculum`) uses
+    /// [`Self::try_load`] instead.
     pub fn load() -> Self {
+        Self::try_load().unwrap_or_else(|err| panic!("{err}"))
+    }
+
+    /// [`Self::load`] without the panic, for the two CLI entry points that
+    /// would rather print one line and exit non-zero (HS9).
+    pub fn try_load() -> Result<Self, ConfigError> {
         let file = TomlValues::load_nearby(CONFIG_FILE_NAME);
         Self::from_sources(&file, &ProcessEnv)
     }
 
-    fn from_sources(file: &TomlValues, env: &impl EnvLookup) -> Self {
+    fn from_sources(file: &TomlValues, env: &impl EnvLookup) -> Result<Self, ConfigError> {
         let data_dir = env
             .var(ENV_DATA_DIR)
             .or_else(|| file.get("data_dir"))
             .map(PathBuf::from)
             .unwrap_or_else(default_data_dir);
 
+        // HS9 (B-3): before anything else resolves, refuse the live service
+        // directory outright in a process that has opted out of it. This is
+        // checked on the *resolved* value, so an explicit
+        // `FAMILY_HUB_DATA_DIR=C:\ProgramData\FamilyHub` is refused too — the
+        // accident being guarded against wrote there either way.
+        if is_system_data_dir(&data_dir) {
+            if let Some(reason) = system_dir_refusal_reason(env) {
+                return Err(ConfigError::SystemDataDirRefused { data_dir, reason });
+            }
+        }
+
         let http_addr = resolve_addr(env, file, ENV_HTTP_ADDR, "http_addr", DEFAULT_HTTP_ADDR);
         let tls_addr = resolve_addr(env, file, ENV_TLS_ADDR, "tls_addr", DEFAULT_TLS_ADDR);
         let screensaver_schedule_hour = resolve_screensaver_hour(env, file);
         let log_level = env.var(ENV_LOG_LEVEL).or_else(|| file.get("log.level"));
 
-        Self {
+        Ok(Self {
             data_dir,
             http_addr,
             tls_addr,
             screensaver_schedule_hour,
             log_level,
-        }
+        })
     }
 
     /// Absolute path to the SQLite database file.
@@ -273,6 +366,30 @@ fn default_data_dir() -> PathBuf {
     }
 }
 
+/// Why this process must not resolve to [`system_data_dir`], or `None` when
+/// it may (the installed service, and a developer's `dx serve`, both land
+/// here — HS9 deliberately changes nothing for them).
+///
+/// Two triggers, checked in that order so the message names the one the
+/// reader can act on:
+///   1. `FAMILY_HUB_REFUSE_SYSTEM_DIR=1` — exported by the agent workflow
+///      preamble (`docs/PLAN.md` §5.7) and by anyone running tools by hand.
+///   2. `cfg(test)` — this crate's own unit tests can never reach the live
+///      directory whatever the environment says. (Integration tests in
+///      `tests/` link the crate *without* `cfg(test)`; each of their
+///      `init_test_env` harnesses sets `FAMILY_HUB_DATA_DIR` itself, and the
+///      unit test `every_integration_test_suite_sets_the_data_dir_itself`
+///      below keeps it that way.)
+fn system_dir_refusal_reason(env: &impl EnvLookup) -> Option<&'static str> {
+    if env.var(ENV_REFUSE_SYSTEM_DIR).as_deref().map(str::trim) == Some("1") {
+        return Some("FAMILY_HUB_REFUSE_SYSTEM_DIR=1 is set");
+    }
+    if cfg!(test) {
+        return Some("this binary is compiled with cfg(test)");
+    }
+    None
+}
+
 /// Indirection over `std::env::var` so the precedence logic above can be unit
 /// tested without mutating real process-wide environment variables.
 trait EnvLookup {
@@ -369,9 +486,30 @@ mod tests {
         FakeEnv(BTreeMap::new())
     }
 
+    /// A scratch data directory every "resolution" test can name, so none of
+    /// them relies on the [`default_data_dir`] fallback — which HS9 turned
+    /// into a hard error under `cfg(test)`.
+    const TEST_DATA_DIR: &str = "C:/temp/familyhub-unit-test-data";
+
+    /// [`empty_env`] plus a scratch `FAMILY_HUB_DATA_DIR`.
+    fn env_with(pairs: impl IntoIterator<Item = (&'static str, &'static str)>) -> FakeEnv {
+        let mut map = BTreeMap::from([(ENV_DATA_DIR, TEST_DATA_DIR)]);
+        map.extend(pairs);
+        FakeEnv(map)
+    }
+
+    fn scratch_env() -> FakeEnv {
+        env_with([])
+    }
+
+    /// `from_sources` for the tests that are not about the HS9 refusal.
+    fn resolved(file: &TomlValues, env: &impl EnvLookup) -> FamilyHubConfig {
+        FamilyHubConfig::from_sources(file, env).expect("a scratch data dir is never refused")
+    }
+
     #[test]
     fn default_http_addr_is_zero_zero_zero_zero_eight_zero_eight_zero() {
-        let config = FamilyHubConfig::from_sources(&TomlValues::default(), &empty_env());
+        let config = resolved(&TomlValues::default(), &scratch_env());
         assert_eq!(config.http_addr, "0.0.0.0:8080".parse().unwrap());
         assert_eq!(config.tls_addr, "0.0.0.0:8443".parse().unwrap());
     }
@@ -381,26 +519,138 @@ mod tests {
         let file = TomlValues::parse("data_dir = \"C:/from-file\"\n");
         let env = FakeEnv(BTreeMap::from([(ENV_DATA_DIR, "C:/from-env")]));
 
-        let config = FamilyHubConfig::from_sources(&file, &env);
+        let config = resolved(&file, &env);
         assert_eq!(config.data_dir, PathBuf::from("C:/from-env"));
     }
 
     #[test]
     fn file_data_dir_is_used_when_env_is_unset() {
         let file = TomlValues::parse("data_dir = \"C:/from-file\"\n");
-        let config = FamilyHubConfig::from_sources(&file, &empty_env());
+        let config = resolved(&file, &empty_env());
         assert_eq!(config.data_dir, PathBuf::from("C:/from-file"));
     }
 
     #[test]
     fn env_addr_overrides_default() {
-        let env = FakeEnv(BTreeMap::from([
+        let env = env_with([
             (ENV_HTTP_ADDR, "127.0.0.1:9000"),
             (ENV_TLS_ADDR, "127.0.0.1:9443"),
-        ]));
-        let config = FamilyHubConfig::from_sources(&TomlValues::default(), &env);
+        ]);
+        let config = resolved(&TomlValues::default(), &env);
         assert_eq!(config.http_addr, "127.0.0.1:9000".parse().unwrap());
         assert_eq!(config.tls_addr, "127.0.0.1:9443".parse().unwrap());
+    }
+
+    // HS9 (`docs/BACKLOG.md` B-3): the live service directory is off limits
+    // to a test binary and to any tool run with FAMILY_HUB_REFUSE_SYSTEM_DIR=1.
+
+    #[test]
+    fn falling_back_to_the_system_data_dir_is_an_error_under_cfg_test() {
+        let err = FamilyHubConfig::from_sources(&TomlValues::default(), &empty_env())
+            .expect_err("the default fallback is the live service directory");
+
+        let ConfigError::SystemDataDirRefused { data_dir, .. } = &err;
+        assert_eq!(data_dir, &system_data_dir());
+        let message = err.to_string();
+        assert!(
+            message.contains(ENV_DATA_DIR),
+            "the refusal must name the variable that fixes it: {message}"
+        );
+        assert!(
+            message.contains(&system_data_dir().display().to_string()),
+            "the refusal must name the directory it refused: {message}"
+        );
+    }
+
+    #[test]
+    fn naming_the_system_data_dir_explicitly_is_refused_too() {
+        // Same directory, spelled the other way round: still refused.
+        let spelled = system_data_dir().display().to_string().replace('\\', "/");
+        let file = TomlValues::parse(&format!("data_dir = \"{spelled}\"\n"));
+        assert!(
+            FamilyHubConfig::from_sources(&file, &empty_env()).is_err(),
+            "{spelled} is the live service directory however it is spelled"
+        );
+    }
+
+    #[test]
+    fn the_refuse_env_var_is_the_reason_when_it_is_set() {
+        let env = FakeEnv(BTreeMap::from([(ENV_REFUSE_SYSTEM_DIR, "1")]));
+        let err = FamilyHubConfig::from_sources(&TomlValues::default(), &env)
+            .expect_err("the default fallback is the live service directory");
+
+        let ConfigError::SystemDataDirRefused { reason, .. } = &err;
+        assert_eq!(*reason, "FAMILY_HUB_REFUSE_SYSTEM_DIR=1 is set");
+        assert!(err.to_string().contains(ENV_REFUSE_SYSTEM_DIR));
+    }
+
+    #[test]
+    fn a_scratch_data_dir_is_never_refused() {
+        let config = resolved(&TomlValues::default(), &scratch_env());
+        assert_eq!(config.data_dir, PathBuf::from(TEST_DATA_DIR));
+        assert!(!is_system_data_dir(&config.data_dir));
+    }
+
+    #[test]
+    fn is_system_data_dir_normalises_separators_trailing_slashes_and_case() {
+        let system = system_data_dir();
+        assert!(is_system_data_dir(&system));
+        assert!(is_system_data_dir(&PathBuf::from(format!(
+            "{}\\",
+            system.display()
+        ))));
+        assert!(is_system_data_dir(&PathBuf::from(
+            system.display().to_string().replace('\\', "/")
+        )));
+        #[cfg(windows)]
+        assert!(is_system_data_dir(&PathBuf::from(
+            system.display().to_string().to_lowercase()
+        )));
+        assert!(!is_system_data_dir(Path::new(TEST_DATA_DIR)));
+    }
+
+    /// The half of HS9 that no amount of `src/` care can enforce: an
+    /// integration test binary links this crate **without** `cfg(test)`, so
+    /// its only protection is its own harness setting `FAMILY_HUB_DATA_DIR`
+    /// before anything resolves config. Assert every suite that can reach
+    /// config or a pool does exactly that, so a new suite copied from an old
+    /// one cannot quietly reopen B-3.
+    #[test]
+    fn every_integration_test_suite_sets_the_data_dir_itself() {
+        let tests_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
+        let entries = std::fs::read_dir(&tests_dir)
+            .unwrap_or_else(|err| panic!("{} is readable: {err}", tests_dir.display()));
+
+        let mut checked = 0usize;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
+                continue;
+            }
+            let source = std::fs::read_to_string(&path)
+                .unwrap_or_else(|err| panic!("{} is readable: {err}", path.display()));
+
+            let touches_config = source.contains("FamilyHubConfig")
+                || source.contains("db::pool")
+                || source.contains("db::pools")
+                || source.contains("CARGO_BIN_EXE_family-hub");
+            if !touches_config {
+                continue;
+            }
+
+            assert!(
+                source.contains(ENV_DATA_DIR),
+                "{} boots config, a pool or the real binary, so its harness must set \
+                 {ENV_DATA_DIR} itself (docs/BACKLOG.md B-3)",
+                path.display()
+            );
+            checked += 1;
+        }
+
+        assert!(
+            checked >= 15,
+            "expected the audit to cover the whole suite, only checked {checked} files"
+        );
     }
 
     // QA round 1, Q1-14: the scheduled screensaver had no enable path
@@ -410,30 +660,30 @@ mod tests {
 
     #[test]
     fn screensaver_schedule_hour_defaults_to_none() {
-        let config = FamilyHubConfig::from_sources(&TomlValues::default(), &empty_env());
+        let config = resolved(&TomlValues::default(), &scratch_env());
         assert_eq!(config.screensaver_schedule_hour, None);
     }
 
     #[test]
     fn env_screensaver_schedule_hour_overrides_file_and_default() {
         let file = TomlValues::parse("[screensaver]\nschedule_hour = 5\n");
-        let env = FakeEnv(BTreeMap::from([(ENV_SCREENSAVER_HOUR, "20")]));
+        let env = env_with([(ENV_SCREENSAVER_HOUR, "20")]);
 
-        let config = FamilyHubConfig::from_sources(&file, &env);
+        let config = resolved(&file, &env);
         assert_eq!(config.screensaver_schedule_hour, Some(20));
     }
 
     #[test]
     fn file_screensaver_schedule_hour_is_used_when_env_is_unset() {
         let file = TomlValues::parse("[screensaver]\nschedule_hour = 21\n");
-        let config = FamilyHubConfig::from_sources(&file, &empty_env());
+        let config = resolved(&file, &scratch_env());
         assert_eq!(config.screensaver_schedule_hour, Some(21));
     }
 
     #[test]
     #[should_panic(expected = "must be 0..=23")]
     fn out_of_range_screensaver_schedule_hour_panics_at_startup() {
-        let env = FakeEnv(BTreeMap::from([(ENV_SCREENSAVER_HOUR, "24")]));
+        let env = env_with([(ENV_SCREENSAVER_HOUR, "24")]);
         let _ = FamilyHubConfig::from_sources(&TomlValues::default(), &env);
     }
 
@@ -445,23 +695,23 @@ mod tests {
 
     #[test]
     fn log_level_defaults_to_none() {
-        let config = FamilyHubConfig::from_sources(&TomlValues::default(), &empty_env());
+        let config = resolved(&TomlValues::default(), &scratch_env());
         assert_eq!(config.log_level, None);
     }
 
     #[test]
     fn env_log_level_overrides_file_and_default() {
         let file = TomlValues::parse("[log]\nlevel = \"warn\"\n");
-        let env = FakeEnv(BTreeMap::from([(ENV_LOG_LEVEL, "debug")]));
+        let env = env_with([(ENV_LOG_LEVEL, "debug")]);
 
-        let config = FamilyHubConfig::from_sources(&file, &env);
+        let config = resolved(&file, &env);
         assert_eq!(config.log_level.as_deref(), Some("debug"));
     }
 
     #[test]
     fn file_log_level_is_used_when_env_is_unset() {
         let file = TomlValues::parse("[log]\nlevel = \"debug\"\n");
-        let config = FamilyHubConfig::from_sources(&file, &empty_env());
+        let config = resolved(&file, &scratch_env());
         assert_eq!(config.log_level.as_deref(), Some("debug"));
     }
 

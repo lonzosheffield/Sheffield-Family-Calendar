@@ -3392,3 +3392,35 @@ answer off the grid rather than keeping a second copy of the rule.
   SSR reachability argument is the same one that made `DayItemRow` public.
 - Worktrees pruned at this close: every `worktree-*` branch checkout and the `hs/HS5-qa3b` checkout
   (`.claude/worktrees/wf_53761367-3a7-1`); the branch itself is kept for the record.
+
+## HS9 (`hs/HS9`, 2026-09-03) — tests and tools can no longer open the live data directory
+
+`docs/BACKLOG.md` B-3 is closed; the delivered shape is written up there. Two notes for the Boss.
+
+### H-HS9-1. Three suites really had been running against the family's live database
+
+The acceptance canary caught it: with `FAMILY_HUB_DATA_DIR` unset, `cargo test --features server`
+moved `C:\ProgramData\FamilyHub\family.db` on every run. The cause was not a missing `init_test_env`
+— `tests/whiteboard_tests.rs`, `tests/realtime_tests.rs` and `tests/loop_tests.rs` all had one — but
+its *call site*: `init_test_env()` was called from `spawn_hub()`, while those tests call
+`realtime::reset_board().await` **before** `spawn_hub()`, and `reset_board` opens the process-wide
+pool itself. `db::pools()` is a `OnceCell`, so that first opener won for the whole binary. In a shell
+without the preamble those suites were drawing 500 strokes on the family's whiteboard, clearing the
+board and running stroke compaction against the real `whiteboard_strokes` table. The fix moves
+`init_test_env()` into `hub_lock()`, the first line of every test in all three files (plus
+`tests/homeschool_loop_tests.rs`, defensively).
+
+**Ask:** the owner may want to look at the whiteboard on the TV. Any strokes the family had drawn
+before an agent ran those suites in a bare shell will have been cleared or compacted away. Nothing
+else in the schema was touched — those tests only write `whiteboard_strokes` — so no recovery step
+is needed for calendar, routines, profiles or homeschool rows. `docs/RECOVERY.md` failure mode 7 is
+still the PIN reset from the earlier 2026-09-02 incident, unrelated to this.
+
+### H-HS9-2. `FamilyHubConfig::from_sources` now returns `Result`
+
+`load()` keeps its signature and panics with the refusal message, so the call sites this task does
+not own (`src/main.rs`, `src/server/db.rs`, `src/server/router.rs`, `src/server/backup.rs`,
+`src/server/api/profiles.rs`, `src/server/api/screensaver.rs`) are unchanged and now fail loudly
+rather than silently. `try_load()` is the new non-panicking entry point; only `family-hub.exe run`
+and `import-curriculum` use it. If a later task wants the same one-line exit for another CLI path,
+`try_load` is the seam.

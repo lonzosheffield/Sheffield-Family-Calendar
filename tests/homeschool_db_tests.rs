@@ -40,9 +40,27 @@ use sqlx::SqlitePool;
 
 static SCRATCH_COUNTER: AtomicU32 = AtomicU32::new(0);
 
+/// HS9 (`docs/BACKLOG.md` B-3): pin this binary's data directory to a
+/// pid-keyed scratch directory before anything here can resolve config —
+/// this harness, never the shell, is what keeps the family's live
+/// `%ProgramData%\FamilyHub` out of reach. Every test below already builds
+/// its own explicit `scratch_config`, so this is purely the backstop for the
+/// code paths that call `FamilyHubConfig::load()` themselves.
+fn init_test_env() -> PathBuf {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    let base = std::env::temp_dir().join(format!("familyhub-hs1-tests-{}", std::process::id()));
+    ONCE.call_once(|| {
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("test scratch directory is creatable");
+        std::env::set_var("FAMILY_HUB_DATA_DIR", &base);
+    });
+    base
+}
+
 /// A fresh, empty scratch directory for one test. Windows reuses PIDs, so the
 /// directory is wiped before use exactly as `tests/profiles_tests.rs` does.
 fn scratch_dir(name: &str) -> PathBuf {
+    init_test_env();
     let n = SCRATCH_COUNTER.fetch_add(1, Ordering::SeqCst);
     let dir = std::env::temp_dir().join(format!("familyhub-hs1-{name}-{}-{n}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);

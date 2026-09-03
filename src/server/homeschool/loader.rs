@@ -1060,12 +1060,19 @@ pub async fn seed_enrollments_on(pool: &SqlitePool, date: &str) -> Result<(), sq
 // import-curriculum (family-hub.exe)
 // ---------------------------------------------------------------------------
 
-/// `family-hub.exe import-curriculum <path> [--replace]` (H5).
+/// `family-hub.exe import-curriculum <path> [--replace] [--yes]` (H5).
 ///
 /// Validates first, copies second: a bad path or a rejected file writes
 /// **nothing** — not the destination copy, not a database row (§3 HS1 accept
 /// (g)). `--replace` then rewrites that slug's rows in one transaction, keeping
 /// every `lesson_log` row whose subject and assignment still exist.
+///
+/// `confirmed` is `--yes`. HS9 (`docs/BACKLOG.md` B-3): when `config.data_dir`
+/// is the live service directory (`%ProgramData%\FamilyHub`) this command
+/// refuses without it, because that is exactly how an agent's fixture import
+/// ended up in the family's real database. The check is the very first thing
+/// this function does, so a refusal reads no file, opens no pool and writes
+/// nothing.
 ///
 /// Returns the human-readable summary the CLI prints, or the message it prints
 /// to stderr before exiting non-zero.
@@ -1073,7 +1080,18 @@ pub async fn import_curriculum(
     config: &FamilyHubConfig,
     source_path: &Path,
     replace: bool,
+    confirmed: bool,
 ) -> Result<String, String> {
+    if crate::server::config::is_system_data_dir(&config.data_dir) && !confirmed {
+        return Err(format!(
+            "refusing to import into the live service data directory {} without --yes: it holds \
+             the family's real curriculum, enrollments and lesson log. Set FAMILY_HUB_DATA_DIR to \
+             a scratch directory to try this out, or re-run with --yes if you really mean to \
+             change the family's data.",
+            config.data_dir.display()
+        ));
+    }
+
     let curriculum = read_curriculum(source_path).map_err(|err| err.to_string())?;
 
     // Open the database *before* the copy (QA_HS_ROUND_1 QH1-08). Opening the

@@ -11,6 +11,22 @@ use std::path::Path;
 use family_calendar::server::config::FamilyHubConfig;
 use family_calendar::server::db;
 
+/// HS9 (`docs/BACKLOG.md` B-3): pin this binary's data directory to a
+/// pid-keyed scratch directory before any test here calls
+/// `FamilyHubConfig::load()`. Without it, a `load()` in a shell that never
+/// exported `FAMILY_HUB_DATA_DIR` resolves to the family's live
+/// `%ProgramData%\FamilyHub` — the accident B-3 records.
+fn init_test_env() -> std::path::PathBuf {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    let base = std::env::temp_dir().join(format!("familyhub-config-tests-{}", std::process::id()));
+    ONCE.call_once(|| {
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("test scratch directory is creatable");
+        std::env::set_var("FAMILY_HUB_DATA_DIR", &base);
+    });
+    base
+}
+
 /// Sets `FAMILY_HUB_DATA_DIR` to a fresh temp directory, boots the real
 /// database bootstrap path (`db::pool()`, exactly what `main.rs` calls), and
 /// asserts `family.db` was created **inside that directory and nowhere
@@ -60,6 +76,11 @@ async fn boots_with_data_dir_and_writes_family_db_there_and_nowhere_else() {
 /// `familyhub.toml` present for this process).
 #[test]
 fn default_bind_address_is_zero_zero_zero_zero_colon_eight_zero_eight_zero() {
+    // HS9: `load()` below resolves the data dir too, so pin it at a scratch
+    // directory first (B-3) — this test is about the bind address, and must
+    // not be the thing that opens the family's live data directory.
+    init_test_env();
+
     // `FamilyHubConfig::load()` reads the real environment; guard against a
     // stray FAMILY_HUB_ADDR leaking in from the caller's shell so this
     // assertion is meaningful rather than accidentally true.

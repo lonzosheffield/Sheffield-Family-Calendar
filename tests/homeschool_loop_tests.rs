@@ -282,6 +282,10 @@ async fn lesson_log_count(pool: &SqlitePool, profile_id: i64, subject_id: i64) -
 /// `tests/loop_tests.rs::hub_lock`) keeps this test binary's other tests, if
 /// any are ever added, from interleaving with this one.
 async fn hub_lock() -> tokio::sync::MutexGuard<'static, ()> {
+    // HS9 (`docs/BACKLOG.md` B-3): pin the data directory in the first line of
+    // every test, so nothing that opens the process-wide pool before
+    // `spawn_test_server()` can reach `%ProgramData%\FamilyHub`.
+    init_test_env();
     static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
     LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
         .lock()
