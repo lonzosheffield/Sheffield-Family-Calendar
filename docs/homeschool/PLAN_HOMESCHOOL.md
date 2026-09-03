@@ -413,10 +413,16 @@ DTOs (append to `types.rs`; `Clone, PartialEq, Debug, Serialize, Deserialize`; d
 `LessonOccurrence { subject_id, assignment_id: Option<i64>, week, scheduled_date, weekday, category,
 title, text: Option<String>, detail: Option<String>, source: Option<String>, icon_name: Option<String>,
 part: Option<(u32,u32)>, shared: bool, sort_order, status: Option<LogStatus>, note: Option<String>,
-days: Option<Vec<Weekday>> }` — the last field is the QA round 4 amendment (QH4-03 / `docs/RESIDUAL.md`
-R-11, 2026-09-03): the row's own per-week override (`assignments.days`, H3 rule 1), appended last and
-`#[serde(default)]` so the DTO stays schema-additive, so that Today — which holds only occurrences —
-can hand it back to `upsert_assignment`, which replaces the whole row (QH3-04);
+days: Option<Vec<Weekday>>, ordinal: i64 }` — the last two fields are QA amendments, each appended
+last and defaulted so the DTO stays schema-additive. `days` is the QA round 4 amendment (QH4-03 /
+`docs/RESIDUAL.md` R-11, 2026-09-03): the row's own per-week override (`assignments.days`, H3 rule 1),
+`#[serde(default)]`, so that Today — which holds only occurrences — can hand it back to
+`upsert_assignment`, which replaces the whole row (QH3-04). `ordinal` is the QA round 5 amendment
+(QH5-01 / `docs/RESIDUAL.md` R-13, 2026-09-03): the row's `assignments.ordinal` (`1` for the untitled
+daily occurrence, the row H6 item 6 creates), `#[serde(default = "first_ordinal")]`, so that the key
+`upsert_assignment` writes to travels with the row instead of being recovered from its rank in date
+order — which a per-week `days` pin makes wrong (a pinned row is dealt to its own days and takes no
+part in rule 5's spread), so an edit overwrote the *other* row;
 `BoyToday { user_id, name, due_today: Vec<LessonOccurrence>, catch_up: Vec<…>, done: Vec<…>, done_count,
 skipped_count, total_count }`; `TogetherOccurrence { occurrence: LessonOccurrence, user_ids: Vec<i64>,
 done_user_ids: Vec<i64> }`; `HomeschoolTodayView { date, is_school_day, anyone_enrolled: bool,
