@@ -285,6 +285,13 @@ at startup. See `docs/RECOVERY.md` failure mode 1 if the reinstall itself
 leaves `/tv` or `/m` unstyled — the same "both pieces beside each other"
 requirement step 3 already covers.
 
+**One glance while you are at the TV:** open the whiteboard and check whether the
+strokes the family had drawn are still there. Before the HS9 build, three of the
+project's own test suites, when run in a shell that had not set `FAMILY_HUB_DATA_DIR`,
+wrote to and then cleared the *live* `whiteboard_strokes` table (`docs/HANDOFF.md`
+H-HS9-1). Nothing else — calendar, routines, profiles, homeschool rows — was touched, so
+a blank board just means redrawing it; the HS9 build closes the hole.
+
 ---
 
 ## When all of it passes
