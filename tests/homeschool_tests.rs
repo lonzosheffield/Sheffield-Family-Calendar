@@ -1322,6 +1322,22 @@ async fn hs4_k_add_extra_requires_a_session_and_bounds_scheduled_date() {
     .expect("count");
     assert_eq!(count.0, 0, "the rejected add must write nothing");
 
+    // update_extra re-files an existing extra: it must honour the same
+    // ±365 day window as add_extra rather than accepting any parseable date.
+    assert!(
+        api::update_extra(
+            extra.id,
+            "Copywork".to_string(),
+            Category::Daily,
+            None,
+            "2099-01-01".to_string(),
+            token.clone(),
+        )
+        .await
+        .is_err(),
+        "update_extra honours the same ±365 day window as add_extra"
+    );
+
     // toggle_extra needs no cookie and honours the ±1 day date window.
     let ticked = api::toggle_extra(
         extra.id,

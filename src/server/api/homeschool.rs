@@ -1396,6 +1396,28 @@ pub async fn set_subject_schedule(
     }
 }
 
+/// HS4 (k): a parent-added task lives within a year of today, on the way in
+/// and on every re-filing.
+#[cfg(feature = "server")]
+fn check_extra_date(scheduled_date: &str) -> Result<(), ServerFnError> {
+    if sched::weekday(scheduled_date).is_none() {
+        return Err(validation_error(
+            "scheduled_date must be a valid YYYY-MM-DD date",
+        ));
+    }
+    let today = today_string();
+    let earliest = sched::add_days(&today, -365)
+        .ok_or_else(|| validation_error("could not compute the allowed date range"))?;
+    let latest = sched::add_days(&today, 365)
+        .ok_or_else(|| validation_error("could not compute the allowed date range"))?;
+    if scheduled_date < earliest.as_str() || scheduled_date > latest.as_str() {
+        return Err(validation_error(
+            "scheduled_date must be within a year of today",
+        ));
+    }
+    Ok(())
+}
+
 /// Add a parent-authored task to a boy's date (H8).
 #[allow(clippy::too_many_arguments)]
 #[server(endpoint = "add_extra")]
@@ -1413,22 +1435,7 @@ pub async fn add_extra(
     {
         crate::server::api::profiles::require_session_or_cookie(&auth).await?;
         check_date_window(&date)?;
-        if sched::weekday(&scheduled_date).is_none() {
-            return Err(validation_error(
-                "scheduled_date must be a valid YYYY-MM-DD date",
-            ));
-        }
-        let today = today_string();
-        let earliest = sched::add_days(&today, -365)
-            .ok_or_else(|| validation_error("could not compute the allowed date range"))?;
-        let latest = sched::add_days(&today, 365)
-            .ok_or_else(|| validation_error("could not compute the allowed date range"))?;
-        if scheduled_date.as_str() < earliest.as_str() || scheduled_date.as_str() > latest.as_str()
-        {
-            return Err(validation_error(
-                "scheduled_date must be within a year of today",
-            ));
-        }
+        check_extra_date(&scheduled_date)?;
 
         let pool = crate::server::db::pool()
             .await
@@ -1518,11 +1525,7 @@ pub async fn update_extra(
     #[cfg(feature = "server")]
     {
         crate::server::api::profiles::require_session_or_cookie(&auth).await?;
-        if sched::weekday(&scheduled_date).is_none() {
-            return Err(validation_error(
-                "scheduled_date must be a valid YYYY-MM-DD date",
-            ));
-        }
+        check_extra_date(&scheduled_date)?;
 
         let pool = crate::server::db::pool()
             .await
