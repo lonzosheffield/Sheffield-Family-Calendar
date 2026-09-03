@@ -396,3 +396,355 @@ recorded below as R-11.
   the scratch path each test already has in `needle`), or gate the WARN assertion behind a
   `tracing::callsite::rebuild_interest_cache()` call *before* `load_directory`. Either is a
   test-only change; rerun the suite ten times and keep the one that never drops a line.
+
+---
+
+## R-13 … R-16. QA round 5 of the Homeschool wave (`docs/qa/QA_HS_ROUND_5.md`, HS8, 2026-09-03)
+
+Every finding of round 5 stands open on `main` @ `ccf4e96` (none carries a FIXED status
+in the report); each is recorded here with the auditor's (Fable 5) solution attached
+verbatim so the fixing wave applies it without re-deriving it. None is a regression of
+a round-1…4 item: R-13 and R-14 are consequences of the per-week `days` override that
+the QH3-04 amendment (R-8) introduced, R-15 of the H2 nudge being driven by
+`can_finish_week` alone, and R-16 is a validation inconsistency in HS4's file. R-13
+needs a Boss DTO amendment first (same shape and provenance as R-11 / QH4-03's
+`days`); applying it also closes R-2.
+
+## R-13. QH5-01 (High, HS5/O + one DTO field in HS3's `src/shared/types.rs`) — an edit on a pinned later-ordinal row overwrites the *other* row
+
+- **Origin:** `docs/qa/QA_HS_ROUND_5.md` QH5-01;
+  `src/client/components/homeschool/year.rs:61-77` (`row_ordinals`), `:327-330`;
+  `src/client/components/homeschool/today.rs:124-152` (`assignment_ordinals`), `:443`,
+  `:533-544`, `:669`; `src/shared/homeschool.rs:646-686`.
+- **What ships:** both surfaces recover the `ordinal` that `upsert_assignment` is keyed on
+  from the row's **rank in date order** — `row_ordinals` takes first appearance across the
+  grid's day cells, `assignment_ordinals` sorts the on-screen lessons by `scheduled_date`.
+  That was exact while every row floated in rule 5's spread, and R-2 records it as exact.
+  It stopped being exact the moment QH3-04 landed: a row pinned by `assignments.days` is
+  dealt to its own days and takes no part in the spread (`shared/homeschool.rs:646-686`),
+  so a later-ordinal row pinned to an earlier day now ranks first. Concrete, on the
+  committed fixture: from the Year cell sheet a parent moves `Fables` week 1's second
+  reading (`ordinal 2`, "The Patient Heron", Friday) to Monday — `Save days` correctly
+  sends `ordinal: 2, days: Some("M")`. After the refetch the grid is Mon `Heron` (pinned),
+  Tue `Kite` part 1 of 2, Fri `Kite` part 2 of 2, and `row_ordinals` /
+  `assignment_ordinals` now say `Heron → 1, Kite → 2`. The parent's **next** edit on that
+  subject — retyping Heron's text from the Year sheet or from Today, or touching its days
+  again — is sent as `EditAssignment { ordinal: 1, text: <Heron's draft>, days: Some("M") }`
+  and `upsert_assignment` (`ON CONFLICT (subject_id, week, ordinal) DO UPDATE`) overwrites
+  **Kite's** row: its text is replaced by Heron's and it is pinned to Monday too; the real
+  Heron row is untouched, so the week now shows Heron twice and "The Kite and the Kettle"
+  is gone from the database. The loader is insert-missing-only, so a reboot does not bring
+  it back; the only recovery is `import-curriculum --replace` on the hub PC or retyping the
+  lost text by hand. Silent data loss from a supported parent action, on the one subject of
+  the family's real file that carries two ordinals every week; reachable from both the Year
+  sheet and Today. No test pins an ordinal-2 row ahead of an ordinal-1 row
+  (`hs4_i_a_pinned_rows_inline_text_edit_from_today_leaves_its_days_untouched` pins a
+  subject with one row).
+- **Why it is residual:** the one that must not wait — silent data loss, and the family's
+  real file has a two-ordinal subject every week. It needs the Boss DTO amendment first,
+  then one `hs/HS5-qa5` branch touching `types.rs` (the field), `shared/homeschool.rs` (one
+  line + one `--lib` case), `today.rs`, `year.rs`, `tv/fixture.rs`, the two component test
+  fixtures, `tests/homeschool_tests.rs` and `tests/glyph_tests.rs`. Nothing on the TV
+  changes behaviour (the kiosk never edits). Closes R-2 for free.
+- **Solution (Fable, apply verbatim):** The row already knows its own ordinal — carry it,
+  as `days` is carried (QH4-03), and delete the inference.
+  1. Boss amendment to `docs/homeschool/PLAN_HOMESCHOOL.md` §3 HS3's `LessonOccurrence`
+     line: append `ordinal: i64` after `days` — "the row's `assignments.ordinal` (`1` for
+     the untitled daily occurrence, the row H6 item 6 creates),
+     `#[serde(default = "first_ordinal")]`, appended last (QA round 5 QH5-01)".
+  2. `src/shared/types.rs`, in `LessonOccurrence` directly after
+     `pub days: Option<Vec<Weekday>>,`:
+
+     ```rust
+     /// The row's own `assignments.ordinal` — the key `upsert_assignment` writes to (QA round 5 QH5-01).
+     /// `1` for the untitled daily occurrence, which is the row H6 item 6 creates. Appended last and
+     /// defaulted, like `days`, so the DTO stays schema-additive.
+     #[serde(default = "first_ordinal")]
+     pub ordinal: i64,
+     ```
+
+     and, beside the struct, `fn first_ordinal() -> i64 { 1 }`.
+  3. `src/shared/homeschool.rs::occurrence()`: after the `days:` field add
+     `ordinal: row.map_or(1, |row| row.ordinal),`.
+  4. `today.rs`: replace both
+     `let edit_ordinal = edit_ordinal_for(&ordinals, subject_id, assignment_id);` (`:443`,
+     `:669`) with `let edit_ordinal = Some(occurrence.ordinal);`; delete `group_items`,
+     `item_date`, `assignment_ordinals`, `edit_ordinal_for`, the `ordinals` prop and
+     argument on `GroupBlock`, `TogetherRow`, `BoyBlock` and `DayItemRow`, and the
+     now-unused `BTreeMap` import.
+  5. `year.rs`: delete `row_ordinals` and its two unit tests
+     (`ordinals_come_from_first_appearance_across_the_week`,
+     `a_daily_row_with_no_assignment_rows_has_no_ordinals_to_recover` — they test the
+     deleted helper, not an Accept clause); in `YearCellSheet` replace the
+     `ordinal: occurrence.assignment_id.and_then(|id| ordinals.get(&id).copied()).unwrap_or(1),`
+     prop with `ordinal: occurrence.ordinal,` and drop `let ordinals = row_ordinals(&row);`.
+  6. Give every `LessonOccurrence` literal the field: `tv/fixture.rs::occurrence()` and the
+     `today.rs` / `year.rs` test fixtures `ordinal: 1` (the `year.rs`
+     `occurrence(Some(52), …)` fixture `ordinal: 2`); `tests/glyph_tests.rs` builds its rows
+     through `sched::today_view` / `sched::week_grid`, so nothing there changes.
+  7. `--lib` case beside `hs3_b_an_assignment_row_with_its_own_days_overrides_the_subjects`:
+
+     ```rust
+     #[test]
+     fn hs3_b_a_pinned_later_ordinal_keeps_its_own_ordinal_ahead_of_an_earlier_row() {
+         let mut plan = reading_plan("TF", 2);
+         plan.subjects[0].rows[1].days = Some(days("M"));
+         let enrollment = sample_enrollment(1, "2026-09-07");
+         let dealt = occurrences(&plan, &enrollment);
+         assert_eq!(dealt[0].scheduled_date, "2026-09-07");
+         assert_eq!(dealt[0].assignment_id, Some(101));
+         assert_eq!(dealt[0].ordinal, 2, "QH5-01: the ordinal is the row's own, never its rank in date order");
+         assert_eq!(dealt[1].assignment_id, Some(100));
+         assert_eq!(dealt[1].ordinal, 1);
+     }
+     ```
+  8. `tests/homeschool_tests.rs`, beside
+     `hs4_i_a_pinned_rows_inline_text_edit_from_today_leaves_its_days_untouched`:
+
+     ```rust
+     #[tokio::test]
+     async fn hs4_i_editing_a_pinned_second_reading_never_overwrites_the_first() {
+         let _guard = hs4_lock().await;
+         let pool = db::pool().await.expect("pool");
+         reset_homeschool_state(pool).await;
+         let curriculum_id = load_fixture(pool).await;
+         let fables = subject_id(pool, curriculum_id, "Fables").await;
+         let token = parent_session().await;
+         const BOY: i64 = 1;
+         const ANCHOR: &str = "2026-09-07";
+         api::upsert_assignment(fables, 1, 2, "The Patient Heron".to_string(), None, Some("M".to_string()), token.clone())
+             .await
+             .expect("pin week 1's second fable to Monday from the Year sheet");
+         enroll_direct(pool, BOY, curriculum_id, 1, "MTWRF", ANCHOR).await;
+         let grid = api::get_week_grid(BOY, 1).await.expect("grid");
+         let row = grid.rows.iter().find(|row| row.title == "Fables").expect("the Fables row");
+         let monday = row.cells[0].first().cloned().expect("the pinned reading is dealt to Monday");
+         assert_eq!(monday.text.as_deref(), Some("The Patient Heron"));
+         assert_eq!(monday.ordinal, 2, "QH5-01: the Monday entry is ordinal 2 however early it falls");
+         api::upsert_assignment(fables, 1, monday.ordinal, "The Patient Heron, retold".to_string(), monday.detail.clone(), monday.days.as_deref().map(days_to_string), token.clone())
+             .await
+             .expect("the Year sheet's edit, sent with the occurrence's own ordinal");
+         let rows: Vec<(i64, String, Option<String>)> =
+             sqlx::query_as("SELECT ordinal, text, days FROM assignments WHERE subject_id = ?1 AND week = 1 ORDER BY ordinal")
+                 .bind(fables)
+                 .fetch_all(pool)
+                 .await
+                 .expect("week 1 rows");
+         api::upsert_assignment(fables, 1, 2, "The Patient Heron".to_string(), None, None, token).await.expect("restore the fixture row");
+         assert_eq!(
+             rows,
+             vec![(1, "The Kite and the Kettle".to_string(), None), (2, "The Patient Heron, retold".to_string(), Some("M".to_string()))],
+             "the first fable is untouched and the second carries the edit"
+         );
+     }
+     ```
+  9. Source-shape guard in `tests/glyph_tests.rs` beside `hs5_qa3_*`:
+
+     ```rust
+     #[test]
+     fn hs5_qa5_the_ordinal_an_edit_writes_to_is_the_rows_own() {
+         for file in ["today.rs", "year.rs"] {
+             let source = school_source(file);
+             for banned in ["assignment_ordinals(", "row_ordinals(", "edit_ordinal_for("] {
+                 assert!(!source.contains(banned), "{file} must not infer an ordinal from date order (QH5-01): {banned}");
+             }
+         }
+         assert!(one_line(&school_source("today.rs")).contains("let edit_ordinal = Some(occurrence.ordinal);"));
+         assert!(one_line(&school_source("year.rs")).contains("ordinal: occurrence.ordinal,"));
+     }
+     ```
+  10. `docs/RESIDUAL.md` R-2 is closed by the same field (Today's edit no longer needs a
+      row on screen to know its ordinal); record it at the merge, and record the two
+      `year.rs` unit-test deletions in `docs/HANDOFF.md`.
+
+## R-14. QH5-02 (Med, HS5/O) — the Year cell sheet's *text* Save pins a floating row to its resolved days
+
+- **Origin:** `docs/qa/QA_HS_ROUND_5.md` QH5-02;
+  `src/client/components/homeschool/year.rs:389-406` (`CellEntry`'s text **Save**,
+  `days: pinned_days(&days())` at `:401`); `:447-450`; `src/shared/homeschool.rs:665-672`.
+- **What ships:** H6/D-5 make the cell sheet's text control an "inline edit of
+  `assignment.text`". Its Save handler sends `days: pinned_days(&days())`, i.e. the days
+  control's value — which is prefilled with the row's **resolved** days (`entry_days`, "MW"
+  for a floating split row) — so a text-only edit writes `assignments.days = 'MW'` over the
+  row's `NULL`. The row is now pinned: rule 1 deals it once per pinned day with
+  `part: None` and it takes no part in rule 5's spread, so after retyping `Old Tales` week
+  2's text from the Year sheet the phone and the TV show the full reading on Monday **and**
+  Wednesday with no `part 1 of 2` / `continue · 2 of 2` (rule 5's labels, HS5 (b)'s and
+  HS6's row anatomy), and that week is detached from the subject's days for good (a later
+  `School settings` change to `Old Tales`' days leaves week 2 on MW; a school-days change
+  intersects it away). Today's two handlers (`days: occurrence.days`) and the Year sheet's
+  own `Save days` (`days: Some(days())`) are right; only the text Save conflates "what the
+  control shows" with "what the row stores". Invisible to the existing guards:
+  `hs5_qa3_the_year_cell_sheet_edits_the_days_of_one_week_not_of_every_week` asserts the
+  prefill and `days: Some(days())`, both of which stay true.
+- **Why it is residual:** a one-line change in `CellEntry` plus a deleted helper; rides the
+  same `hs/HS5-qa5` branch as R-13. Its `homeschool_tests` case reads `ordinal` off the
+  occurrence, so land R-13 first or pass `1` meanwhile.
+- **Solution (Fable, apply verbatim):** `year.rs` `CellEntry`: above the `rsx!`, beside
+  `let detail = occurrence.detail.clone();`, add
+
+  ```rust
+  // QH5-02: the text control writes back the days the row *stores* (`None` = inherit the subject's),
+  // never the resolved days the control displays — otherwise a text edit pins a floating row and
+  // drops its part labels.
+  let stored_days = occurrence.days.as_deref().map(days_to_string);
+  ```
+
+  in the text **Save** button's `onclick` capture it
+  (`let detail = detail.clone(); let stored_days = stored_days.clone();`) and replace
+  `days: pinned_days(&days()),` with `days: stored_days.clone(),`; leave `Save days` at
+  `days: Some(days()),`; delete `pinned_days` and its unit test
+  `an_empty_days_control_inherits_the_subject_rather_than_writing_nonsense` (a helper test,
+  not an Accept clause). Extend
+  `hs5_qa3_the_year_cell_sheet_edits_the_days_of_one_week_not_of_every_week` in
+  `tests/glyph_tests.rs`:
+
+  ```rust
+  let year = school_source("year.rs");
+  assert!(one_line(&year).contains("let stored_days = occurrence.days.as_deref().map(days_to_string);"), "QH5-02: the text Save must write back the stored override");
+  assert!(one_line(&year).contains("days: stored_days.clone(),"));
+  assert!(!year.contains("pinned_days("), "a text edit must never pin a floating row (QH5-02)");
+  ```
+
+  Storage proof in `tests/homeschool_tests.rs` beside `hs4_i_*` (uses `ordinal` from
+  R-13 / QH5-01; until that lands, pass `1`):
+
+  ```rust
+  #[tokio::test]
+  async fn hs4_i_a_text_edit_from_the_year_sheet_leaves_a_floating_row_floating() {
+      let _guard = hs4_lock().await;
+      let pool = db::pool().await.expect("pool");
+      reset_homeschool_state(pool).await;
+      let curriculum_id = load_fixture(pool).await;
+      let old_tales = subject_id(pool, curriculum_id, "Old Tales").await;
+      let token = parent_session().await;
+      const BOY: i64 = 1;
+      enroll_direct(pool, BOY, curriculum_id, 2, "MTWRF", "2026-09-07").await;
+      let grid = api::get_week_grid(BOY, 2).await.expect("grid");
+      let row = grid.rows.iter().find(|row| row.title == "Old Tales").expect("Old Tales");
+      let monday = row.cells[0].first().cloned().expect("part 1 of 2 on Monday");
+      assert_eq!(monday.part, Some((1, 2)));
+      assert_eq!(monday.days, None, "the fixture row floats");
+      api::upsert_assignment(old_tales, 2, monday.ordinal, "ch. 2 'The Long Road', retold".to_string(), monday.detail.clone(), monday.days.as_deref().map(days_to_string), token.clone())
+          .await
+          .expect("the Year sheet's text edit");
+      let after = api::get_week_grid(BOY, 2).await.expect("grid");
+      let row = after.rows.iter().find(|row| row.title == "Old Tales").expect("Old Tales");
+      api::upsert_assignment(old_tales, 2, 1, "ch. 2 'The Long Road'".to_string(), Some("stop at the bridge".to_string()), None, token).await.expect("restore");
+      assert_eq!(row.cells[0].first().and_then(|o| o.part), Some((1, 2)), "QH5-02: a text edit must not pin the row and lose its split");
+      assert_eq!(row.cells[2].first().and_then(|o| o.part), Some((2, 2)));
+  }
+  ```
+
+## R-15. QH5-03 (Med, HS5/O) — the nudge calls the week "done" on the last school day with work outstanding; H2's fortnight nudge is unreachable
+
+- **Origin:** `docs/qa/QA_HS_ROUND_5.md` QH5-03;
+  `src/client/components/homeschool/today.rs:155-173` (`nudge_line`), `:311-331`;
+  `src/shared/homeschool.rs:757-774`.
+- **What ships:** H2 (normative): the footer nudges "**Week 3 done — start week 4?** when
+  complete; **You've been on week 3 for 15 days** once `today − week_started_on ≥ 14`", and
+  Finish week is *offered* when complete **or** today ≥ the last school day. `nudge_line`
+  prints the "done" sentence whenever `group.can_finish_week` is true — and
+  `can_finish_week_with_extras` is true on the last school day whatever is logged — so on
+  Friday with work outstanding the banner reads `Week 2 done — start week 3?` directly
+  under a chip reading `9 done · 0 skipped / 22` (the same surface-contradicts-itself shape
+  round 4 filed as QH4-01). Worse, the second nudge H2 specifies is unreachable in
+  production: `days_on_week ≥ 14` implies `today > week_started_on + 6 ≥ last_school_day`,
+  so `can_finish_week` is already true and the first branch always wins; the only thing
+  that ever exercises "You've been on week N for D days" is a unit fixture with
+  `can_finish_week: false`. The DTO has no `week_complete` flag, but it does not need one:
+  `done_count + skipped_count == total_count` over the group's boys is exactly "every
+  occurrence and every in-span extra logged" (H3 rule 8 + rule 10 — the very rows
+  `header_chip_text` sums), so the chip and the nudge can be made to agree from what the
+  client already holds.
+- **Why it is residual:** client-only in `today.rs`, no server change; the HS5 (b) fixture
+  keeps rendering exactly one `Finish week` per finishable group. Rides the `hs/HS5-qa5`
+  branch.
+- **Solution (Fable, apply verbatim):** `today.rs`: replace `nudge_line` with
+
+  ```rust
+  /// H2: "complete" is every occurrence and every in-span extra logged — the rows
+  /// `header_chip_text` sums (H3 rule 8 + rule 10), so the chip and the nudge cannot disagree.
+  pub fn week_is_complete(group: &TogetherGroup) -> bool {
+      let logged: u32 = group.boys.iter().map(|boy| boy.done_count + boy.skipped_count).sum();
+      let total: u32 = group.boys.iter().map(|boy| boy.total_count).sum();
+      total > 0 && logged >= total
+  }
+
+  /// H2's nudge line, or `None` when the week needs no nudging. Three sentences, in H2's order: complete;
+  /// a fortnight on one week; the last school day reached with work still open (Finish week is offered
+  /// then too, but the week is not "done").
+  pub fn nudge_line(group: &TogetherGroup) -> Option<String> {
+      if group.paused || group.year_complete {
+          return None;
+      }
+      if week_is_complete(group) {
+          return Some(format!("Week {} done — start week {}?", group.week, group.week + 1));
+      }
+      if group.days_on_week >= 14 {
+          return Some(format!("You've been on week {} for {} days", group.week, group.days_on_week));
+      }
+      if group.can_finish_week {
+          return Some(format!("Last school day of week {} — finish it now, or carry the rest into next week", group.week));
+      }
+      None
+  }
+  ```
+
+  (the Finish week button stays inside the banner behind `if group.can_finish_week`, so it
+  is still offered on the last school day). Unit tests in `today.rs`: change
+  `a_complete_week_nudges_towards_the_next_one` to build a complete group —
+  `let mut done = group(2, true, 3); done.boys[0].done_count = 10; done.boys[0].skipped_count = 1; assert_eq!(nudge_line(&done).as_deref(), Some("Week 2 done — start week 3?"));`
+  — and add
+
+  ```rust
+  #[test]
+  fn the_last_school_day_offers_finish_week_without_calling_the_week_done() {
+      assert_eq!(nudge_line(&group(2, true, 4)).as_deref(), Some("Last school day of week 2 — finish it now, or carry the rest into next week"));
+  }
+  ```
+
+  and, in `a_fortnight_on_one_week_nudges_by_elapsed_days_instead`,
+  `assert_eq!(nudge_line(&group(3, true, 15)).as_deref(), Some("You've been on week 3 for 15 days"), "QH5-03: the fortnight nudge outranks the last-school-day one");`.
+  `tests/glyph_tests.rs::hs5_b_the_identical_render_as_a_parent_gains_exactly_the_parent_affordances`
+  keeps its `count(&html, "Finish week") == complete_groups` (the fixture's finishable
+  group renders the third sentence and one button); add
+  `assert!(!html.contains("done — start week"), "nothing in the fixture is complete, so nothing may be called done (QH5-03)");`
+  to `hs5_b_today_renders_the_fixture_the_way_h6_lays_it_out`.
+
+## R-16. QH5-04 (Low, HS4/S) — `update_extra` re-files an extra to any date, escaping `add_extra`'s ±365-day window
+
+- **Origin:** `docs/qa/QA_HS_ROUND_5.md` QH5-04; `src/server/api/homeschool.rs:1510-1558`
+  (`update_extra`) vs `:1416-1431` (`add_extra`).
+- **What ships:** HS4 (k) bounds `add_extra`'s `scheduled_date` to
+  `[today − 365, today + 365]` after D-8's "unbounded write primitive" finding;
+  `update_extra` re-files an existing extra to any date that parses (`2099-01-01`,
+  `0001-01-01`), so the bound is one edit away from meaningless. Parent-gated, so not a
+  LAN-security hole; an inconsistency in the same validation, and `get_month`'s per-month
+  window means such a task is simply never seen again.
+- **Why it is residual:** Low; a helper and one assertion in HS4's file.
+- **Solution (Fable, apply verbatim):** Factor the window into one helper directly above
+  `add_extra`:
+
+  ```rust
+  /// HS4 (k): a parent-added task lives within a year of today, on the way in and on every re-filing.
+  fn check_extra_date(scheduled_date: &str) -> Result<(), ServerFnError> {
+      if sched::weekday(scheduled_date).is_none() {
+          return Err(validation_error("scheduled_date must be a valid YYYY-MM-DD date"));
+      }
+      let today = today_string();
+      let earliest = sched::add_days(&today, -365).ok_or_else(|| validation_error("could not compute the allowed date range"))?;
+      let latest = sched::add_days(&today, 365).ok_or_else(|| validation_error("could not compute the allowed date range"))?;
+      if scheduled_date < earliest.as_str() || scheduled_date > latest.as_str() {
+          return Err(validation_error("scheduled_date must be within a year of today"));
+      }
+      Ok(())
+  }
+  ```
+
+  in `add_extra` replace the `weekday` check through the `within a year of today` return
+  with `check_extra_date(&scheduled_date)?;`, and in `update_extra` replace its `weekday`
+  check with the same call. Extend
+  `hs4_k_add_extra_requires_a_session_and_bounds_scheduled_date`, before the
+  `toggle_extra` step:
+  `assert!(api::update_extra(extra.id, "Copywork".to_string(), Category::Daily, None, "2099-01-01".to_string(), token.clone()).await.is_err(), "update_extra honours the same ±365 day window as add_extra");`.
