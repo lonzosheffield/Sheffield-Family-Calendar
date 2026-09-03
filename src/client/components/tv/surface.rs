@@ -43,7 +43,7 @@ use super::style::{
 };
 use crate::client::components::glyphs::{
     ball_glyph, category_glyph, icon_glyph, subject_glyph, ADD_PHONE_GLYPH, EXTRA_TASK_GLYPH,
-    HOMESCHOOL_GLYPH, ROUTINE_GLYPH,
+    HOMESCHOOL_GLYPH, ROUTINE_GLYPH, YEAR_COMPLETE_GLYPH,
 };
 use crate::client::components::palette::{best_ink_on, Rgb, SHEFFIELD_DARK};
 
@@ -563,12 +563,6 @@ fn whiteboard_panel(board: Element) -> Element {
 // ---------------------------------------------------------------------------
 // HS6 — the School panel (`docs/homeschool/PLAN_HOMESCHOOL.md` H6)
 // ---------------------------------------------------------------------------
-
-/// The year's last week, ticked off (H2 / §4 default 9).
-///
-/// A private literal rather than a `glyphs.rs` constant because `glyphs.rs` is
-/// not HS6's to edit; `docs/HANDOFF.md` asks for it to move there.
-const YEAR_COMPLETE_GLYPH: &str = "🎉";
 
 /// A section label in tracked caps — the one place on the kiosk besides the
 /// wordmark's eyebrow where capitals and tracking are allowed (§2.6), and no

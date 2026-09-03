@@ -524,7 +524,7 @@ reconnect, idempotent; a failed `toggle_extra` likewise enqueues, replays once a
 `ClientMessage::SetView { view: Homeschool }`; (f) palette suite green; (g) catch-up chip uses
 `bg-sheffield-accent` + `text-slate-800` and no `text-sheffield-accent` appears in the module;
 (h) SSR of Year view for the fixture at week 2: a week picker with 3 entries, week 2 marked current,
-7 subject rows × 5 day columns, the `Twice Told` Tuesday cell holding two entries; every grid row
+6 subject rows (free_read excluded; DELTA_V3 D-5) plus the weekday header row × 5 day columns, the `Twice Told` Tuesday cell holding two entries; every grid row
 carries `min-h-[44px]`; the grid sits in an `overflow-x-auto` container; (i) SSR of Month view for
 September 2026 with `week_started_on = 2026-09-07` and one fixture extra dated `2026-09-10`: 30 day
 cells, `📌` on `2026-09-10`, an `n/m` badge on `2026-09-08`, a bare count on `2026-09-01`, and a weekend

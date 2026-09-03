@@ -3129,3 +3129,34 @@ once is cheaper than doing it twice.
 build a model by hand (`tv/shell.rs`'s `steer` and `TvModel::empty`) are HS6's
 own and are updated; anything a later task adds should prefer
 `..TvModel::empty()` so a sixth panel's field costs it nothing.
+
+---
+
+## Boss close of wave C (2026-09-03) → HS7, HS8
+
+Merged `hs/HS5` (872e451) and `hs/HS6` (0f31427) as squashes; baseline green after each.
+Reviewed against §3: no assertion weakened (the `pwa_tests` five→six tab rename is HS5's own Do
+clause; the `nav.rs` / `tv_tests.rs` count bumps are the §3 mechanical class), N1 clean (no
+`Ambleside` and no curriculum title/text string in either diff; `git ls-files
+docs/homeschool/curriculum/` empty), no non-Rust component, no secrets. HS5's one further
+out-of-Owns edit — the `pub mod homeschool;` line in `src/client/components/mod.rs` — is the
+module registration and is accepted.
+
+Applied in the Boss commit that follows:
+
+* **HS-8** — `YEAR_COMPLETE_GLYPH` (🎉) now lives in `glyphs.rs`; `tv/surface.rs` imports it and
+  `homeschool/today.rs`'s year-complete card uses it instead of its own literal.
+* **H-HS5-1** (`src/client/app.rs` half) — the `Mobile` doc comment now names the six tabs.
+* **H-HS5-2** — HS5 accept (h) in `PLAN_HOMESCHOOL.md` now reads "6 subject rows (free_read
+  excluded; DELTA_V3 D-5) plus the weekday header row × 5 day columns"; the test already asserts
+  exactly that, nothing else changes.
+
+Recorded, not applied (owned elsewhere or residual):
+
+* **H-HS5-1** (`docs/OWNER_CHECKLIST.md:180`) — HS7 owns that file's row; it should say "the six
+  tabs (Routine, School, Calendar, Board, Remote, Settings)". `docs/design/DESIGN_DIRECTION.md`
+  §3.5 stays a Phase-4 record; HS8 may add the amendment row (`☀️ 🏠 📅 🖍️ 📺 ⚙️`, `grid-cols-6`).
+* **H-HS5-3** — HS7: a VERIFICATION transcript row for the 48 h vs ±1 day asymmetry (R-14).
+* **H-HS5-6** — residual for `docs/RESIDUAL.md` (HS7/HS8): `LessonOccurrence` lacks `ordinal`, so
+  Today's inline edit offers no edit for rows not yet on screen; clean fix is one field.
+* **H-HS5-4, H-HS5-5, HS-7, HS-9** — informational; HS6 already applies H-HS5-5's shared-row filter.

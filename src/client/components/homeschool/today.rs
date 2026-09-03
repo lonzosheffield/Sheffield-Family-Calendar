@@ -234,7 +234,7 @@ fn GroupBlock(
                 }
             } else if group.year_complete {
                 StateCard {
-                    glyph: "🎉",
+                    glyph: glyphs::YEAR_COMPLETE_GLYPH,
                     title: "Year complete".to_string(),
                     body: "Every week of the plan is finished.".to_string(),
                 }

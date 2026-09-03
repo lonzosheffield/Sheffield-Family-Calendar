@@ -75,6 +75,8 @@ pub const WEEKLY_WORK_GLYPH: &str = "🎨";
 pub const FREE_READ_GLYPH: &str = "📚";
 /// A parent-added task pinned to a date (`lesson_extras`).
 pub const EXTRA_TASK_GLYPH: &str = "📌";
+/// The year's last week ticked off — the "Year complete" state card (H2).
+pub const YEAR_COMPLETE_GLYPH: &str = "🎉";
 
 /// Map a homeschool subject category to its glyph. One glyph per *kind*
 /// of work, not per subject (white team W-17): a hurried parent scans the

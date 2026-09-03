@@ -127,8 +127,9 @@ pub fn MobileShort() -> Element {
 }
 
 /// The phone PWA. T2.2 replaced the v1 routine-only page (G9) with the full
-/// five-tab shell — Routine · Calendar · Board · TV Remote · Settings —
-/// which still renders `Routine { compact: true }` as its first tab, so
+/// tab shell — six tabs since HS5: Routine · School · Calendar · Board ·
+/// Remote · Settings (T2.2 shipped five; School is tab 2, "TV Remote" became
+/// "Remote") — which still renders `Routine { compact: true }` as its first tab, so
 /// `tests/http_tests.rs::http_mobile_serves_routine_only_view` (a protected
 /// T0.3 assertion, `docs/HANDOFF.md` H-2) keeps holding.
 #[component]
