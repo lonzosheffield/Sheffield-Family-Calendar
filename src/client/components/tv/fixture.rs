@@ -104,6 +104,8 @@ fn occurrence(
         sort_order,
         status,
         note: None,
+        // The fixture pins nothing: every row here inherits its subject's days.
+        days: None,
     }
 }
 

@@ -412,7 +412,11 @@ pub fn merge_extras(today: &mut BoyToday, extras: &[ExtraTask], date: &str, week
 DTOs (append to `types.rs`; `Clone, PartialEq, Debug, Serialize, Deserialize`; dates `YYYY-MM-DD`):
 `LessonOccurrence { subject_id, assignment_id: Option<i64>, week, scheduled_date, weekday, category,
 title, text: Option<String>, detail: Option<String>, source: Option<String>, icon_name: Option<String>,
-part: Option<(u32,u32)>, shared: bool, sort_order, status: Option<LogStatus>, note: Option<String> }`;
+part: Option<(u32,u32)>, shared: bool, sort_order, status: Option<LogStatus>, note: Option<String>,
+days: Option<Vec<Weekday>> }` — the last field is the QA round 4 amendment (QH4-03 / `docs/RESIDUAL.md`
+R-11, 2026-09-03): the row's own per-week override (`assignments.days`, H3 rule 1), appended last and
+`#[serde(default)]` so the DTO stays schema-additive, so that Today — which holds only occurrences —
+can hand it back to `upsert_assignment`, which replaces the whole row (QH3-04);
 `BoyToday { user_id, name, due_today: Vec<LessonOccurrence>, catch_up: Vec<…>, done: Vec<…>, done_count,
 skipped_count, total_count }`; `TogetherOccurrence { occurrence: LessonOccurrence, user_ids: Vec<i64>,
 done_user_ids: Vec<i64> }`; `HomeschoolTodayView { date, is_school_day, anyone_enrolled: bool,

@@ -11,7 +11,7 @@
 //! | f | `toggle_lesson_together` on two boys sharing a week writes exactly two rows | `hs4_f_*` |
 //! | g | `set_school_week` reaches `weeks + 1` (year complete) and Back returns to `weeks` | `hs4_g_*` |
 //! | h | `mark_all_done` ticks only the unticked and is idempotent; (QA round 4, QH4-01) an unfinished extra inside the span holds **Finish week** back | `hs4_h_*` |
-//! | i | `set_subject_schedule(days = "Th")` errors and writes nothing; (QA round 3, QH3-04) `upsert_assignment(days = "Th")` likewise, and a good string lands in `assignments.days` | `hs4_i_*` |
+//! | i | `set_subject_schedule(days = "Th")` errors and writes nothing; (QA round 3, QH3-04) `upsert_assignment(days = "Th")` likewise, and a good string lands in `assignments.days`; (QA round 4, QH4-03) a pinned row's inline text edit from Today leaves that override untouched | `hs4_i_*` |
 //! | j | `get_homeschool_today` with nobody enrolled / paused | `hs4_j_*` |
 //! | k | `add_extra` / `toggle_extra` / `delete_extra` authorization and date rules | `hs4_k_*` |
 //! | l | `get_week_grid` / `get_month` boundary rules | `hs4_l_*` |
@@ -50,7 +50,7 @@ use family_calendar::server::config::FamilyHubConfig;
 use family_calendar::server::db;
 use family_calendar::server::homeschool::db as hs;
 use family_calendar::server::homeschool::loader;
-use family_calendar::shared::homeschool::{Category, LogStatus};
+use family_calendar::shared::homeschool::{days_to_string, Category, LogStatus, Weekday};
 use family_calendar::shared::types::{DayItem, HomeschoolTodayView, ServerMessage};
 use futures_util::StreamExt;
 use sqlx::SqlitePool;
@@ -1118,6 +1118,99 @@ async fn hs4_i_upsert_assignment_rejects_a_bad_days_string_and_writes_nothing() 
     assert_eq!(
         cleared.0, None,
         "None must write NULL — the row inherits the subject's days"
+    );
+}
+
+/// (i), third half — QA round 4 QH4-03 (`docs/RESIDUAL.md` R-11). Because
+/// `upsert_assignment` replaces the whole row, Today's inline text edit used
+/// to send `days: None` and silently un-pin a per-week override made from the
+/// Year cell sheet. `LessonOccurrence` now carries `days`, and `today.rs`
+/// hands it straight back: the storage proof that the pin survives.
+#[tokio::test]
+async fn hs4_i_a_pinned_rows_inline_text_edit_from_today_leaves_its_days_untouched() {
+    let _guard = hs4_lock().await;
+    let pool = db::pool().await.expect("pool");
+    reset_homeschool_state(pool).await;
+    let curriculum_id = load_fixture(pool).await;
+    let twice_told = subject_id(pool, curriculum_id, "Twice Told").await;
+    let token = parent_session().await;
+    const BOY: i64 = 1;
+    const WEEK: i64 = 2;
+    // A Monday, so the enrollment's span is an ordinary school week.
+    const ANCHOR: &str = "2026-09-07";
+
+    // A parent pins week 2's first reading to Monday and Wednesday from the
+    // Year cell sheet — "Twice Told" itself runs on Tuesdays.
+    api::upsert_assignment(
+        twice_told,
+        WEEK,
+        1,
+        "The Tin Whistle".to_string(),
+        None,
+        Some("MW".to_string()),
+        token.clone(),
+    )
+    .await
+    .expect("pin the week 2 row to M and W");
+
+    enroll_direct(pool, BOY, curriculum_id, WEEK, "MTWRF", ANCHOR).await;
+    let grid = api::get_week_grid(BOY, WEEK).await.expect("the week grid");
+    let pinned = grid
+        .rows
+        .iter()
+        .flat_map(|row| row.cells.iter().flatten())
+        .find(|occurrence| occurrence.text.as_deref() == Some("The Tin Whistle"))
+        .cloned()
+        .expect("the pinned row is dealt out");
+    assert_eq!(
+        pinned.days,
+        Some(vec![Weekday::Mon, Weekday::Wed]),
+        "QH4-03: LessonOccurrence carries the row's own per-week days override"
+    );
+
+    // Today's inline text edit, sent exactly the way `today.rs` sends it.
+    api::upsert_assignment(
+        twice_told,
+        WEEK,
+        1,
+        "The Tin Whistle, retold".to_string(),
+        pinned.detail.clone(),
+        pinned.days.as_deref().map(days_to_string),
+        token.clone(),
+    )
+    .await
+    .expect("the inline text edit is accepted");
+
+    let after: (Option<String>, String) = sqlx::query_as(
+        "SELECT days, text FROM assignments WHERE subject_id = ?1 AND week = ?2 AND ordinal = 1",
+    )
+    .bind(twice_told)
+    .bind(WEEK)
+    .fetch_one(pool)
+    .await
+    .expect("the row after the edit");
+
+    // Leave the fixture exactly as it was loaded: original text, no pin.
+    api::upsert_assignment(
+        twice_told,
+        WEEK,
+        1,
+        "The Tin Whistle".to_string(),
+        None,
+        None,
+        token,
+    )
+    .await
+    .expect("restore the fixture row");
+
+    assert_eq!(
+        after.0.as_deref(),
+        Some("MW"),
+        "R-11: an inline text edit from Today must leave assignments.days untouched"
+    );
+    assert_eq!(
+        after.1, "The Tin Whistle, retold",
+        "and must still land the new text"
     );
 }
 

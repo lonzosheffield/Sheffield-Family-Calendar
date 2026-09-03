@@ -572,6 +572,9 @@ fn occurrence(
         sort_order: subject.sort_order,
         status: None,
         note: None,
+        // Rule 1's per-week override, carried through so Today can hand it
+        // back to `upsert_assignment` unchanged (QH4-03 / R-11).
+        days: row.and_then(|row| row.days.clone()),
     }
 }
 

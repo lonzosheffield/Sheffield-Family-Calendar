@@ -362,6 +362,13 @@ use crate::shared::homeschool::{Category, LogStatus, TermNote, Weekday};
 /// the `lesson_log_occurrence` unique index keys on (rule 9). `part` is
 /// `Some((k, n))` on a reading split over `n` days (rule 5). An **extra** is
 /// never a `LessonOccurrence` (D-2) — see [`ExtraTask`] and [`DayItem`].
+///
+/// `days` is the row's own per-week override (`assignments.days`, H3 rule 1),
+/// `None` when the row inherits the subject's days. It rides along so a
+/// surface that only holds occurrences — Today — can hand it back to
+/// `upsert_assignment`, which replaces the whole row (QA round 3 QH3-04);
+/// without it an inline text edit un-pinned the override (QA round 4 QH4-03,
+/// `docs/RESIDUAL.md` R-11).
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 pub struct LessonOccurrence {
     pub subject_id: i64,
@@ -380,6 +387,10 @@ pub struct LessonOccurrence {
     pub sort_order: i64,
     pub status: Option<LogStatus>,
     pub note: Option<String>,
+    /// Appended last and `#[serde(default)]`, so every field above keeps its
+    /// serde name and an older payload still deserializes (schema-additive).
+    #[serde(default)]
+    pub days: Option<Vec<Weekday>>,
 }
 
 /// A parent-authored task pinned to one boy and one date (H8, `lesson_extras`).

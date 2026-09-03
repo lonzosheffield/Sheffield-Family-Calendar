@@ -3448,3 +3448,61 @@ and `tests/homeschool_tests.rs::hs4_h_an_unfinished_extra_inside_the_span_holds_
 (end to end through `get_homeschool_today`, `add_extra`, `toggle_extra`). QH4-02 (HS4's
 `mark_all_done` shared filter) and QH4-03 (= R-11) are **not** in this branch — they are not this
 task's clauses.
+
+## HS5-qa4 (`hs/HS5-qa4`, 2026-09-03) — QH4-03 / R-11 applied: `LessonOccurrence` carries `days`
+
+### H-HS5-qa4-1. The DTO amendment is landed, so R-11 can be closed
+
+`docs/qa/QA_HS_ROUND_4.md` QH4-03 concurs with `docs/RESIDUAL.md` R-11 verbatim, and this branch
+applies it. `src/shared/types.rs` `LessonOccurrence` gains one field, **appended last** and
+`#[serde(default)]` so the DTO stays schema-additive and an older payload still deserializes:
+
+```rust
+pub days: Option<Vec<Weekday>>,   // the row's own per-week override (assignments.days, H3 rule 1)
+```
+
+`sched::occurrence()` sets it from `row.and_then(|row| row.days.clone())` — the raw stored value, not
+the value intersected with the boy's school days, so what Today hands back is exactly what the Year
+cell sheet wrote. Both of `today.rs`'s inline text-edit handlers now compute
+`let days = occurrence.days.as_deref().map(days_to_string);` once, beside the existing `detail`, and
+send `days: days.clone()` instead of `days: None`, so an unrelated text edit from Today no longer
+un-pins a per-week override. `src/client/components/tv/fixture.rs` and the two component-local test
+fixtures (`today.rs`, `year.rs`) pass `days: None`; nothing on the TV reads the field.
+
+**Asks for the Boss:**
+
+1. `docs/RESIDUAL.md` R-11 is fixed on this branch — please mark it closed at the merge (this task's
+   file list does not include `RESIDUAL.md`).
+2. `docs/homeschool/PLAN_HOMESCHOOL.md` §2's DTO listing was amended in the same commit (the
+   `LessonOccurrence` line now carries `days: Option<Vec<Weekday>>` with the QH4-03 provenance), in
+   the same shape as QH3-04's amendment of HS4 "Do". `docs/PLAN.md` §5.2 names no DTO fields, so it
+   needed no edit.
+
+### H-HS5-qa4-2. The guard lost its Today-side allowance
+
+`glyph_tests::hs5_qa3_an_inline_text_edit_carries_the_rows_detail_and_days_through` used to assert
+only `detail: detail.clone()` per file, which let Today keep sending `days: None`. It now also
+asserts that `today.rs` reads `occurrence.days` and that **both** of its `SchoolAction::EditAssignment`
+arms send `days: days.clone()` and contain no `days: None` — each arm is sliced at its own `});`, so
+the count (exactly two) is part of the guard. The storage proof is
+`homeschool_tests::hs4_i_a_pinned_rows_inline_text_edit_from_today_leaves_its_days_untouched`: it
+pins the fixture's `Twice Told` week 2 ordinal 1 to `MW` through the real `upsert_assignment`, reads
+the occurrence back off `get_week_grid` (asserting `days == Some([Mon, Wed])`), replays Today's edit
+with `pinned.days.as_deref().map(days_to_string)`, and asserts `assignments.days` is still `MW` with
+the new text landed. It restores the fixture row (original text, `days = NULL`) before asserting.
+
+### H-HS5-qa4-3. Two machine-load flakes seen while running the baseline (neither is this change)
+
+Recorded for the flake list beside `docs/RESIDUAL.md` R-2..R-4 and R-12; both are load, not code, and
+both are reproducible only under a loaded box, never on a re-run.
+
+1. `service_tests::a_startup_bind_failure_is_logged_within_five_seconds` failed once with
+   "a startup bind failure took 5.1031204s to end the process, expected under 5s" during a full run,
+   and passed immediately on its own (`5 passed`) and in the next full run. The budget is a wall
+   clock with no headroom; a Sonnet/Haiku housekeeping task could widen it or measure the log line
+   rather than the process exit.
+2. `cargo test --features server` at the default job count aborted once with
+   `error[E0786]: found invalid metadata files for crate family_calendar … failed to mmap … The
+   paging file is too small for this operation to complete. (os error 1455)`. Not a test failure —
+   Windows ran out of commit charge linking several test binaries at once. `-j 4` builds the same
+   tree without it, which may be worth a line in `docs/DEV_WINDOWS.md`.

@@ -1902,6 +1902,42 @@ fn hs5_qa3_an_inline_text_edit_carries_the_rows_detail_and_days_through() {
         );
     }
 
+    // QH4-03 / R-11: Today's two inline handlers used to be allowed to send
+    // `days: None`, because `LessonOccurrence` carried no `days` — which reset
+    // a pin made from the Year cell sheet on an unrelated text edit. The DTO
+    // now carries it, so the allowance is gone: both arms hand the row's own
+    // override straight back.
+    let today = school_source("today.rs");
+    assert!(
+        one_line(&today).contains("let days = occurrence.days.as_deref().map(days_to_string);"),
+        "today.rs must read the row's per-week days override off the occurrence: {today}"
+    );
+    let edit_arms: Vec<&str> = today
+        .match_indices("SchoolAction::EditAssignment {")
+        .map(|(at, _)| {
+            let arm = &today[at..];
+            let end = arm
+                .find("});")
+                .expect("every EditAssignment call is closed with `});`");
+            &arm[..end]
+        })
+        .collect();
+    assert_eq!(
+        edit_arms.len(),
+        2,
+        "Today has exactly two inline text-edit handlers (Together and the boy's own row)"
+    );
+    for arm in &edit_arms {
+        assert!(
+            arm.contains("days: days.clone()"),
+            "a Today edit must carry the row's own days override: {arm}"
+        );
+        assert!(
+            !arm.contains("days: None"),
+            "and may no longer default it away (QH4-03 / R-11): {arm}"
+        );
+    }
+
     // QH3-04: the cell sheet's days control writes `assignments.days` for that
     // week (`EditAssignment { …, days: Some(days()) }`), never `subjects.days`
     // for all 36. The subject-wide control stays in School settings.
@@ -1919,6 +1955,7 @@ fn hs5_qa3_an_inline_text_edit_carries_the_rows_detail_and_days_through() {
         "School settings keeps the subject-wide control, which is honest about its reach"
     );
     println!("the EditAssignment arm carries detail and days; year.rs sends days: Some(days())");
+    println!("both of today.rs's edit handlers send days: days.clone(), never days: None");
 }
 
 #[test]

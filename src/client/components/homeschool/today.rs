@@ -32,7 +32,7 @@ use crate::client::components::homeschool::enroll::NoSchoolPlan;
 use crate::client::components::homeschool::row::{ExtraRow, LessonRow};
 use crate::client::components::homeschool::SchoolAction;
 use crate::client::components::mobile::session;
-use crate::shared::homeschool::{LogStatus, TermNoteKind};
+use crate::shared::homeschool::{days_to_string, LogStatus, TermNoteKind};
 use crate::shared::types::{
     BoyToday, DayItem, HomeschoolTodayView, LessonOccurrence, TogetherGroup, TogetherOccurrence,
 };
@@ -430,11 +430,11 @@ fn TogetherRow(
     // carried only the new text wrote `NULL` over the source's parenthetical
     // second line. The occurrence has the value in hand — carry it through.
     //
-    // `days` stays `None` on this surface: Today holds only the part of the
-    // week already dealt out, so it cannot see a row's per-week `days`
-    // override, and the Year cell sheet is where H6/D-5 puts that control
-    // (`docs/HANDOFF.md`, HS5-qa3).
+    // QH4-03 / R-11: the row's per-week `days` override rides along the same
+    // way, now that `LessonOccurrence` carries it. Sending `None` here reset
+    // a pin made from the Year cell sheet on an unrelated text edit.
     let detail = occurrence.detail.clone();
+    let days = occurrence.days.as_deref().map(days_to_string);
     // A shared row still on screen after its own day is the group's catch-up.
     let catch_up = occurrence.scheduled_date.as_str() < date.as_str();
     // H4: a partly-done shared row shows "2 of 3" rather than a tick.
@@ -477,7 +477,7 @@ fn TogetherRow(
                             ordinal,
                             text,
                             detail: detail.clone(),
-                            days: None,
+                            days: days.clone(),
                         });
                 }
             },
@@ -660,9 +660,11 @@ pub fn DayItemRow(
             let scheduled_date = occurrence.scheduled_date.clone();
             let skip_date = scheduled_date.clone();
             let note_date = scheduled_date.clone();
-            // QH3-02, as in `TogetherRow`: the row's `detail` rides along so
-            // an inline text edit does not delete the line under it.
+            // QH3-02 and QH4-03, as in `TogetherRow`: the row's `detail` and
+            // its per-week `days` override ride along, so an inline text edit
+            // deletes neither the line under it nor the pin on it.
             let detail = occurrence.detail.clone();
+            let days = occurrence.days.as_deref().map(days_to_string);
             let note_status = occurrence.status.unwrap_or(LogStatus::Done);
             let edit_ordinal = edit_ordinal_for(&ordinals, subject_id, assignment_id);
             rsx! {
@@ -706,7 +708,7 @@ pub fn DayItemRow(
                                     ordinal,
                                     text,
                                     detail: detail.clone(),
-                                    days: None,
+                                    days: days.clone(),
                                 });
                         }
                     },
@@ -916,6 +918,7 @@ mod tests {
                 sort_order: 3,
                 status: None,
                 note: None,
+                days: None,
             },
             user_ids,
             done_user_ids: Vec::new(),

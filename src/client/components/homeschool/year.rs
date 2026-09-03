@@ -472,6 +472,7 @@ mod tests {
             sort_order: 5,
             status: None,
             note: None,
+            days: None,
         }
     }
 
