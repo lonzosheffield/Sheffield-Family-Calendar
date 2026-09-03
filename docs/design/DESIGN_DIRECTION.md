@@ -114,7 +114,7 @@ Other panels keep their plain `font-poster text-sheffield-dark` h1 (Today, White
 
 Unchanged — the current rhythm (rows `gap-5`, row padding `px-8 py-6`, panel `gap-6`, rail `w-[26rem]`) is sound. The frame adds: overscan band `p-[5%]` (unchanged class) + poster-card inner padding `p-10`. Nothing new to memorize.
 
-**Amended by QA design round 1, QD-02** (`docs/qa/QA_DESIGN_ROUND_1.md`): at the kiosk's declared 1920×1080 render target that rhythm left the profile rail 580 px for four boys who needed 636 px, so the fourth was clipped and *Add a phone* was invisible. The card is now `p-8` with its own `gap-6`, and the **rail alone** (never the routine rows, which keep `px-8 py-6`) is on `py-4` with an `h-20` disc and a one-line *Add a phone* pill. The rail then costs 600 px of the 612 px it gets. The arithmetic lives in `tv::style::tv_rail_budget_px()` and is asserted against the rendered classes in `tests/tv_tests.rs`, so the next spacing edit fails a test rather than a television.
+**Amended by QA design round 1, QD-02** (`docs/qa/QA_DESIGN_ROUND_1.md`): at the kiosk's declared 1920×1080 render target that rhythm left the profile rail 580 px for four boys who needed 636 px, so the fourth was clipped and *Add a phone* was invisible. The card is now `p-8` with its own `gap-6`, and the **rail alone** (never the routine rows, which keep `px-8 py-6`) is on `py-4` with an `h-20` disc and a one-line *Add a phone* pill. The rail then costs 600 px of the 612 px it gets. The arithmetic lives in `tv::style::tv_rail_budget_px()` and is asserted against the rendered classes in `tests/tv_tests.rs`, so the next spacing edit fails a test rather than a television. That 1920×1080 render target is enforced on the television itself by the `/tv` viewport meta (`tv::style::TV_VIEWPORT_META`), not merely assumed from `docs/device.toml` (`docs/design/PLAN_TV_VIEWPORT.md`, BACKLOG B-1).
 
 ### 2.8 Decorative elements — where allowed, where banned
 
@@ -160,7 +160,7 @@ Inherits the frame automatically via `screen_class()`. h1 → `📱 Add a phone`
 
 ### 3.6 Explicitly worth keeping as-is
 
-The focus-ring system (sun ring on dark offset), the four-size type scale, the overscan mechanics, the row/card radius family, the progress bar, the footer pills, the profile-disc `best_ink_on` logic, the screensaver crossfade, the whiteboard palette dots (already the five hues), and the phone's information architecture. This direction adds identity; it does not rearrange working bones.
+The focus-ring system (sun ring on dark offset), the four-size type scale, the overscan mechanics, the row/card radius family, the progress bar, the footer pills, the profile-disc `best_ink_on` logic, the screensaver crossfade, the whiteboard palette dots (already the five hues), the `/tv` viewport meta (`tv::style::TV_VIEWPORT_META`), and the phone's information architecture. This direction adds identity; it does not rearrange working bones.
 
 ---
 
