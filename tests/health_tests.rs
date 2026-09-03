@@ -3,7 +3,7 @@
 //!
 //! | # | Assertion |
 //! | - | --- |
-//! | a | `GET /health` -> 200 JSON with all 8 keys, correct types |
+//! | a | `GET /health` -> 200 JSON with all 9 keys, correct types |
 //! | b | `days_to_expiry` matches the leaf's actual `not_after` |
 //!
 //! The third lettered assertion — "with the DB pool closed -> 503 and
@@ -82,11 +82,11 @@ fn http_client() -> reqwest::Client {
 }
 
 // ---------------------------------------------------------------------------
-// (a) GET /health -> 200 JSON with all 8 keys, correct types
+// (a) GET /health -> 200 JSON with all 9 keys, correct types
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn health_returns_200_with_all_eight_keys_correctly_typed() {
+async fn health_returns_200_with_all_nine_keys_correctly_typed() {
     let config = test_config();
     let addr = spawn_router(&config).await;
 
@@ -112,8 +112,8 @@ async fn health_returns_200_with_all_eight_keys_correctly_typed() {
     let object = body.as_object().expect("/health returns a JSON object");
     assert_eq!(
         object.len(),
-        8,
-        "/health must carry exactly 8 keys, got {object:?}"
+        9,
+        "/health must carry exactly 9 keys, got {object:?}"
     );
 
     assert!(
@@ -181,8 +181,22 @@ async fn health_returns_200_with_all_eight_keys_correctly_typed() {
     // `0004_name_the_boys` (phase-4/names) bumped this again, from 3 to 4.
     assert_eq!(
         body["migration_version"],
-        Value::from(4),
-        "T1.1 lands migrations 0001 and 0002, T1.4 lands 0003, phase-4/names lands 0004"
+        Value::from(5),
+        "T1.1 lands migrations 0001 and 0002, T1.4 lands 0003, phase-4/names lands          0004, HS1 lands 0005_homeschool"
+    );
+
+    // HS1: the ninth key. Always an unsigned integer, never absent — the
+    // School tab has nothing to show until this is non-zero, and no
+    // curriculum file is copied into a test data directory here.
+    assert!(
+        body["curricula"].is_u64(),
+        "curricula must be an unsigned integer, got {:?}",
+        body["curricula"]
+    );
+    assert_eq!(
+        body["curricula"],
+        Value::from(0u64),
+        "no curriculum file is present in this test's data directory"
     );
 }
 

@@ -62,7 +62,11 @@ pub const EVENT_SOURCE: &str = "FamilyHub";
 /// logging setup").
 pub const LOG_FILE_NAME: &str = "familyhub.log";
 
-const USAGE: &str = "usage: family-hub.exe <install|uninstall|start|stop|status|run|tv-probe>";
+const USAGE: &str =
+    "usage: family-hub.exe <install|uninstall|start|stop|status|run|tv-probe|import-curriculum>";
+/// HS1 (§2 H5): the curriculum bulk-import path. Kept next to [`USAGE`]
+/// so the two can never drift.
+const IMPORT_USAGE: &str = "usage: family-hub.exe import-curriculum <path> [--replace]";
 
 // ---------------------------------------------------------------------------
 // CLI entry point (called by src/bin/family_hub.rs)
@@ -85,6 +89,11 @@ pub fn dispatch(args: &[String]) -> i32 {
             0 // unreachable in practice: run_console serves forever.
         }
         Some("tv-probe") => run_and_report(cmd_tv_probe()),
+        // HS1 (§2 H5): validate a curriculum TOML, copy it into
+        // `config.curricula_dir()`, and — with `--replace` — rewrite that
+        // slug's rows in one transaction. Nothing is written unless the file
+        // validates first.
+        Some("import-curriculum") => cmd_import_curriculum(&args[1..]),
         Some(other) => {
             eprintln!("unknown subcommand {other:?}\n{USAGE}");
             2
@@ -92,6 +101,63 @@ pub fn dispatch(args: &[String]) -> i32 {
         None => {
             eprintln!("{USAGE}");
             2
+        }
+    }
+}
+
+/// `family-hub.exe import-curriculum <path> [--replace]`.
+///
+/// Exits non-zero — writing neither the copy nor a single row — when the path
+/// does not exist or the file fails validation (§3 HS1 accept (g)). The real
+/// work lives in `homeschool::loader::import_curriculum`; this wrapper only
+/// parses the two arguments and owns the tokio runtime the async import needs,
+/// exactly as [`run_console`] does for the server itself.
+fn cmd_import_curriculum(args: &[String]) -> i32 {
+    let mut path: Option<&str> = None;
+    let mut replace = false;
+    for arg in args {
+        match arg.as_str() {
+            "--replace" => replace = true,
+            other if other.starts_with("--") => {
+                eprintln!("unknown option {other:?}\n{IMPORT_USAGE}");
+                return 2;
+            }
+            other if path.is_none() => path = Some(other),
+            other => {
+                eprintln!("unexpected extra argument {other:?}\n{IMPORT_USAGE}");
+                return 2;
+            }
+        }
+    }
+
+    let Some(path) = path else {
+        eprintln!("{IMPORT_USAGE}");
+        return 2;
+    };
+
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            eprintln!("could not start the tokio runtime: {err}");
+            return 1;
+        }
+    };
+
+    let config = FamilyHubConfig::load();
+    let result = runtime.block_on(crate::server::homeschool::loader::import_curriculum(
+        &config,
+        std::path::Path::new(path),
+        replace,
+    ));
+
+    match result {
+        Ok(summary) => {
+            println!("{summary}");
+            0
+        }
+        Err(message) => {
+            eprintln!("import-curriculum failed: {message}");
+            1
         }
     }
 }

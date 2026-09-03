@@ -35,7 +35,9 @@ fn main() {
         if service::try_run_as_service() {
             return;
         }
-        eprintln!("usage: family-hub.exe <install|uninstall|start|stop|status|run|tv-probe>");
+        eprintln!(
+            "usage: family-hub.exe <install|uninstall|start|stop|status|run|tv-probe|import-curriculum>"
+        );
         std::process::exit(2);
     }
 

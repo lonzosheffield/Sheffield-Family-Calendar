@@ -2698,3 +2698,101 @@ binaries. exit 0.
 Q3-01 and Q3-02 are both closed by this commit (`6f0e9e0` on
 `phase-qa3/T3.1`, on top of the rebase commit `476f104`). Boss: please mark
 `docs/BLOCKED.md`'s T3.1 entry RESOLVED and squash-merge.
+
+---
+
+## HS1 — Storage: migration 0005, queries, loader, `import-curriculum` (`hs/HS1`)
+
+Everything below is a **request to the Boss**, to apply between waves. Nothing
+here was applied on this branch except where marked APPLIED.
+
+### HS-1. `db.rs::pools()` must call the loader (the one handoff HS1 declares)
+
+`src/server/db.rs` is not HS1's file. The boot-time curriculum loader and the
+Isaiah enrollment seed are therefore exposed as one call and left unwired:
+
+```rust
+pub async fn load_and_seed(
+    pool: &SqlitePool,
+    config: &FamilyHubConfig,
+) -> Result<(), sqlx::Error>   // src/server/homeschool/loader.rs
+```
+
+Please add it to `db::pools()`, **after** `migrate(&pools.write)`, in the
+post-A / pre-B micro-commit the plan already schedules:
+
+```rust
+let pools = open_pools(&url).await?;
+migrate(&pools.write).await?;
+crate::server::homeschool::load_and_seed(&pools.write, &FamilyHubConfig::load()).await?;
+Ok(pools)
+```
+
+Notes that make this safe to wire blind:
+
+* It never fails on a bad curriculum file. A file that does not parse, or that
+  breaks a validation rule, is logged at `warn` and skipped; a good sibling in
+  the same directory still loads. The only `Err` it can return comes from the
+  enrollment seed's own `INSERT`, i.e. a genuinely broken database.
+* It is idempotent. `insert_missing` writes only rows that are absent, and
+  `seed_enrollments` is `INSERT … ON CONFLICT (profile_id) DO NOTHING` — a
+  reboot never resets a week pointer a parent has advanced.
+* It creates `config.curricula_dir()` when missing and logs the resolved
+  absolute path at `info`.
+* Tests that open their own pools (`db::open_pools` / `db::connect`) are
+  unaffected: the call belongs to `pools()`, not to `migrate()`.
+
+### HS-2. One-line module registration, APPLIED on this branch
+
+`src/server/mod.rs` gained `pub mod homeschool;` (cfg `server`). A new module
+directory cannot exist without it, and the HS1 Owns list names the module's own
+three files; flagging it here rather than leaving it silent.
+
+### HS-3. Request → HS3 / a later Boss micro-commit: collapse the two `parse_days`
+
+`src/server/homeschool/loader.rs::parse_days` is a private-to-the-server copy of
+the rule H3 gives to `src/shared/homeschool.rs::parse_days` (HS3's file, same
+wave — HS1 could not call it). Same letters, same `M T W R F S U` order, same
+"no repeats, no unknown letter, no empty string" rejection. Once both are on
+`main`, delete the loader's copy and call the shared one; `parse_days("Th")`,
+`("MM")`, `("X")` and `("")` must stay `Err` either way.
+
+### HS-4. Note → HS4: how the two `lesson_log` writers are shaped
+
+* `set_occurrence(exec, &OccurrenceKey, status, note, completed_on)` and
+  `clear_occurrence(exec, &OccurrenceKey)` take the key as a struct, not five
+  loose parameters (`OccurrenceKey::new(profile_id, week, subject_id,
+  assignment_id, scheduled_date)`). It is exactly the `lesson_log_occurrence`
+  unique index, in its order, and clippy's `too_many_arguments` rules out the
+  flat form.
+* `set_occurrence` is `INSERT … ON CONFLICT DO NOTHING`, verbatim per H1. It
+  therefore **cannot** change a `done` row into a `skipped` one. Skipping
+  something already ticked is `clear_occurrence` then `set_occurrence`, in the
+  server fn's existing transaction. `clear_occurrence` returns the rows removed.
+* Every mutation in `src/server/homeschool/db.rs` is generic over
+  `impl sqlx::SqliteExecutor<'_>`, so `claim_mutation` and the write share one
+  `pool.begin()` exactly as `api::routine`'s toggles do (Q1-08).
+* Reads take `&SqlitePool` and expect the **read** pool (H-9).
+* The row structs (`WeekPlanRows`, `EnrollmentRow`, `LessonLogRow`, `ExtraRow`,
+  …) are storage shapes. Mapping them to HS3's shared DTOs is HS4's job.
+
+### HS-5. Request → HS7 (docs): the subcommand list gained a seventh entry
+
+`family-hub.exe import-curriculum <path> [--replace]` is live. The runbooks
+still say `install|uninstall|start|stop|status|run|tv-probe`:
+`docs/DEV_WINDOWS.md` (line ~164), `docs/RECOVERY.md` (the service-controls
+row), `docs/PLAN.md` §3 T3.1's prose. HS1 owns none of those files. Please
+either apply the one-word addition at a wave boundary or fold it into HS7's
+documentation pass, together with a line about `FAMILY_HUB_CURRICULA_DIR`
+(default `<data>\curricula`) in `docs/OWNER_CHECKLIST.md`.
+
+### HS-6. Mechanical bumps applied in this commit (P-4: not a weakening)
+
+* `tests/storage_tests.rs`, `tests/backup_tests.rs`: migration version `4` → `5`
+  and `vec![1, 2, 3, 4]` → `vec![1, 2, 3, 4, 5]`. Every other assertion in those
+  files is byte-identical.
+* `tests/health_tests.rs`, `tests/health_pool_closed_tests.rs`: `/health` key
+  count `8` → `9` and `migration_version` `4` → `5`, plus the new `curricula`
+  assertions the HS1 Owns list names (`0`, never absent, when the pool is
+  closed). The test function was renamed from `..._all_eight_keys_...` to
+  `..._all_nine_keys_...` to match the count it now asserts.

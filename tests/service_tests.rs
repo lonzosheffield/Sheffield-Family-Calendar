@@ -246,3 +246,109 @@ fn run_generates_the_first_run_setup_code_and_logs_it_once_health_answers() {
 
     let _ = std::fs::remove_dir_all(&data_dir);
 }
+
+// ---------------------------------------------------------------------------
+// HS1 (g): family-hub.exe import-curriculum <path> [--replace]
+// ---------------------------------------------------------------------------
+
+/// HS1 accept (g): "`import-curriculum` with a bad path or bad TOML exits
+/// non-zero and **writes nothing**".
+///
+/// Validation runs before the copy on purpose, so a file a parent mistyped
+/// never lands in the directory the hub scans at every boot. Both failure
+/// shapes are exercised against the real binary, with `FAMILY_HUB_DATA_DIR`
+/// pointed at a scratch directory — never the owner's.
+#[test]
+fn import_curriculum_with_a_bad_path_or_bad_toml_exits_non_zero_and_writes_nothing() {
+    let data_dir = scratch_data_dir("import-bad");
+    let curricula = data_dir.join("curricula");
+
+    // (1) a path that does not exist at all.
+    let missing = data_dir.join("nowhere.toml");
+    let output = Command::new(family_hub_exe())
+        .args(["import-curriculum", &missing.display().to_string()])
+        .env("FAMILY_HUB_DATA_DIR", &data_dir)
+        .output()
+        .expect("failed to spawn family-hub.exe import-curriculum");
+    assert!(
+        !output.status.success(),
+        "a missing path must exit non-zero, got {:?}",
+        output.status
+    );
+    assert!(
+        !curricula.join("nowhere.toml").exists(),
+        "nothing may be copied for a path that does not exist"
+    );
+
+    // (2) a file that exists but does not validate.
+    let bad = data_dir.join("bad.toml");
+    std::fs::write(
+        &bad,
+        "[curriculum]\nslug = \"Not A Slug\"\nname = \"Bad\"\nweeks = 2\n",
+    )
+    .expect("write bad.toml");
+
+    let output = Command::new(family_hub_exe())
+        .args(["import-curriculum", &bad.display().to_string()])
+        .env("FAMILY_HUB_DATA_DIR", &data_dir)
+        .output()
+        .expect("failed to spawn family-hub.exe import-curriculum");
+    assert!(
+        !output.status.success(),
+        "a file that fails validation must exit non-zero, got {:?}",
+        output.status
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("bad.toml") && stderr.contains("line "),
+        "the failure must name the file and the line: {stderr}"
+    );
+    assert!(
+        !curricula.join("bad.toml").exists(),
+        "a rejected file must never be copied into the curricula directory: {stderr}"
+    );
+    assert!(
+        !data_dir.join("family.db").exists(),
+        "a rejected file must not even open the database"
+    );
+
+    let _ = std::fs::remove_dir_all(&data_dir);
+}
+
+/// The other half of HS1 (g): the happy path really does validate, copy and
+/// insert — otherwise "exits non-zero and writes nothing" would be trivially
+/// satisfied by a subcommand that never works at all.
+#[test]
+fn import_curriculum_copies_a_valid_file_into_the_curricula_directory() {
+    let data_dir = scratch_data_dir("import-good");
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/curricula/sample-year.toml");
+    assert!(fixture.is_file(), "missing {}", fixture.display());
+
+    let output = Command::new(family_hub_exe())
+        .args(["import-curriculum", &fixture.display().to_string()])
+        .env("FAMILY_HUB_DATA_DIR", &data_dir)
+        .output()
+        .expect("failed to spawn family-hub.exe import-curriculum");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "importing the committed fixture must succeed: {stdout}{stderr}"
+    );
+    assert!(
+        stdout.contains("sample-year"),
+        "the summary must name the curriculum: {stdout}"
+    );
+    assert!(
+        data_dir
+            .join("curricula")
+            .join("sample-year.toml")
+            .is_file(),
+        "the file must be copied where the boot-time loader will find it"
+    );
+    assert!(data_dir.join("family.db").is_file());
+
+    let _ = std::fs::remove_dir_all(&data_dir);
+}

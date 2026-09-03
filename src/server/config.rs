@@ -49,6 +49,15 @@ const ENV_SCREENSAVER_HOUR: &str = "FAMILY_HUB_SCREENSAVER_HOUR";
 /// installed service; the env var still wins when both are present, so a
 /// developer's `run` shell keeps working exactly as before.
 const ENV_LOG_LEVEL: &str = "FAMILY_HUB_LOG";
+/// HS1 (§2 H5, review finding R-4/P-1): where the boot-time curriculum loader
+/// looks for `*.toml` files. Deliberately **not** a field on
+/// [`FamilyHubConfig`] — it is derived from `data_dir` like every other path
+/// this type hands out, and only an owner who has moved the files somewhere
+/// else ever sets it. A relative value is resolved under `data_dir` rather
+/// than the process's CWD (G23/R-14: a Windows service's CWD is
+/// `C:\Windows\System32`), so [`FamilyHubConfig::curricula_dir`] is absolute
+/// whatever the environment says.
+const ENV_CURRICULA_DIR: &str = "FAMILY_HUB_CURRICULA_DIR";
 
 const CONFIG_FILE_NAME: &str = "familyhub.toml";
 
@@ -133,6 +142,37 @@ impl FamilyHubConfig {
     /// Absolute directory rotated log files are written to (T3.1).
     pub fn log_dir(&self) -> PathBuf {
         self.data_dir.join("logs")
+    }
+
+    /// Absolute directory the boot-time curriculum loader scans for `*.toml`
+    /// files (HS1, §2 H5). `<data>\curricula` unless
+    /// `FAMILY_HUB_CURRICULA_DIR` names somewhere else.
+    ///
+    /// A *method*, not a field: HS1's review (R-4/P-1) asked for exactly this
+    /// so the one owner-facing knob does not widen the struct every other
+    /// module constructs. The loader creates the directory if it is missing
+    /// and logs the resolved path at `info`.
+    pub fn curricula_dir(&self) -> PathBuf {
+        self.curricula_dir_from(std::env::var(ENV_CURRICULA_DIR).ok())
+    }
+
+    /// [`Self::curricula_dir`] with the environment value injected, so the
+    /// precedence and the "always absolute" guarantee are unit testable
+    /// without mutating process-wide state that another test in this binary
+    /// is reading at the same moment.
+    fn curricula_dir_from(&self, raw: Option<String>) -> PathBuf {
+        match raw.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            Some(value) => {
+                let candidate = PathBuf::from(value);
+                if candidate.is_absolute() {
+                    candidate
+                } else {
+                    // Never resolve a server path against the CWD (G23/R-14).
+                    self.data_dir.join(candidate)
+                }
+            }
+            None => self.data_dir.join("curricula"),
+        }
     }
 
     /// Create every directory this config resolves to (idempotent) and log
@@ -441,11 +481,71 @@ mod tests {
         assert_eq!(config.screensaver_dir(), data_dir.join("screensaver"));
         assert_eq!(config.pki_dir(), data_dir.join("pki"));
         assert_eq!(config.log_dir(), data_dir.join("logs"));
+        assert_eq!(config.curricula_dir_from(None), data_dir.join("curricula"));
         assert!(config.database_url().starts_with("sqlite://"));
         assert!(
             config.database_url().contains("family.db"),
             "database_url should embed the resolved absolute db path: {}",
             config.database_url()
+        );
+    }
+
+    // HS1 (§2 H5): `curricula_dir()` is the one path the homeschool loader
+    // resolves, and it must be absolute however the environment is set —
+    // nothing on the server may ever be resolved against the CWD (G23/R-14).
+
+    #[test]
+    fn curricula_dir_defaults_to_curricula_under_the_data_dir() {
+        let config = FamilyHubConfig {
+            data_dir: PathBuf::from("C:/temp/familyhub-curricula-default"),
+            http_addr: DEFAULT_HTTP_ADDR.parse().unwrap(),
+            tls_addr: DEFAULT_TLS_ADDR.parse().unwrap(),
+            screensaver_schedule_hour: None,
+            log_level: None,
+        };
+
+        let dir = config.curricula_dir_from(None);
+        assert_eq!(dir, config.data_dir.join("curricula"));
+        assert!(dir.is_absolute(), "{} must be absolute", dir.display());
+    }
+
+    #[test]
+    fn an_absolute_curricula_dir_environment_value_wins_outright() {
+        let config = FamilyHubConfig {
+            data_dir: PathBuf::from("C:/temp/familyhub-curricula-env"),
+            http_addr: DEFAULT_HTTP_ADDR.parse().unwrap(),
+            tls_addr: DEFAULT_TLS_ADDR.parse().unwrap(),
+            screensaver_schedule_hour: None,
+            log_level: None,
+        };
+
+        let dir = config.curricula_dir_from(Some("C:/school/files".to_string()));
+        assert_eq!(dir, PathBuf::from("C:/school/files"));
+        assert!(dir.is_absolute());
+    }
+
+    #[test]
+    fn a_relative_curricula_dir_environment_value_lands_under_the_data_dir() {
+        let config = FamilyHubConfig {
+            data_dir: PathBuf::from("C:/temp/familyhub-curricula-relative"),
+            http_addr: DEFAULT_HTTP_ADDR.parse().unwrap(),
+            tls_addr: DEFAULT_TLS_ADDR.parse().unwrap(),
+            screensaver_schedule_hour: None,
+            log_level: None,
+        };
+
+        let dir = config.curricula_dir_from(Some("school".to_string()));
+        assert_eq!(dir, config.data_dir.join("school"));
+        assert!(
+            dir.is_absolute(),
+            "a relative FAMILY_HUB_CURRICULA_DIR must never leave a CWD-relative path: {}",
+            dir.display()
+        );
+
+        // An empty or whitespace-only value is "unset", not "the data dir".
+        assert_eq!(
+            config.curricula_dir_from(Some("   ".to_string())),
+            config.data_dir.join("curricula")
         );
     }
 

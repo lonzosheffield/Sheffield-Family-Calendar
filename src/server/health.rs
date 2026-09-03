@@ -44,7 +44,10 @@ use crate::server::pki::CertProvider;
 /// The eight keys PURPLE_TEAM.md §P3 T1.7 names, in the order it names them:
 /// "db reachable, last successful Google poll, cert `not_after`,
 /// days-to-expiry, disk free on the data volume, connected WS clients,
-/// uptime, migration version".
+/// uptime, migration version" — plus a ninth, `curricula`, added by HS1: the
+/// number of curriculum files the boot-time loader has in the database. It is
+/// the only outward sign that the School tab has anything to show, and
+/// `docs/homeschool/PLAN_HOMESCHOOL.md` §3 HS7(e) asserts on it.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct HealthBody {
     pub db: bool,
@@ -55,6 +58,10 @@ pub struct HealthBody {
     pub ws_clients: usize,
     pub uptime_seconds: u64,
     pub migration_version: Option<i64>,
+    /// HS1: loaded curricula. Always a number, never absent — a closed pool
+    /// reports `0`, exactly as a dead database reports `migration_version:
+    /// null` rather than dropping the key.
+    pub curricula: usize,
 }
 
 /// `GET /health`. 200 when the database answered, 503 when it did not — the
@@ -63,6 +70,7 @@ pub struct HealthBody {
 pub async fn health_handler(config: FamilyHubConfig) -> Response {
     let db = db_reachable().await;
     let migration_version = if db { migration_version().await } else { None };
+    let curricula = if db { curricula_count().await } else { 0 };
     let (cert_not_after, days_to_expiry) = cert_status(&config);
 
     let body = HealthBody {
@@ -74,6 +82,7 @@ pub async fn health_handler(config: FamilyHubConfig) -> Response {
         ws_clients: crate::server::api::realtime::connected_clients(),
         uptime_seconds: uptime_seconds(),
         migration_version,
+        curricula,
     };
 
     let status = if db {
@@ -98,6 +107,19 @@ async fn db_reachable() -> bool {
 async fn migration_version() -> Option<i64> {
     let pool = db::read_pool().await.ok()?;
     db::migration_version(pool).await.ok().flatten()
+}
+
+/// How many curricula the School tab has loaded (HS1). Independently sourced
+/// like every other key: a failure here reports `0` rather than blanking the
+/// rest of the report.
+async fn curricula_count() -> usize {
+    let Ok(pool) = db::read_pool().await else {
+        return 0;
+    };
+    crate::server::homeschool::db::count_curricula(pool)
+        .await
+        .map(|count| count.max(0) as usize)
+        .unwrap_or(0)
 }
 
 /// `(not_after, days_to_expiry)`, both `None` if the local PKI cannot be

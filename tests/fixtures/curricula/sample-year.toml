@@ -1,0 +1,144 @@
+# The synthetic curriculum every homeschool test loads (PLAN_HOMESCHOOL §2 H5,
+# review finding P-15). Three weeks, one week per term, seven subjects chosen so
+# that every branch of the H3 occurrence rule has a case in this one file:
+#
+#   Sums / Copywork   daily, no per-week rows -> one untitled occurrence a day
+#   Old Tales         reading, 2 days, 1 row a week -> the split case (part 1/2, 2/2)
+#   Fables            reading, 2 days, 2 rows in weeks 1 and 3 and none in week 2
+#                     -> the one-each case and the "-----" (nothing this week) case
+#   Twice Told        reading, 1 day, 2 rows in week 2 -> both readings on one day
+#   Painting          weekly -> one occurrence on the first day of its days
+#   Reading Basket    free_read -> never an occurrence, reference only
+#
+# Every book, subject and note here is invented for this fixture. Nothing in
+# this file comes from any real published curriculum (§0 N1: the repo is
+# public and the family's own schedules are licensed for family use only).
+
+[curriculum]
+slug        = "sample-year"
+name        = "Sample Year"
+weeks       = 3
+term_weeks  = 1
+source_note = "Invented for the test suite"
+
+[[subject]]
+name       = "Sums"
+category   = "daily"
+days       = "MTWRF"
+shared     = false
+icon       = "math"
+sort_order = 1
+
+[[subject]]
+name       = "Copywork"
+category   = "daily"
+days       = "MTWRF"
+sort_order = 2
+
+[[subject]]
+name       = "Old Tales"
+category   = "reading"
+source     = "Old Tales for Small People"
+days       = "MW"
+sort_order = 3
+
+[[subject]]
+name       = "Fables"
+category   = "reading"
+source     = "A Basket of Fables"
+days       = "TF"
+sort_order = 4
+
+[[subject]]
+name       = "Twice Told"
+category   = "reading"
+source     = "Twice Told in the Evening"
+days       = "T"
+sort_order = 5
+
+[[subject]]
+name       = "Painting"
+category   = "weekly"
+days       = "F"
+sort_order = 6
+
+[[subject]]
+name       = "Reading Basket"
+category   = "free_read"
+sort_order = 7
+
+# --- Old Tales: exactly one reading a week, spread over its two days ---------
+
+[[assignment]]
+subject = "Old Tales"
+week    = 1
+text    = "ch. 1 'The Lantern'"
+
+[[assignment]]
+subject = "Old Tales"
+week    = 2
+text    = "ch. 2 'The Long Road'"
+detail  = "stop at the bridge"
+
+[[assignment]]
+subject = "Old Tales"
+week    = 3
+text    = "ch. 3 'The Hill'"
+
+# --- Fables: two readings in weeks 1 and 3, nothing at all in week 2 ---------
+
+[[assignment]]
+subject = "Fables"
+week    = 1
+ordinal = 1
+text    = "The Kite and the Kettle"
+
+[[assignment]]
+subject = "Fables"
+week    = 1
+ordinal = 2
+text    = "The Patient Heron"
+
+[[assignment]]
+subject = "Fables"
+week    = 3
+ordinal = 1
+text    = "The Miller's Cat"
+
+[[assignment]]
+subject = "Fables"
+week    = 3
+ordinal = 2
+text    = "Two Crows and a Crumb"
+
+# --- Twice Told: two readings in week 2, both landing on its single day ------
+
+[[assignment]]
+subject = "Twice Told"
+week    = 2
+ordinal = 1
+text    = "The Tin Whistle"
+
+[[assignment]]
+subject = "Twice Told"
+week    = 2
+ordinal = 2
+text    = "The Second Telling"
+
+# --- Term notes: one of each kind -------------------------------------------
+
+[[term_note]]
+term = 1
+kind = "geography"
+text = "Left and right depend on where you stand."
+
+[[term_note]]
+term       = 1
+kind       = "free_read"
+text       = "The Otter's Almanac"
+sort_order = 1
+
+[[term_note]]
+term = 1
+kind = "poetry"
+text = "Rhymes for a Rainy Window"

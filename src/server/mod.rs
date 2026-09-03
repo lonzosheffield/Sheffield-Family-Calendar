@@ -14,6 +14,10 @@ pub mod db;
 // T1.7 - /health JSON + the TV staleness badge state machine.
 #[cfg(feature = "server")]
 pub mod health;
+// HS1 - the School tab's storage: migration 0005's queries, the curriculum
+// TOML loader and the enrollment seed (docs/homeschool/PLAN_HOMESCHOOL.md).
+#[cfg(feature = "server")]
+pub mod homeschool;
 // T1.3 - TLS + PKI + mDNS for the split-origin deployment (PLAN v2 D3').
 #[cfg(feature = "server")]
 pub mod mdns;

@@ -115,7 +115,7 @@ async fn health_returns_503_and_db_false_once_the_pool_is_closed() {
     // Every other key must still be present and typed — a dead database must
     // not blank out the rest of the report.
     let object = body.as_object().expect("/health returns a JSON object");
-    assert_eq!(object.len(), 8, "still all 8 keys, got {object:?}");
+    assert_eq!(object.len(), 9, "still all 9 keys, got {object:?}");
     assert!(body["ws_clients"].is_u64());
     assert!(body["uptime_seconds"].is_u64());
     assert!(body["disk_free_bytes"].is_u64());
@@ -123,5 +123,13 @@ async fn health_returns_503_and_db_false_once_the_pool_is_closed() {
         body["migration_version"].is_null(),
         "migration_version cannot be read once the pool is closed, got {:?}",
         body["migration_version"]
+    );
+    // HS1: `curricula` is a count, so a dead database reports `0` rather than
+    // dropping the key or reporting null — a monitor parsing this never has to
+    // handle two shapes for one field.
+    assert_eq!(
+        body["curricula"],
+        Value::from(0u64),
+        "curricula must be 0, never absent, once the pool is closed, got {body:?}"
     );
 }
