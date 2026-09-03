@@ -282,6 +282,14 @@ fails the build rather than rotting quietly.
 A handful of tests mutate process-global environment variables and serialise
 themselves on a lock; running the suite with `--test-threads=1` is never necessary.
 
+If `cargo test` dies during *compilation* with a wall of `internal compiler error: no
+resolution for an import` / `` `Res::Err` but no error emitted `` against
+`use family_calendar::server::...` lines in `tests/*.rs` — while `cargo clippy
+--all-targets` on the same tree is clean — it is rustc's incremental cache for the test
+binaries, not the code (seen on 2026-09-03 after HS9 changed `config.rs`'s public
+surface; the backtrace runs through `try_mark_green`). Either run once with
+`$env:CARGO_INCREMENTAL = "0"` or delete `target\debug\incremental` and rerun.
+
 ---
 
 ## Formatting & Linting
