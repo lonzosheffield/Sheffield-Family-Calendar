@@ -575,6 +575,10 @@ fn occurrence(
         // Rule 1's per-week override, carried through so Today can hand it
         // back to `upsert_assignment` unchanged (QH4-03 / R-11).
         days: row.and_then(|row| row.days.clone()),
+        // QH5-01: the row's own ordinal, so no surface has to recover it from
+        // a rank in date order — a pinned row is dealt to its own days and
+        // takes no part in rule 5's spread, so that rank is not the ordinal.
+        ordinal: row.map_or(1, |row| row.ordinal),
     }
 }
 
@@ -1769,6 +1773,22 @@ mod tests {
             vec![(Weekday::Fri, None)],
             "rule 1: assignment.days ∨ subject.days"
         );
+    }
+
+    #[test]
+    fn hs3_b_a_pinned_later_ordinal_keeps_its_own_ordinal_ahead_of_an_earlier_row() {
+        let mut plan = reading_plan("TF", 2);
+        plan.subjects[0].rows[1].days = Some(days("M"));
+        let enrollment = sample_enrollment(1, "2026-09-07");
+        let dealt = occurrences(&plan, &enrollment);
+        assert_eq!(dealt[0].scheduled_date, "2026-09-07");
+        assert_eq!(dealt[0].assignment_id, Some(101));
+        assert_eq!(
+            dealt[0].ordinal, 2,
+            "QH5-01: the ordinal is the row's own, never its rank in date order"
+        );
+        assert_eq!(dealt[1].assignment_id, Some(100));
+        assert_eq!(dealt[1].ordinal, 1);
     }
 
     #[test]

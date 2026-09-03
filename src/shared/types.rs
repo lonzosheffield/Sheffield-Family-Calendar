@@ -391,6 +391,16 @@ pub struct LessonOccurrence {
     /// serde name and an older payload still deserializes (schema-additive).
     #[serde(default)]
     pub days: Option<Vec<Weekday>>,
+    /// The row's own `assignments.ordinal` — the key `upsert_assignment`
+    /// writes to (QA round 5 QH5-01). `1` for the untitled daily occurrence,
+    /// which is the row H6 item 6 creates. Appended last and defaulted, like
+    /// `days`, so the DTO stays schema-additive.
+    #[serde(default = "first_ordinal")]
+    pub ordinal: i64,
+}
+
+fn first_ordinal() -> i64 {
+    1
 }
 
 /// A parent-authored task pinned to one boy and one date (H8, `lesson_extras`).

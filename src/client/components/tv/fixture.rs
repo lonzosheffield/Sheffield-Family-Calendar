@@ -106,6 +106,8 @@ fn occurrence(
         note: None,
         // The fixture pins nothing: every row here inherits its subject's days.
         days: None,
+        // One row per subject per day here, so every one of them is ordinal 1.
+        ordinal: 1,
     }
 }
 
