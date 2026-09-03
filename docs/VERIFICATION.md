@@ -1190,7 +1190,7 @@ test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fin
 ```
 cargo test --features server --test tv_tests
 
-     Running tests	v_tests.rs (target\debug\deps	v_tests-555b723658b799fa.exe)
+     Running tests\tv_tests.rs (target\debug\deps\tv_tests-555b723658b799fa.exe)
 
 running 40 tests
 test hs6_every_maximized_view_resolves_to_one_panel_slug ... ok
