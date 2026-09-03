@@ -472,7 +472,7 @@ mark_all_done(user_id, week, date, idempotency_key) -> ()          // unticked d
 set_school_week(user_id, week, date, auth) -> EnrollmentView        // stamps week_started_on = date
 enroll(user_id, curriculum_id, week, school_days, date, auth) -> EnrollmentView
 unenroll(user_id, auth) -> (); set_paused(user_id, paused: bool, auth) -> EnrollmentView
-upsert_assignment(subject_id, week, ordinal, text, detail: Option<String>, auth) -> ()
+upsert_assignment(subject_id, week, ordinal, text, detail: Option<String>, days: Option<String>, auth) -> ()   // days: per-week override, parse_days-validated (QH3-04 amendment, 2026-09-03)
 set_subject_schedule(subject_id, days: String, shared: bool, auth) -> ()
 get_week_grid(user_id, week) -> WeekGrid      // anchor = add_days(week_started_on, (week − current_week) × 7); dated = (week == current_week)
 get_month(user_id, year: i32, month: u32) -> MonthView

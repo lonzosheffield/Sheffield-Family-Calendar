@@ -79,4 +79,6 @@ Letters may be given in any order; they are stored in the canonical `M T W R F S
   `assignments` and `term_notes` in one transaction. Subjects and assignments the file still names
   are **updated in place**, keeping their ids and therefore the boys' `lesson_log` history; only
   rows the file no longer contains are deleted, and the log rows deleted with them are counted in
-  the command's output.
+  the command's output. The command runs in its own process, so after a `--replace` run
+  `family-hub.exe stop` / `start` the service (or wait for the next School change) so open phones
+  and the TV refetch the rewritten plan; the rows are already on disk.

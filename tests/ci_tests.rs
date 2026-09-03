@@ -165,3 +165,83 @@ fn xtask_crate_versions_are_pinned_exactly() {
         }
     }
 }
+
+/// QH3-01 (`docs/qa/QA_HS_ROUND_3.md`): `assets/tailwind.css` is committed and nothing in
+/// `cargo build` / `dx build` regenerates it, so a wave that introduces new utility classes
+/// without a rebuild ships a stylesheet with no rule for them. Every size/layout utility a
+/// component names must have a rule in the committed CSS.
+#[test]
+fn every_tailwind_utility_named_under_components_has_a_rule_in_the_committed_css() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let css =
+        std::fs::read_to_string(root.join("assets/tailwind.css")).expect("assets/tailwind.css");
+    const PREFIXES: [&str; 22] = [
+        "grid-cols-",
+        "min-h-",
+        "min-w-",
+        "max-h-",
+        "max-w-",
+        "rounded",
+        "overflow-",
+        "w-",
+        "h-",
+        "p-",
+        "px-",
+        "py-",
+        "m-",
+        "mt-",
+        "mb-",
+        "ml-",
+        "mr-",
+        "gap-",
+        "tracking-",
+        "items-",
+        "self-",
+        "list-",
+    ];
+    let mut missing = Vec::new();
+    for path in walk_rs(&root.join("src/client/components")) {
+        let source = std::fs::read_to_string(&path).expect("component source");
+        for literal in source.split('"').skip(1).step_by(2) {
+            for token in literal.split_whitespace() {
+                if !PREFIXES.iter().any(|p| token.starts_with(p)) || token.contains('{') {
+                    continue;
+                }
+                let escaped: String = token
+                    .chars()
+                    .flat_map(|c| {
+                        // CSS escapes these with a backslash (char 92); spelled as a code
+                        // so no shell on the way here can eat the escape.
+                        if "[]./:%()".contains(c) {
+                            vec![char::from(92u8), c]
+                        } else {
+                            vec![c]
+                        }
+                    })
+                    .collect();
+                if !css.contains(&format!(".{escaped}")) {
+                    missing.push(format!("{} in {}", token, path.display()));
+                }
+            }
+        }
+    }
+    missing.sort();
+    missing.dedup();
+    assert!(
+        missing.is_empty(),
+        "assets/tailwind.css is stale — rebuild it with `tailwindcss -i input.css -o assets/tailwind.css --minify` and commit the diff. Missing rules: {missing:#?}"
+    );
+}
+
+fn walk_rs(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(dir).expect("component directory") {
+        let path = entry.expect("dir entry").path();
+        if path.is_dir() {
+            out.extend(walk_rs(&path));
+        } else if path.extension().is_some_and(|e| e == "rs") {
+            out.push(path);
+        }
+    }
+    out
+}

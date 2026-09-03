@@ -3325,3 +3325,22 @@ Dispositions in `docs/qa/QA_HS_ROUND_2.md` "Boss close".
   unit test was not added (its only assertion — a `match` arm exists — is a compile-time fact,
   and `hs5_j` proves the render); the `input`'s `aria_label` reads "Title of {title}" rather than
   the audit's "Title for {title}". Neither weakens an Accept clause.
+
+## Boss, QA round 3 close + round 4 open (2026-09-03)
+
+- **QH3-01 (R-5)** applied by the Boss: `assets/tailwind.css` rebuilt with the pinned 3.4.17 binary
+  (CI's exact command) and the guard test
+  `ci_tests::every_tailwind_utility_named_under_components_has_a_rule_in_the_committed_css` added.
+  Rule from here on: any wave that introduces a utility class rebuilds the CSS in the same commit.
+- **QH3-04 (R-8) contract amendment** (`PLAN.md` §5.2): `upsert_assignment` gains
+  `days: Option<String>` (per-week `assignments.days` override, `parse_days`-validated, rejected
+  before any write). HS4-qa3 lands the server side; HS5-qa3 makes the Year cell sheet's days
+  control per-entry and prefilled. Logged in `PLAN_HOMESCHOOL.md` HS4 Do.
+- **QH3-06 (R-10)** applied by the Boss: docs sentence in `CURRICULUM_FORMAT.md` and the README.
+- **HS9 (new, BACKLOG B-3)**: tests and tools must never open the real `%ProgramData%\FamilyHub`
+  data dir. During this run an agent process migrated the production DB, seeded the fixture
+  curriculum there and set a throwaway parent PIN (2026-09-02 22:17); the owner recovered per
+  RECOVERY.md failure mode 7. HS9 runs after the round-4 fixes, before QA round 4.
+- `docs/BACKLOG.md` (branch `backlog/tv-viewport`) merged into `main`: B-1 TV viewport, B-2 session
+  expiry heads-up, B-3 = HS9.
+

@@ -67,3 +67,7 @@ School — his curriculum items and any tasks a parent added for him,
 tickable with the remote alone. Shared read-alouds are ticked on a phone by
 whoever is holding the book, not on the TV (so the tick is not attributed to
 the wrong boy).
+
+## After replacing a curriculum file
+
+After `family-hub.exe import-curriculum <file> --replace`, restart the service (`family-hub.exe stop` then `start`, elevated) or wait for the next School change, so open phones and the TV refetch the rewritten plan. The rows are already on disk.
