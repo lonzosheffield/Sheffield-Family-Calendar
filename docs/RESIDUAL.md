@@ -349,3 +349,28 @@ recorded below as R-11.
   `hs5_qa3_an_inline_text_edit_carries_the_rows_detail_and_days_through` guard drops its
   Today-side `days: None` allowance. One `hs4`-style storage case: a pinned row's inline text edit
   leaves `assignments.days` untouched.
+
+## R-12. `a_bad_file_beside_a_good_one_loads_exactly_one_curriculum_and_logs_the_path` drops its WARN line about once in fifteen runs (Low, HS1 test harness, pre-dates HS9)
+
+- **Origin:** Boss, HS9 close, 2026-09-03. `tests/homeschool_db_tests.rs` (the
+  `RecordingSubscriber` test near line 1065); `src/server/homeschool/loader.rs::load_directory`.
+- **What happens:** the `LoadReport { loaded: 1, skipped: 1 }` assertion passes — the bad file
+  *was* skipped and `tracing::warn!` *was* reached — but the recorder's captured lines are
+  missing the `WARN … bad.toml` event (once, on 2026-09-03 06:26 in a pre-HS9 baseline, the
+  `scanning the curricula directory` INFO line was missing as well). Seen twice in 31 full-suite
+  runs kept in the Boss scratchpad (`full2.log`, `baseline-hs9.log`); every other run, including
+  the three HS9 gate runs, passed. Not an HS9 effect: HS9 only added `init_test_env()` to this
+  file's `scratch_dir`, and the first failure is from before the branch existed.
+- **Why it is residual:** the assertion it guards (H5: "a bad file is logged at WARN with its
+  path") holds every time it is inspected by hand and the loader code has one unconditional
+  `warn!` on that path. The loss is in the test's capture, not the product; nobody ships on it.
+- **Suspected mechanism (unverified):** the recorder is installed with the thread-scoped
+  `tracing::subscriber::set_default` while the other tests in the same binary run in parallel
+  with no subscriber at all, so `tracing`'s process-wide callsite-interest / max-level cache is
+  rebuilt by this test while other threads are registering the same `loader.rs` callsites for
+  the first time. The runtime is `current_thread`, so it is not a future hopping threads.
+- **Solution (Fable):** make the capture independent of the cache: install the recorder once per
+  binary with `set_global_default` (a `OnceLock<RecordingSubscriber>` whose lines are filtered by
+  the scratch path each test already has in `needle`), or gate the WARN assertion behind a
+  `tracing::callsite::rebuild_interest_cache()` call *before* `load_directory`. Either is a
+  test-only change; rerun the suite ten times and keep the one that never drops a line.
