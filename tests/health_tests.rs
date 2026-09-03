@@ -45,6 +45,14 @@ fn init_test_env() -> PathBuf {
         let public = base.join("public");
         std::fs::create_dir_all(&public).expect("test public directory is creatable");
         std::env::set_var("DIOXUS_PUBLIC_PATH", &public);
+
+        // HANDOFF HS-6 / HS2b (Boss, wave B close): `db::pools()`'s lazy loader
+        // resolves `FamilyHubConfig::load()` from the environment, not from
+        // `test_config()`, so point the data dir at this binary's own scratch
+        // directory. Its `curricula\` folder is empty, which is what the
+        // `curricula == 0` assertion below has always meant — without this the
+        // test silently read whatever the ambient data dir happened to hold.
+        std::env::set_var("FAMILY_HUB_DATA_DIR", &base);
     });
     base
 }
