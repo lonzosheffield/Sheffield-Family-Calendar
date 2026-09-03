@@ -177,7 +177,7 @@ DNS-01 — step 13.
 icon, not from the browser.
 
 **Pass criterion:** the app opens standalone — no address bar, no browser chrome —
-and shows the five tabs (Routine, Calendar, Board, TV Remote, Settings).
+and shows the six tabs (Routine, School, Calendar, Board, Remote, Settings).
 
 *If it fails:* the manifest is served from the site root on purpose; a warning about
 scope means something is proxying the request. See `docs/PWA.md`, "No install prompt".
@@ -247,6 +247,43 @@ after which the hub's CA can be removed from every phone.
 
 *If it fails:* nothing is lost — the private CA path from step 7 keeps working; leave
 `certs.mode` as it was.
+
+### 14. Update to the School build and load the year's curriculum
+
+The School tab (🏠) ships in a later build than the one step 3 installed. Rebuild
+and re-copy both pieces exactly as step 3 describes (`family-hub.exe` from
+`cargo build --release --features server --bin family-hub`, and the `public\`
+folder from `dx build --platform web --release`, laid out beside it), then
+place the year's curriculum file — transcribed from your own printed plan, per
+`docs/homeschool/CURRICULUM_FORMAT.md` — at
+`%ProgramData%\FamilyHub\curricula\ao-year-1.toml` (create the `curricula\`
+folder if it is not already there; `FAMILY_HUB_CURRICULA_DIR` overrides this
+default location if you would rather keep it elsewhere). The loader only reads
+this folder at boot, so the file must be in place *before* the reinstall below
+restarts the service — copying it in afterwards needs another restart.
+
+From an **elevated** PowerShell (Run as administrator), the same re-install
+procedure step 3 above used:
+
+```powershell
+cd "C:\Program Files\FamilyHub"
+.\family-hub.exe stop
+# copy the new family-hub.exe and public\ over the old ones here
+.\family-hub.exe install
+.\family-hub.exe start
+```
+
+**Pass criterion:** `https://<hub-ip>:8443/health` (or `http://<hub-ip>:8080/health`)
+returns JSON containing `"curricula": 1`, and opening `/m` on a phone shows a
+new **School** tab between Routine and Calendar with this year's plan on it.
+
+*If it fails:* `"curricula": 0` means the loader never saw the file — check it
+really landed at the path above (not a subfolder, not renamed) and that the
+service was restarted after it arrived; `%ProgramData%\FamilyHub\logs\familyhub.log`
+logs the resolved curricula directory and any file it rejected, with a reason,
+at startup. See `docs/RECOVERY.md` failure mode 1 if the reinstall itself
+leaves `/tv` or `/m` unstyled — the same "both pieces beside each other"
+requirement step 3 already covers.
 
 ---
 

@@ -3160,3 +3160,52 @@ Recorded, not applied (owned elsewhere or residual):
 * **H-HS5-6** — residual for `docs/RESIDUAL.md` (HS7/HS8): `LessonOccurrence` lacks `ordinal`, so
   Today's inline edit offers no edit for rows not yet on screen; clean fix is one field.
 * **H-HS5-4, H-HS5-5, HS-7, HS-9** — informational; HS6 already applies H-HS5-5's shared-row filter.
+
+---
+
+## From HS7 (cross-surface loop + verification + docs) → Boss / HS8
+
+### HS-10. `tests/curriculum_tests.rs` (HS2b's own acceptance suite) never reached `main`
+
+While assembling the HS wave's `docs/VERIFICATION.md` transcripts, HS7 found
+that `main` (this branch's parent, `4af6425`) has **no** `tests/curriculum_tests.rs`
+— HS2b's Owns list names it, and the file exists, complete and 670 lines, on
+the tip of branch `hs/HS2b` (commit `657a588`, message "HS2b: transcribe AO
+Year 1 weeks 19-36, add curriculum_tests.rs") — but `git merge-base main
+hs/HS2b` is `1b8bca3`, the **Boss post-A** commit, i.e. `hs/HS2b` branched
+before HS4/HS5/HS6 and was never squash-merged into `main` at the wave-B
+close. `docs/homeschool/README.md`'s own "Transcription status" note and
+`599cabb`'s commit message ("tests: isolate `health_tests`' data dir so the
+loader can't see an ambient curriculum (HANDOFF HS-6/HS2b)") both talk about
+HS2b as done, which is what made this easy to miss — the *content* HS2b
+transcribed (the gitignored `curriculum/ao-year-1.toml`, weeks
+1–36 confirmed present and loadable on this machine) is real and usable, but
+the **committed test file that proves it** is not on `main`.
+
+**Why HS7 did not fix this directly:** `tests/curriculum_tests.rs` is not in
+HS7's Owns list (`docs/homeschool/PLAN_HOMESCHOOL.md` §3 names it under HS2b
+only), and §3's autonomy rule is explicit — "Only edit files your task's Owns
+list names; for anything else append a request to `docs/HANDOFF.md`". Cherry-
+picking a stale branch's version would also be wrong on its own terms: `hs/HS2b`
+predates HS4's `src/server/api/homeschool.rs`, HS5's phone tab and HS6's TV
+panel, so a naive merge of that branch would try to **delete** all three.
+
+**What HS7 did instead, to still give HS2 a real (not fabricated) row in
+`docs/VERIFICATION.md`:** ran the shipped `family-hub.exe import-curriculum`
+subcommand — no test file needed — against the real, gitignored
+`ao-year-1.toml` already present on this machine (`%TEMP%\familyhub-test\curricula\`),
+into a fresh scratch data directory, and pasted that real command's output as
+supplementary evidence in the HS2 transcript. It is genuine verification that
+the file loads cleanly and covers all 36 weeks, but it is **not** a
+substitute for HS2b's own committed acceptance suite, which still needs to
+land.
+
+**Request:** re-apply `hs/HS2b`'s `tests/curriculum_tests.rs` onto current
+`main` (the file itself does not touch `src/`, so a straight `git checkout
+hs/HS2b -- tests/curriculum_tests.rs` onto a fresh branch off current `main`,
+followed by a compile-and-run check, should be enough) as its own Boss
+micro-commit before HS8's fresh-context QA loop runs — HS8's own checklist
+("audits every HS task against its contract") cannot audit HS2b's contract
+against a file that is not there. Not blocking HS7's own Accept clauses
+(none of which name `tests/curriculum_tests.rs`), but blocking a true
+"every HS task landed" claim for the wave as a whole.

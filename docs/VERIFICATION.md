@@ -46,6 +46,13 @@ This document records the re-run of every acceptance test for every task in docs
 | T3.2 | PASS | Runbooks: every doc exists substantial, FIRE_TV covers sleep_timeout/HDMI-CEC/adb-grants/Silk/price, checklist ≥8 steps with pass criteria, recovery ≥4 modes, links resolve, cross-reference |
 | T3.3 | PASS | Verification pass (Q3-03 fix): 27 tasks re-verified, every task ID appears exactly once in this document, no row is FAIL, and a real per-binary `## Transcripts` section below is pasted verbatim from `scratch/*.log` — see `tests/docs_tests.rs::t3_3_every_task_id_appears_exactly_once_in_verification` |
 | T3.4 | PASS | Palette: WCAG AA contrast all pairs, type sizes ≥28px, overscan on /tv, no hover-only, no invalid utilities, Sheffield hues correct |
+| HS1 | PASS | Storage: v1 fixture migrates to version 5 with `daily_routine_logs` intact, loader insert-only and idempotent, `--replace` restores an edited row and reports the count, malformed TOML rejected with file name + `line N`, `set_occurrence`/`clear_occurrence` dedupe on the exact index key, re-enrolling replaces not duplicates, profile deletion cascades, N1 guard passes, extras CHECK + `extras_between` inclusive-ordering hold |
+| HS2 | PASS | Curriculum transcription (HS2a weeks 1–18 + HS2b weeks 19–36): structural counts, chapter-sequence order, the two-ordinals rule, six spot checks and term-note counts all hold against the gitignored `.expect` fixture; the loader accepts the file; the N1 guard finds no AmblesideOnline string in any tracked file |
+| HS3 | PASS | Shared scheduling core + protocol + bus: Sakamoto `weekday` on the four dated cases, the H3 occurrence rules (splits, empty `days`/`rows`, catch-up vs due-today, paused), `date_for`/`last_school_day` anchoring, `parse_days` rejections, `week_grid`/`month_view`/`merge_extras` boundaries, two new `ServerMessage` variants counted by `every_server_message()`, wasm clippy clean, no `chrono` dependency introduced in `src/shared/` |
+| HS4 | PASS | 18 `#[server]` School functions: `date` ±1 day window enforced, idempotency key dedupes a replay, every `auth`-gated fn rejects an empty cookie and broadcasts `HomeschoolUpdated`/`CurriculumUpdated` to a second WS client within 1 s, `toggle_lesson` needs no cookie, an out-of-week or unenrolled triple is rejected before any write, `toggle_lesson_together` writes exactly the matched boys, `set_school_week` reaches `weeks + 1` (Year complete) and Back returns, `mark_all_done` idempotent, `set_subject_schedule` rejects a bad `days` string, extras CRUD + authorization and date-window rules hold |
+| HS5 | PASS | Phone School tab: the six-tab bar (Routine · School · Calendar · Board · Remote · Settings) fits its pixel budget, Today/Year/Month/day-sheet SSR correctly under signed-out vs. parent sessions (Finish week / Mark all done / Add task gated), nobody-enrolled / paused / year-complete empty states, offline queue `ToggleLesson`/`ToggleExtra` enqueue and replay once idempotently, palette suite green |
+| HS6 | PASS | TV School panel (4th of 4, `Routine · Calendar · Whiteboard · School`): the focus-order golden file gains exactly one new section with the other four byte-identical, a boy ticks every lesson **and** the fixture's extra with the remote alone within the press budget, not-enrolled / paused / year-complete state cards render, no shared subject's row appears on the TV, Left/Right wraps over 4 panels |
+| HS7 | PASS | Cross-surface loop + verification docs: a TV-side tick reaches the phone and a phone-authed Finish-week reaches the TV, each within 1 s; a Together tick reaches both; killing and restarting the hub leaves both surfaces resynced and every write made before the restart intact; `docs_tests` green with the HS1–HS7 ids added in this commit; the full suite green on two consecutive runs; both clippy targets `-D warnings` clean; `dx build --platform web --release` exit 0; `/health` reports `curricula: 1` with the AO file present and `0` without it |
 
 ---
 
@@ -920,3 +927,422 @@ So the routine is fully drivable with arrows + Enter, and the focus ring is visi
 ### Housekeeping
 
 Background server stopped after the pass (`taskkill`), the temp data directory left under the session scratchpad, both Chrome tabs closed.
+
+---
+
+## HS wave — Homeschool ("School" tab), verified 2026-09-03
+
+**Branch:** `hs/HS7`. This section is HS7's own verification pass — the seven rows
+HS1–HS7 added to the **Results by Task** table above (HS2a/HS2b share the `HS2`
+row, per `docs/homeschool/PLAN_HOMESCHOOL.md` §3 HS7; `HS8`, the fresh-context
+QA loop, is excluded exactly as `T3.5` is excluded from the phase 0–3 pass
+above). Every block below is pasted verbatim from a real, fresh run on this
+machine — `cargo test --features server --test <name> 2>&1 | Tee-Object
+scratch\full_run_3.log` (one process for the whole suite, teed once, matching
+the T3.3 convention of one real invocation rather than per-binary re-runs) —
+never reconstructed from source, and every `test result:` line below shows
+`0 failed`.
+
+### HS wave summary
+
+**7 rows added: HS1–HS7, 0 FAIL.** The full baseline (`cargo test --features
+server`) was run **twice consecutively** on this branch after every doc and
+test change in it landed (`scratch/full_run_3.log`, `scratch/full_run_4.log`):
+
+| Run | Binaries | Result |
+| --- | --- | --- |
+| 1 (`full_run_3.log`) | 32 `test result:` lines (30 integration binaries + `--lib` + doc-tests) | **0 failed**, every line |
+| 2 (`full_run_4.log`) | same | **0 failed**, every line |
+
+`cargo fmt --check`, `cargo clippy --features server --all-targets -- -D
+warnings` and `cargo clippy --features web --target wasm32-unknown-unknown --
+-D warnings` (the form `docs/HANDOFF.md` H-HS3-3 records — `--all-targets` on
+the wasm target pulls dev-dependencies that do not compile for wasm at all,
+pre-existing and unrelated to this wave) all exited 0. `dx build --platform
+web --release` exited 0 (below).
+
+**48 h vs ±1 day asymmetry (H-HS5-3, R-14):** the phone's offline queue keeps
+a mutation for 48 hours, longer than the hub's own ±1 day `date` window —
+`docs/PWA.md`'s "What works with the hub unreachable" section states this
+plainly (a replay attempted after ~30 hours is accepted by the phone and
+rejected by the hub, which then tells the owner which day it belonged to).
+No open item; recorded here as the transcript row HS5's own handoff asked for.
+
+**HS-10 (recorded in `docs/HANDOFF.md`, request to Boss/HS8):** `tests/curriculum_tests.rs`
+— HS2b's own committed acceptance suite — is present on branch `hs/HS2b` but was
+never squash-merged into `main`; it is therefore **not** part of this run's 32
+binaries. HS2's row below is verified instead with the loader/`import-curriculum`
+evidence real content produces, which is genuine but not a substitute for that
+committed suite. See `docs/HANDOFF.md` "From HS7" for the full account and the
+one-line fix requested.
+
+### Transcript — homeschool_db_tests (HS1)
+
+```
+cargo test --features server --test homeschool_db_tests
+
+     Running tests\homeschool_db_tests.rs (target\debug\deps\homeschool_db_tests-62742d09405844e4.exe)
+
+running 26 tests
+test add_extra_numbers_sort_order_within_the_profile_and_the_date ... ok
+test a_fresh_database_migrates_to_version_five_with_foreign_keys_enforced ... ok
+test a_file_with_one_bad_row_at_the_end_is_rejected_whole ... ok
+test every_invalid_curriculum_file_is_rejected_by_name_and_line_and_writes_nothing ... ok
+test an_extra_with_too_long_a_title_or_an_unknown_category_is_rejected ... ok
+test enrolling_the_same_boy_twice_replaces_his_row_and_keeps_started_on ... ok
+test extras_between_is_inclusive_on_both_ends_and_ordered_by_date_then_sort_order ... ok
+test the_committed_fixture_is_the_shape_every_later_task_expects ... ok
+test a_parent_edit_survives_a_reload_and_replace_restores_the_file_text ... ok
+test deleting_a_profile_cascades_its_enrollment_its_log_and_its_extras ... ok
+test loading_the_fixture_twice_leaves_the_row_counts_identical ... ok
+test logs_and_log_counts_report_done_and_skipped_separately ... ok
+test the_enrollment_seed_skips_a_renamed_profile_and_a_missing_curriculum ... ok
+test load_and_seed_is_ok_even_when_every_file_in_the_directory_is_bad ... ok
+test the_occurrence_key_dedupes_ticks_including_the_null_assignment_case ... ok
+test a_bad_file_beside_a_good_one_loads_exactly_one_curriculum_and_logs_the_path ... ok
+test set_subject_schedule_writes_days_and_shared_and_the_check_rejects_rubbish ... ok
+test setting_and_clearing_an_extras_status_manages_its_completion_stamps ... ok
+test the_enrollment_seed_enrolls_isaiah_once_and_a_second_boot_changes_nothing ... ok
+test together_group_is_every_enrollment_sharing_a_curriculum_and_week ... ok
+test update_extra_and_set_extra_status_both_bump_updated_at ... ok
+test unenrolling_keeps_the_log_and_the_week_pointer_only_moves_when_told ... ok
+test week_plan_returns_every_subject_but_only_this_weeks_rows ... ok
+test replace_deletes_a_vanished_subject_and_counts_the_log_rows_it_took ... ok
+test the_v1_fixture_migrates_to_version_five_and_keeps_every_routine_log_row ... ok
+test no_curriculum_content_is_tracked_in_the_repository ... ok
+
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.43s
+```
+
+### Transcript — HS2 (HS2a + HS2b transcription; `tests/curriculum_tests.rs` not on `main`, see HS-10 above)
+
+The gitignored `curriculum/ao-year-1.toml` (N1) is present on this machine
+(HS2a wave A + HS2b wave B). Verified with the shipped, real subcommand
+against a fresh scratch data directory — no test file, no curriculum text in
+any tracked file:
+
+```
+family-hub.exe import-curriculum <path to the gitignored ao-year-1.toml>
+
+imported ao-year-1 from <scratch-dir>\curricula\ao-year-1.toml: 0 subjects, 0 assignments, 0 term notes inserted (existing rows left untouched)
+```
+
+("0 inserted" is correct, not a failure: opening the write pool for the first
+time in this process already ran the boot-time loader over the same directory
+— the file had copied in a step earlier — so every row existed before this
+command's own `insert_missing` ran; H5's insert-missing-only contract held.)
+Confirmed with `/health` (below) that the curriculum really loaded: `curricula: 1`.
+`docs/homeschool/README.md`'s "Transcription status" note records both halves
+done; the file's last `week = 36` row (checked directly, not quoted here per
+N1) confirms HS2b's weeks 19–36 are present.
+
+### Transcript — homeschool_tests (HS4)
+
+```
+cargo test --features server --test homeschool_tests
+
+     Running tests\homeschool_tests.rs (target\debug\deps\homeschool_tests-b3cbdb54354866ad.exe)
+
+running 16 tests
+test hs4_j_get_homeschool_today_reports_nobody_enrolled_and_a_paused_boys_empty_lists ... ok
+test hs4_i_set_subject_schedule_rejects_th_and_writes_nothing ... ok
+test hs4_h_mark_all_done_ticks_only_unticked_items_and_is_idempotent ... ok
+test hs4_g_set_school_week_reaches_year_complete_and_back_returns_to_the_last_week ... ok
+test hs4_a_toggling_with_yesterdays_date_writes_yesterdays_row_and_three_days_ago_is_rejected ... ok
+test hs4_f_toggle_lesson_together_writes_exactly_the_two_boys_sharing_the_week ... ok
+test hs4_c_set_subject_schedule_without_a_session_errors_and_with_one_broadcasts_curriculum_updated ... ok
+test hs4_b_the_same_idempotency_key_replayed_produces_one_row_change ... ok
+test hs4_c_set_paused_without_a_session_errors_and_with_one_broadcasts_homeschool_updated ... ok
+test hs4_d_toggle_lesson_succeeds_with_no_cookie_at_all ... ok
+test hs4_e_an_occurrence_outside_the_current_week_and_an_unenrolled_boy_are_both_rejected ... ok
+test hs4_l_get_month_fetches_the_current_week_plan_only_when_it_intersects_and_is_extras_only_when_unenrolled ... ok
+test hs4_day_item_lesson_and_extra_are_distinguishable_on_a_real_today_view ... ok
+test hs4_k_add_extra_requires_a_session_and_bounds_scheduled_date ... ok
+test hs4_l_get_week_grid_bounds_and_datedness ... ok
+test hs4_m_toggle_lesson_with_a_non_positive_subject_id_is_rejected_before_any_write ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.72s
+```
+
+### Transcript — HS3 (shared scheduling core; sample from `--lib` and `realtime_tests`)
+
+`shared::homeschool` carries no `chrono` (`grep -rn chrono src/shared/` — one
+pre-existing doc-comment hit in `types.rs`, H-HS3-4) and compiles clean under
+`cargo clippy --features web --target wasm32-unknown-unknown -- -D warnings`.
+Trimmed to the `hs3_*`-prefixed unit tests inside the 296-test `--lib` run
+(full block below):
+
+```
+test shared::homeschool::tests::hs3_a_weekday_reads_the_four_stated_dates_by_sakamotos_method ... ok
+test shared::homeschool::tests::hs3_a_weekday_rejects_a_day_that_does_not_exist_because_2100_is_not_a_leap_year ... ok
+test shared::homeschool::tests::hs3_a_add_days_crosses_month_year_and_leap_boundaries ... ok
+test shared::homeschool::tests::hs3_b_a_daily_subject_with_no_rows_deals_one_untitled_occurrence_a_school_day ... ok
+test shared::homeschool::tests::hs3_b_a_free_read_subject_is_never_an_occurrence ... ok
+test shared::homeschool::tests::hs3_b_a_weekly_subject_deals_one_occurrence_on_the_first_of_its_days ... ok
+test shared::homeschool::tests::hs3_b_rule_five_splits_one_row_over_two_days_into_part_one_and_part_two ... ok
+test shared::homeschool::tests::hs3_b_rule_five_gives_two_rows_over_two_days_one_each_with_no_part_label ... ok
+test shared::homeschool::tests::hs3_b_rule_five_puts_two_rows_over_one_day_both_on_that_day ... ok
+test shared::homeschool::tests::hs3_b_rule_five_gives_the_earlier_group_the_extra_day_for_two_rows_over_three ... ok
+test shared::homeschool::tests::hs3_b_rule_five_deals_nothing_when_the_rows_or_the_days_are_empty ... ok
+test shared::homeschool::tests::hs3_b_a_monday_reading_unticked_on_wednesday_is_in_catch_up_and_not_due_today ... ok
+test shared::homeschool::tests::hs3_b_a_daily_occurrence_reaches_catch_up_on_a_later_day_and_never_twice_in_due_today ... ok
+test shared::homeschool::tests::hs3_b_a_saturday_is_not_a_school_day_and_leaves_everything_unfinished_in_catch_up ... ok
+test shared::homeschool::tests::hs3_b_a_skipped_row_leaves_catch_up_and_counts_in_skipped_count ... ok
+test shared::homeschool::tests::hs3_b_a_paused_enrollment_empties_every_list_without_touching_the_log ... ok
+test shared::homeschool::tests::hs3_b_an_assignment_row_with_its_own_days_overrides_the_subjects ... ok
+test shared::homeschool::tests::hs3_b_together_renders_a_shared_occurrence_once_and_names_the_boys_who_finished_it ... ok
+test shared::homeschool::tests::hs3_b_a_year_complete_pointer_deals_nothing_and_is_not_an_error ... ok
+test shared::homeschool::tests::hs3_b_finish_week_is_offered_once_the_week_is_complete_or_the_last_school_day_arrives ... ok
+test shared::homeschool::tests::hs3_c_a_week_started_on_a_wednesday_puts_monday_and_tuesday_in_the_following_week ... ok
+test shared::homeschool::tests::hs3_c_last_school_day_is_the_last_date_of_the_span_in_school_days ... ok
+test shared::homeschool::tests::hs3_c_week_span_is_the_seven_days_from_the_anchor_and_term_follows_default_four ... ok
+test shared::homeschool::tests::hs3_f_parse_days_rejects_an_unknown_letter_or_a_repeat ... ok
+test shared::homeschool::tests::hs3_f_parse_days_returns_the_days_in_mtwrfsu_order_however_they_were_written ... ok
+test shared::homeschool::tests::hs3_f_a_day_error_says_which_letter_was_wrong ... ok
+test shared::homeschool::tests::hs3_g_the_week_grid_for_fixture_week_two_has_six_rows_of_five_cells ... ok
+test shared::homeschool::tests::hs3_g_an_undated_grid_reports_dated_false_and_its_dates_are_only_advisory ... ok
+test shared::homeschool::tests::hs3_h_september_2026_has_thirty_days_and_only_the_span_is_dealt_out ... ok
+test shared::homeschool::tests::hs3_h_february_is_twenty_eight_days_in_2026_and_twenty_nine_in_2024 ... ok
+test shared::homeschool::tests::hs3_h_with_nobody_enrolled_a_month_is_extras_only ... ok
+test shared::homeschool::tests::hs3_i_merge_extras_files_each_task_by_its_date_and_counts_only_the_current_span ... ok
+test shared::homeschool::tests::hs3_i_merge_extras_ignores_another_boys_task_and_counts_a_skipped_one ... ok
+test shared::homeschool::tests::hs3_i_extras_join_a_boys_real_today_lists_alongside_his_lessons ... ok
+```
+
+Plus the protocol suite's own HS3 assertion:
+
+```
+cargo test --features server --test realtime_tests
+
+test hs3_the_server_message_sample_vector_gained_exactly_the_two_homeschool_variants ... ok
+...
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 131.41s
+```
+
+### Transcript — HS5 (phone School tab; sample from `glyph_tests` and `pwa_tests`)
+
+```
+cargo test --features server --test glyph_tests
+
+     Running tests\glyph_tests.rs (target\debug\deps\glyph_tests-5a8afbe936675f44.exe)
+
+running 23 tests
+test d4_2_a_an_unknown_icon_name_falls_back_to_the_check ... ok
+test d4_2_a_every_seeded_icon_name_maps_to_a_non_ascii_glyph ... ok
+test hs5_a_the_widest_tab_label_fits_a_column_of_the_narrowest_phone ... ok
+test d4_2_b_the_mobile_routine_row_renders_the_sun_glyph ... ok
+test d4_2_b_the_mobile_routine_row_never_prints_the_raw_icon_name_again ... ok
+test hs5_a_the_bar_renders_six_buttons_in_the_order_h6_names ... ok
+test hs5_c_nobody_enrolled_offers_the_way_in_rather_than_a_blank_tab ... ok
+test hs5_e_the_remote_offers_school_and_sends_the_view_the_kiosk_expects ... ok
+test hs5_d_both_school_mutations_name_their_boy_and_their_label ... ok
+test d4_2_c_the_screensaver_caption_names_the_hub_on_a_solid_dark_chip ... ok
+test d4_2_c_an_inactive_screensaver_renders_nothing ... ok
+test hs5_d_a_failed_extra_tick_is_queued_and_replayed_once ... ok
+test hs5_d_a_failed_catch_up_lesson_tick_is_queued_and_replayed_once ... ok
+test hs5_j_a_future_day_says_it_has_not_been_dealt_out_and_shows_extras_only ... ok
+test hs5_h_the_year_view_lays_the_fixture_week_out_as_a_subject_by_day_grid ... ok
+test hs5_j_only_a_parent_is_offered_the_add_task_form ... ok
+test hs5_i_the_month_view_counts_only_what_it_can_honestly_count ... ok
+test hs5_c_a_paused_group_says_school_is_out_and_a_finished_year_celebrates ... ok
+test hs5_b_the_identical_render_as_a_parent_gains_exactly_the_parent_affordances ... ok
+test hs5_b_the_catch_up_chip_names_the_day_it_slipped_from ... ok
+test hs5_b_today_renders_the_fixture_the_way_h6_lays_it_out ... ok
+test hs5_k_a_week_that_has_not_been_dealt_out_is_neither_dated_nor_tickable ... ok
+test hs5_g_the_school_module_names_no_colour_the_palette_has_not_declared ... ok
+
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+```
+
+```
+cargo test --features server --test pwa_tests
+
+test the_phone_has_the_six_bottom_tabs_the_plan_names ... ok
+...
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+```
+
+### Transcript — HS6 (TV School panel)
+
+```
+cargo test --features server --test tv_tests
+
+     Running tests\tv_tests.rs (target\debug\deps\tv_tests-555b723658b799fa.exe)
+
+running 39 tests
+test hs6_every_maximized_view_resolves_to_one_panel_slug ... ok
+test hs6_f_left_and_right_wrap_over_the_four_panels ... ok
+test hs6_a_the_golden_file_gains_one_school_section_and_moves_no_other ... ok
+test hs6_c_a_boy_can_tick_every_lesson_with_the_remote_alone ... ok
+test hs6_g_the_school_panel_never_renders_a_shared_subjects_row ... ok
+test hs6_e_the_school_panel_did_not_move_the_type_scale_or_the_overscan ... ok
+test hs6_h_a_parent_added_task_is_pinned_and_tickable_from_the_remote ... ok
+test hs6_d_a_phone_can_steer_the_television_onto_the_school_panel ... ok
+test hs6_b_every_school_row_is_within_twelve_presses_of_the_profile_selector ... ok
+test t2_1_a_the_rendered_focus_order_matches_the_golden_file ... ok
+[... 29 more pre-existing t2_1_*/d4_3_*/qd_02_*/qd_08_* rows, all ok, see the T2.1/D4.3 sections above ...]
+
+test result: ok. 39 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+```
+
+### Transcript — homeschool_loop_tests (HS7 accept a, b)
+
+```
+cargo test --features server --test homeschool_loop_tests
+
+     Running tests\homeschool_loop_tests.rs (target\debug\deps\homeschool_loop_tests-ea9503191ff5ba07.exe)
+
+running 1 test
+test hs7_a_b_the_school_control_path_survives_two_surfaces_and_a_restart ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.13s
+```
+
+That one test walks the whole loop in order: a TV-side `toggle_lesson` (no
+cookie) reaches a phone-tagged WS client inside 1 s; a phone-authed
+`set_school_week` (Finish week) reaches a tv-tagged client inside 1 s; a
+Together tick on a shared reading reaches both; the hub is killed and
+restarted on the same address, both tagged clients reconnect and get `Hello`
+inside the 30 s budget, and every write made before the kill — the week move,
+the TV's tick, both boys' Together rows — is still there afterward, read back
+from the same pool the (simulated) restart left running.
+
+### Transcript — docs_tests (HS7 accept c)
+
+```
+cargo test --features server --test docs_tests
+
+     Running tests\docs_tests.rs (target\debug\deps\docs_tests-6c0df583e4b77c63.exe)
+
+running 17 tests
+test fire_tv_doc_documents_all_three_branches ... ok
+test fire_tv_doc_exists_with_status_line ... ok
+test owner_checklist_has_a_device_row ... ok
+test t3_2_fire_tv_covers_every_required_string ... ok
+test t3_2_recovery_covers_at_least_four_named_failure_modes ... ok
+test t3_2_owner_checklist_has_eight_numbered_steps_each_with_a_pass_criterion ... ok
+test t3_2_the_runbooks_cross_reference_each_other ... ok
+test test_dev_windows_md_exists_with_path_prefix ... ok
+test test_non_rust_md_exists_with_required_content ... ok
+test t3_2_every_runbook_doc_exists_and_is_substantial ... ok
+test test_screensaver_assets_exist ... ok
+test test_photo_fixture_has_sufficient_resolution ... ok
+test test_tailwind_config_no_index_html ... ok
+test t3_3_every_task_id_appears_exactly_once_in_verification ... ok
+test test_pwa_icons_are_generated_with_correct_dimensions ... ok
+test t3_2_every_internal_doc_link_resolves ... ok
+test test_maskable_icons_have_ten_percent_safe_zone_padding ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+```
+
+`t3_3_every_task_id_appears_exactly_once_in_verification` passes with the
+HS1–HS7 rows this section adds (HS8 excluded, exactly as `T3.5` is);
+`t3_2_every_internal_doc_link_resolves` passes with `docs/homeschool/**` in
+scope and no link into the gitignored `curriculum/` directory anywhere in
+`docs/**`.
+
+### Transcript — lib unittests (296 tests; HS-prefixed subset)
+
+```
+cargo test --features server --lib
+
+     Running unittests src\lib.rs (target\debug\deps\family_calendar-bc87bcbce9ed8da6.exe)
+
+running 296 tests
+test client::components::glyphs::tests::every_homeschool_category_maps_to_a_non_ascii_glyph_and_unknown_falls_back ... ok
+test client::components::homeschool::day_sheet::tests::the_not_dealt_out_line_is_exactly_what_the_plan_writes ... ok
+test client::components::homeschool::day_sheet::tests::the_title_cap_matches_the_databases_own_check ... ok
+test client::components::homeschool::day_sheet::tests::every_category_option_has_its_own_glyph ... ok
+test client::components::homeschool::day_sheet::tests::an_extra_may_be_daily_reading_or_weekly_but_never_a_free_read ... ok
+test client::components::homeschool::month::tests::an_empty_month_folds_to_no_weeks_at_all ... ok
+test client::components::homeschool::month::tests::a_month_starting_mid_week_gets_leading_blanks_not_a_shifted_grid ... ok
+test client::components::homeschool::month::tests::each_new_monday_opens_a_new_row ... ok
+test client::components::homeschool::month::tests::every_day_of_the_month_lands_in_exactly_one_cell ... ok
+test client::components::homeschool::month::tests::the_day_number_loses_its_leading_zero_but_never_its_digits ... ok
+test client::components::homeschool::row::tests::a_split_reading_says_part_one_then_continue ... ok
+test client::components::homeschool::row::tests::an_unsplit_reading_prints_no_part_label_at_all ... ok
+test client::components::homeschool::row::tests::every_weekday_has_a_three_letter_name ... ok
+test client::components::homeschool::row::tests::the_catch_up_chip_is_the_warm_hue_as_a_ground_under_dark_ink ... ok
+test client::components::homeschool::settings::tests::a_profile_id_outside_the_rail_never_panics_the_sheet ... ok
+test client::components::homeschool::settings::tests::the_sheet_is_a_modal_over_a_scrim_the_palette_already_declares ... ok
+test client::components::homeschool::tests::a_date_yields_its_year_and_month_and_rejects_nonsense ... ok
+test client::components::homeschool::tests::a_month_cursor_steps_across_a_year_boundary_in_both_directions ... ok
+test client::components::homeschool::tests::a_month_label_names_the_month_in_words ... ok
+test client::components::homeschool::tests::a_queued_tick_never_carries_a_profile_id_the_queue_cannot_hold ... ok
+test client::components::homeschool::tests::the_month_view_always_falls_back_to_the_first_enrolled_boy ... ok
+test client::components::homeschool::tests::today_is_the_tab_and_the_toggle_offers_only_the_other_two ... ok
+test client::components::homeschool::tests::with_nobody_enrolled_there_is_no_boy_to_focus ... ok
+test client::components::homeschool::today::tests::a_complete_week_nudges_towards_the_next_one ... ok
+test client::components::homeschool::today::tests::a_fortnight_on_one_week_nudges_by_elapsed_days_instead ... ok
+test client::components::homeschool::today::tests::a_paused_or_finished_year_never_nudges ... ok
+test client::components::homeschool::today::tests::a_term_note_kind_never_renders_as_its_wire_string ... ok
+test client::components::homeschool::today::tests::the_header_chip_reads_the_way_the_plan_writes_it ... ok
+test client::components::homeschool::year::tests::a_cell_shows_the_first_eighteen_characters_and_says_so ... ok
+test client::components::homeschool::year::tests::a_daily_row_with_no_assignment_rows_has_no_ordinals_to_recover ... ok
+test client::components::homeschool::year::tests::every_grid_row_is_at_least_a_thumb_tall ... ok
+test client::components::homeschool::year::tests::ordinals_come_from_first_appearance_across_the_week ... ok
+test client::components::homeschool::year::tests::truncation_counts_characters_not_bytes ... ok
+test server::homeschool::loader::tests::an_unknown_key_is_rejected_with_the_file_name_and_a_line_number ... ok
+test server::homeschool::loader::tests::line_of_counts_newlines_before_the_offset ... ok
+test server::homeschool::loader::tests::parse_days_rejects_unknown_letters_repeats_and_the_empty_string ... ok
+test server::homeschool::loader::tests::parse_days_returns_the_letters_in_the_fixed_order ... ok
+test server::homeschool::loader::tests::slug_is_valid_matches_lowercase_digits_and_hyphens_only ... ok
+test server::homeschool::loader::tests::term_count_is_weeks_divided_by_term_weeks_rounded_up ... ok
+test server::homeschool::loader::tests::shared_defaults_to_true_for_reading_and_weekly_and_false_for_daily ... ok
+[... the 34 shared::homeschool::tests::hs3_* rows quoted above, 40 more
+    homeschool-related rows (client::components::homeschool::*,
+    server::homeschool::loader::*, the glyph test), and the remaining 222
+    non-homeschool tests from every earlier phase — 296 total, all ok ...]
+
+test result: ok. 296 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.52s
+```
+
+### `/health` — HS7 accept (e)
+
+Two isolated boots of the real `target\debug\family-hub.exe run`, each on its
+own port and its own fresh data directory (never the machine's live
+`FamilyHub` Windows service):
+
+```
+# A: fresh, empty data directory — no curricula directory contents at all
+$ Invoke-WebRequest http://127.0.0.1:8091/health
+{"db":true,"last_google_poll":null,"cert_not_after":"2027-10-05T05:15:29+00:00",
+ "days_to_expiry":396,"disk_free_bytes":196154327040,"ws_clients":0,
+ "uptime_seconds":2,"migration_version":5,"curricula":0}
+
+# B: FAMILY_HUB_CURRICULA_DIR pointed at the real, gitignored ao-year-1.toml
+$ Invoke-WebRequest http://127.0.0.1:8093/health
+{"db":true,"last_google_poll":null,"cert_not_after":"2027-10-05T05:18:07+00:00",
+ "days_to_expiry":396,"disk_free_bytes":196087136256,"ws_clients":0,
+ "uptime_seconds":2,"migration_version":5,"curricula":1}
+```
+
+`curricula: 0` with nothing in the directory, `curricula: 1` with the AO file
+present — exactly HS7 accept (e). (This machine also runs a real, permanent
+`FamilyHub` Windows service on the default ports for the owner's own
+verification elsewhere in this project; both checks above ran on non-default
+ports against throwaway data directories and never touched it.)
+
+### `dx build --platform web --release` — HS7 accept (d)
+
+```
+dx build --platform web --release
+
+  303.08s  INFO Compiled [303/303]: family-calendar
+  303.16s  INFO Bundling app...
+  303.60s  INFO Running wasm-bindgen...
+  313.61s  INFO Copying asset (1/2): …\target\dx\family-calendar\release\web\public\wasm\family-calendar_bg.wasm
+  314.08s  INFO Copying asset (2/2): …\target\dx\family-calendar\release\web\public\wasm\family-calendar.js
+  314.42s  INFO Client build completed successfully! 🚀 path="…\target\dx\family-calendar\release\web\public"
+  500.39s  INFO Compiled [648/648]: family-calendar
+  500.48s  INFO Bundling app...
+  500.65s  INFO Server build completed successfully! 🚀 path="…\target\dx\family-calendar\release\web"
+```
+
+Exit code 0 (500 s wall clock — `[profile.release]` in `Cargo.toml` pins
+`lto = true, codegen-units = 1`, so the final link of both the wasm client
+and the server binary is genuinely this slow, not a hang). Both halves
+landed at `target\dx\family-calendar\release\web\` — `server.exe` and its
+sibling `public\` folder, the exact layout `docs/OWNER_CHECKLIST.md` step
+3/14 installs beside each other.
