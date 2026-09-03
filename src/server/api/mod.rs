@@ -17,11 +17,13 @@
 //! | [`whiteboard`] | T2.3 (whiteboard v2 — new module, undo-own-last-stroke) |
 //! | [`tv`] | T2.1 (kiosk clock; moved here from `client::components::tv::clock` by Boss at the 2-a close) |
 //! | [`photos`] | T2.5 (photo tasks v2 — multipart upload route, delete-with-file) |
+//! | [`homeschool`] | HS4 (School tab server functions, `docs/homeschool/PLAN_HOMESCHOOL.md` §3) |
 //!
 //! Every server function is re-exported here, so call sites keep using
 //! `crate::server::api::<name>` exactly as before the split.
 
 pub mod calendar;
+pub mod homeschool;
 pub mod photos;
 pub mod profiles;
 #[cfg(feature = "server")]
@@ -34,6 +36,12 @@ pub mod whiteboard;
 pub use calendar::{
     create_local_event, delete_local_event, get_calendar_week, get_events_for_day,
     get_today_events, update_local_event,
+};
+pub use homeschool::{
+    add_extra, delete_extra, enroll, get_enrollments, get_homeschool_today, get_month,
+    get_subject_settings, get_week_grid, list_curricula, mark_all_done, set_paused,
+    set_school_week, set_subject_schedule, toggle_extra, toggle_lesson, toggle_lesson_together,
+    unenroll, update_extra, upsert_assignment,
 };
 pub use photos::delete_custom_task;
 pub use profiles::{

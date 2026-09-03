@@ -2940,3 +2940,56 @@ Recorded, not applied (owner named):
   in the HS3 section; do not relax either assertion). Both were green in every Boss
   baseline run this wave.
 * **HS-4** stays a note to HS4 (`OccurrenceKey` struct; skip-after-tick = clear then set).
+
+---
+
+## From HS4 (server functions) → whoever owns `src/server/db.rs` / `tests/health_tests.rs` next
+
+### HS-6. `health_returns_200_with_all_nine_keys_correctly_typed` fails whenever the
+real curricula directory is non-empty — pre-existing, not an HS4 regression
+
+`tests/health_tests.rs`'s `test_config()` builds its own isolated `FamilyHubConfig`
+(`data_dir: init_test_env()`, a per-PID scratch directory) and passes it to
+`spawn_router`/`build_router`. But `db::pools()`'s lazily-initialized `POOLS: OnceCell`
+loads curricula with `homeschool::load_and_seed(&pools.write, &FamilyHubConfig::load())`
+(`src/server/db.rs`, the Boss post-A wiring above) — `FamilyHubConfig::load()` re-resolves
+`FAMILY_HUB_DATA_DIR` **from the process environment**, ignoring the `config` the test
+built. So the test's assumption "curricula: 0" only holds when the *real* data
+directory (env `FAMILY_HUB_DATA_DIR`, or the hard-coded `%ProgramData%\FamilyHub`
+default) happens to be empty of curricula — which it is not on a machine where
+`ao-year-1.toml` has already been copied into the data dir for real verification (the
+CURRICULUM_FORMAT.md-documented step HS2a/HS2b/HS7 all describe), or where
+`$env:FAMILY_HUB_DATA_DIR` is pointed at the shared `%TEMP%\familyhub-test` scratch
+directory the plan's own "MANDATORY first steps" line asks every agent to set.
+
+Verified this is **not** an HS4 regression: `%ProgramData%\FamilyHub\curricula\ao-year-1.toml`
+and `%TEMP%\familyhub-test\curricula\ao-year-1.toml` both predate this task's own test
+runs by close to an hour (file mtimes ~21:40–21:41 vs. HS4's first `cargo test` at
+~22:17), and the failure reproduces identically with `FAMILY_HUB_DATA_DIR` unset (falling
+through to the `%ProgramData%\FamilyHub` default) — i.e. it is a property of any shared
+host that has ever run the real curriculum through the loader, independent of which
+`cargo test` invocation triggers it. HS4 touches neither `db.rs` nor `health_tests.rs`
+(outside its Owns list) and did not weaken this test.
+
+Two independent fixes, either is enough: (a) `db::pools()`'s lazy loader should take the
+config it is actually serving instead of re-resolving `FamilyHubConfig::load()` from the
+environment — likely a `pools_with_config`/thread-local seam rather than a signature
+change to the widely-called `pools()`; (b) `health_tests.rs`'s `init_test_env()` should
+set `FAMILY_HUB_DATA_DIR` to its own isolated directory (mirroring what it already does
+for `DATABASE_URL`), so the loader's env-based resolution lands somewhere the test
+actually controls regardless of (a).
+
+**Operational note for every future agent on this host:** running `cargo test` (or any
+manual verification) with `$env:FAMILY_HUB_DATA_DIR` unset resolves to the **real**
+`%ProgramData%\FamilyHub` — that is where a from-scratch `db::pool()` call first opens a
+write connection if `DATABASE_URL` has not *already* been set by that same test binary.
+Every test file's own `init_test_env()`/`spawn_test_server()` sets `DATABASE_URL` before
+its first `db::pool()` call and is therefore safe regardless of this env var — but a bug
+in one file's harness that calls `db::pool()` before its own env setup (as an earlier
+draft of `tests/homeschool_tests.rs` did) silently redirects that whole test process at
+the real data directory instead of erroring. Setting `$env:FAMILY_HUB_DATA_DIR` per the
+plan's mandatory first step does not fully protect against this class of bug — only each
+test file's own `DATABASE_URL` ordering does — so a new test harness should route every
+test through one guarded entry point (mirrors `hs4_lock()` in `tests/homeschool_tests.rs`)
+that calls its `init_test_env()` before any `db::pool()` call, not just before the ones
+that "obviously" need it.

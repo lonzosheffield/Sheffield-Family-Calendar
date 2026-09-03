@@ -49,8 +49,13 @@ fn to_auth_error(err: crate::server::auth::AuthError) -> ServerFnError {
 /// call with an empty token (every existing "no session" acceptance test)
 /// has no live request underneath it, so the fallback finds no cookie and
 /// still fails closed.
+///
+/// **HS4 (visibility only):** made `pub(crate)` so `api::homeschool`'s parent-
+/// only functions (Together ticks, Finish/Back week, enroll/unenroll, pause,
+/// plan edits — `docs/homeschool/PLAN_HOMESCHOOL.md` §2 H7) can call the same
+/// check `api::profiles` already uses, instead of duplicating it.
 #[cfg(feature = "server")]
-async fn require_session_or_cookie(auth: &str) -> Result<(), ServerFnError> {
+pub(crate) async fn require_session_or_cookie(auth: &str) -> Result<(), ServerFnError> {
     if auth.is_empty() {
         crate::server::auth::require_parent()
             .await
