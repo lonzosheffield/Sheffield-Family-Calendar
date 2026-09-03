@@ -2993,3 +2993,88 @@ test file's own `DATABASE_URL` ordering does — so a new test harness should ro
 test through one guarded entry point (mirrors `hs4_lock()` in `tests/homeschool_tests.rs`)
 that calls its `init_test_env()` before any `db::pool()` call, not just before the ones
 that "obviously" need it.
+
+---
+
+## From HS5 (the phone's School tab) → Boss, HS6, HS7
+
+### H-HS5-1. Two protected files still say "five tabs"; both are one-line edits
+
+`docs/homeschool/PLAN_HOMESCHOOL.md` §3 HS5's "Do" clause directs the **existing
+five-tab test** to become the six-tab test in the new order, so
+`tests/pwa_tests.rs::the_phone_has_the_five_bottom_tabs_the_plan_names` was renamed to
+`…six_bottom_tabs…` and its label vector updated — the only edit HS5 made outside its
+Owns list, and nothing else in that file was touched. Two more sites say "five" and are
+**not** in any HS task's Owns list:
+
+* `docs/OWNER_CHECKLIST.md:180` — "shows the five tabs (Routine, Calendar, Board, TV
+  Remote, Settings)". HS7 owns one row of this file; it should read "the six tabs
+  (Routine, School, Calendar, Board, Remote, Settings)".
+* `src/client/app.rs:130` — the `Mobile` component's doc comment describes "the full
+  five-tab shell — Routine · Calendar · Board · TV Remote · Settings". A doc comment
+  only; no test reads it.
+* `docs/design/DESIGN_DIRECTION.md` §3.5 is headed "`/m` — all five tabs" and its tab-bar
+  row lists five glyphs. Design docs are Phase 4 records rather than live contracts, so
+  this is a note rather than a request; a Phase-4 amendment row would say
+  `☀️ 🏠 📅 🖍️ 📺 ⚙️` and `grid-cols-6`.
+
+### H-HS5-2. HS5 accept (h) says "7 subject rows"; the normative data model says 6
+
+`docs/homeschool/reviews/DELTA_V3.md` D-5 explicitly corrected HS3 (g) to "**6** rows
+(free_read excluded) × 5 cells" because `Reading Basket` is a `free_read` subject and
+rule 6 makes it permanently empty — and `WeekGrid`'s own doc comment in
+`src/shared/types.rs` says "`free_read` subjects have no row". HS5 (h)'s "7 subject rows"
+predates that correction.
+
+**Not weakened, satisfied both ways.** `hs5_h_the_year_view_lays_the_fixture_week_out_as_a_subject_by_day_grid`
+asserts *six* rows carrying `data-year-subject` **and** *seven* rows carrying
+`data-year-row` / `min-h-[44px]` — the six subject rows plus the weekday header row, which
+is the only reading under which "7 rows × 5 day columns" is true of a correct grid. If
+HS8 would rather the plan text be corrected than the test carry both counts, the one-line
+edit is HS5 (h) → "**6** subject rows (free_read excluded) plus the weekday header row ×
+5 day columns".
+
+### H-HS5-3. `docs/PWA.md` now states the 48 h vs ±1 day asymmetry (R-14)
+
+The queue's 48-hour retention outlives the server's ±1 day `date` window, so a replay at
+~30 hours is accepted by the phone and refused by the hub. That is now written down in
+`docs/PWA.md`'s "What works with the hub unreachable" section rather than left to be
+discovered. HS7's cross-surface verification may want a transcript row for it.
+
+### H-HS5-4. `mobile::remote::VIEWS` is now `pub`; `MobileTabBar` is a new public component
+
+`VIEWS` had to become `pub` for HS5 accept (e) to assert the remote offers `School`
+without rendering the whole tab, and the bottom bar was split out of `MobileShell` into
+`MobileTabBar { active, on_select }` so accept (a) can SSR it on its own. Both are
+additive; `MobileShell` renders the identical markup it did before, plus a
+`data-mobile-tab` attribute per button and `grid-cols-6`.
+
+### H-HS5-5. For HS6 (the TV panel)
+
+* Every School surface splits **presentational pane + `SchoolAction` sink**, and only
+  `homeschool::School` calls a server function. That split is what makes the SSR
+  acceptance real; the TV panel is welcome to reuse
+  `homeschool::row::{part_label, weekday_short}` and
+  `homeschool::today::own_work` (the H4 shared/not-shared split) rather than restating
+  either rule.
+* `own_work()` exists because `get_homeschool_today` returns **every** occurrence in each
+  `BoyToday`, shared ones included — `today_view` has no idea what a section heading is.
+  The phone renders shared occurrences under **Together** and filters them out of the boy
+  blocks; the TV panel's "no shared subject's row" clause (HS6 (g)) is the same filter.
+* The offline queue's two new variants are `ToggleLesson { user_id, subject_id,
+  assignment_id, week, scheduled_date, completed }` and `ToggleExtra { user_id, extra_id,
+  completed }`, labels "School lesson" / "School task". A queued School tick always
+  replays as `status: Done` — a `skipped` status and a note are deliberate acts a parent
+  makes with the hub in front of them, not something worth replaying blind a day later.
+
+### H-HS5-6. Residual: Today's inline edit derives an ordinal it cannot always know
+
+`LessonOccurrence` carries the assignment row's **id**, not its `ordinal`, and
+`upsert_assignment` is keyed on `(subject, week, ordinal)`. On the **Year** view this is
+exact — a grid row holds the whole week, and first appearance in date order *is* the
+ordinal (`year::row_ordinals`). On **Today** only the part of the week already dealt out
+is on screen, so `today::assignment_ordinals` recovers the ordinal for every row a parent
+can see and offers no edit affordance for the rest (`edit_ordinal_for` → `None`). If a
+future task would rather this be exact everywhere, the clean fix is one field —
+`ordinal: i64` on `LessonOccurrence`, which `occurrences()` already has in hand — rather
+than more inference on the client.

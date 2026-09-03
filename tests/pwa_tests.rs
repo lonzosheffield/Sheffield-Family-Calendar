@@ -681,17 +681,22 @@ fn the_queue_survives_a_serialisation_round_trip_with_keys_and_dates_intact() {
 }
 
 // ---------------------------------------------------------------------------
-// The five bottom tabs
+// The six bottom tabs
 // ---------------------------------------------------------------------------
 
-/// PLAN v2 §3 T2.2: "bottom tabs Routine · Calendar · Board · TV Remote ·
-/// Settings", closing G9 (`/mobile` was routine-only).
+/// PLAN v2 §3 T2.2 asked for five tabs — "Routine · Calendar · Board · TV
+/// Remote · Settings", closing G9 (`/mobile` was routine-only).
+/// `docs/homeschool/PLAN_HOMESCHOOL.md` §2 H6 / §3 HS5 adds **School** as tab
+/// 2 of 6 and relabels *TV Remote* to *Remote* so six columns fit at `text-xs`
+/// without a new phone type size. HS5's own "Do" clause directs this test to
+/// become the six-tab test in the new order; every other assertion in this
+/// file is untouched.
 #[test]
-fn the_phone_has_the_five_bottom_tabs_the_plan_names() {
+fn the_phone_has_the_six_bottom_tabs_the_plan_names() {
     let labels: Vec<&str> = MobileTab::ALL.iter().map(|tab| tab.label()).collect();
     assert_eq!(
         labels,
-        vec!["Routine", "Calendar", "Board", "TV Remote", "Settings"]
+        vec!["Routine", "School", "Calendar", "Board", "Remote", "Settings"]
     );
 }
 

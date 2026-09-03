@@ -23,13 +23,19 @@ use crate::client::components::mobile::session;
 use crate::client::realtime::use_realtime;
 use crate::shared::types::{profile_name, ClientMessage, MaximizedView, FAMILY_PROFILE_COUNT};
 
-/// The four things the remote can put on the screen. `None` is "restore the
+/// The five things the remote can put on the screen. `None` is "restore the
 /// three-panel dashboard", which is the TV's Backspace key (D8).
-const VIEWS: [(MaximizedView, &str); 4] = [
+///
+/// `School` joined the list with HS5: the kiosk gained a fourth panel
+/// (`docs/homeschool/PLAN_HOMESCHOOL.md` §2 H6), and a panel the remote cannot
+/// reach is a panel a parent has to walk to the television to open. `pub` so
+/// `tests/glyph_tests.rs` can assert the list without rendering the tab.
+pub const VIEWS: [(MaximizedView, &str); 5] = [
     (MaximizedView::None, "Dashboard"),
     (MaximizedView::Routine, "Routine"),
     (MaximizedView::Calendar, "Calendar"),
     (MaximizedView::Whiteboard, "Whiteboard"),
+    (MaximizedView::Homeschool, "School"),
 ];
 
 #[component]

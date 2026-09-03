@@ -48,9 +48,13 @@ pub const MAX_ENTRIES: usize = 200;
 
 /// One mutation the phone could not deliver.
 ///
-/// Only the two toggles are queueable. Photo upload is deliberately *not*:
+/// Only single-boy toggles are queueable. Photo upload is deliberately *not*:
 /// a multi-megabyte body does not belong in `localStorage`, and T2.5's
-/// upload route is a foreground action a parent can simply retry.
+/// upload route is a foreground action a parent can simply retry. Nor is a
+/// **Together** tick (`docs/homeschool/PLAN_HOMESCHOOL.md` §2 H6): it fans out
+/// over a group whose membership only the server knows, so replaying it from
+/// a phone that has been offline for a day could tick a boy who has since
+/// moved to another week. It shows a toast on failure instead.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(tag = "mutation", rename_all = "snake_case")]
 pub enum QueuedMutation {
@@ -64,6 +68,31 @@ pub enum QueuedMutation {
         task_id: u32,
         completed: bool,
     },
+    /// One boy's School occurrence (HS5, review finding R-14).
+    ///
+    /// A lesson tick needs **two** dates: `QueuedMutationEntry::date` is the
+    /// day the parent made the change (what the server's ±1 day window
+    /// checks), while `scheduled_date` is the day the occurrence was *due* —
+    /// four days earlier, for a catch-up tick. Carrying only the first, as
+    /// the routine toggles do, would replay a catch-up onto the wrong day.
+    ToggleLesson {
+        user_id: u32,
+        subject_id: i64,
+        assignment_id: Option<i64>,
+        week: i64,
+        scheduled_date: String,
+        completed: bool,
+    },
+    /// One parent-added School task (HS5, review finding D-7).
+    ///
+    /// Without this a parent's offline tick on an extra would be silently lost
+    /// while the identical tick one row above — a lesson — survived, an
+    /// inconsistency `docs/PWA.md` promises does not exist.
+    ToggleExtra {
+        user_id: u32,
+        extra_id: i64,
+        completed: bool,
+    },
 }
 
 impl QueuedMutation {
@@ -72,7 +101,9 @@ impl QueuedMutation {
     pub fn user_id(&self) -> u32 {
         match self {
             QueuedMutation::ToggleRoutineTask { user_id, .. }
-            | QueuedMutation::ToggleCustomTask { user_id, .. } => *user_id,
+            | QueuedMutation::ToggleCustomTask { user_id, .. }
+            | QueuedMutation::ToggleLesson { user_id, .. }
+            | QueuedMutation::ToggleExtra { user_id, .. } => *user_id,
         }
     }
 
@@ -81,6 +112,8 @@ impl QueuedMutation {
         match self {
             QueuedMutation::ToggleRoutineTask { .. } => "Routine step",
             QueuedMutation::ToggleCustomTask { .. } => "Task",
+            QueuedMutation::ToggleLesson { .. } => "School lesson",
+            QueuedMutation::ToggleExtra { .. } => "School task",
         }
     }
 }
@@ -397,7 +430,10 @@ pub fn now_ms() -> i64 {
 /// claims `key` in `mutation_log` and applies the change at most once,
 /// however many times this is called.
 pub async fn send_to_server(entry: QueuedMutationEntry) -> Result<(), String> {
-    use crate::server::api::{toggle_custom_task, toggle_routine_task};
+    use crate::server::api::{
+        toggle_custom_task, toggle_extra, toggle_lesson, toggle_routine_task,
+    };
+    use crate::shared::homeschool::LogStatus;
 
     let result = match entry.mutation {
         QueuedMutation::ToggleRoutineTask {
@@ -410,6 +446,46 @@ pub async fn send_to_server(entry: QueuedMutationEntry) -> Result<(), String> {
             task_id,
             completed,
         } => toggle_custom_task(user_id, task_id, completed, entry.date, entry.key).await,
+        // A queued School tick is always a plain *done* — `skipped` and a note
+        // are deliberate, considered acts a parent makes with the hub in
+        // front of them, not something worth replaying blind a day later.
+        QueuedMutation::ToggleLesson {
+            user_id,
+            subject_id,
+            assignment_id,
+            week,
+            scheduled_date,
+            completed,
+        } => {
+            toggle_lesson(
+                i64::from(user_id),
+                subject_id,
+                assignment_id,
+                week,
+                scheduled_date,
+                completed,
+                LogStatus::Done,
+                None,
+                entry.date,
+                entry.key,
+            )
+            .await
+        }
+        QueuedMutation::ToggleExtra {
+            user_id: _,
+            extra_id,
+            completed,
+        } => {
+            toggle_extra(
+                extra_id,
+                completed,
+                LogStatus::Done,
+                None,
+                entry.date,
+                entry.key,
+            )
+            .await
+        }
     };
     result.map_err(|err| err.to_string())
 }

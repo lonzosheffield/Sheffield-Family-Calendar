@@ -2,6 +2,9 @@ pub mod calendar;
 // D4.2: the shared emoji glyph mapping (poster icons, panel/tab glyphs,
 // per-boy ball glyphs) — DESIGN_DIRECTION.md §2.5.
 pub mod glyphs;
+// HS5: the phone's School ("house") tab — Today, Year, Month, day sheet
+// (docs/homeschool/PLAN_HOMESCHOOL.md §2 H6).
+pub mod homeschool;
 // T2.2: the phone PWA — manifest, service worker, offline queue, bottom tabs.
 pub mod mobile;
 // T3.4: the Sheffield palette as a contract (WCAG maths, token allowlist,

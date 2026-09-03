@@ -56,9 +56,31 @@ two-day-old tick is about a day the family has moved on from, and the hub
 would reject it anyway — and the app tells you, by name of the day, that it
 discarded them. It never drops one quietly.
 
-Only the two routine toggles are queued. A photo upload is not: a photo is too
+**The 48-hour window is deliberately longer than the hub will accept, and that
+is not a contradiction.** The hub checks each change's date against its own
+clock and refuses anything more than **one day** away (`date_within_window`),
+so a change queued on Monday morning and replayed on Wednesday afternoon —
+about 30 hours after that ±1 day window closed — is rejected by the hub even
+though the phone was still holding it. The two numbers answer different
+questions. The phone's 48 hours asks *"is this still worth trying?"*, and it is
+generous on purpose: a phone that reconnects at hour 30 should send the tick
+and let the hub be the one to decide, because the hub is the only thing that
+knows what day it is. The hub's ±1 day asks *"is this change about a day I can
+still be right about?"*, and it is strict on purpose: a tick landing on the
+wrong day is worse than a tick that never lands. So the honest description of
+the promise is **replay is attempted for 48 hours; the hub accepts what is
+still within a day of its own clock**, and the app tells you when a change was
+refused rather than pretending it went through.
+
+Four toggles are queued: the two routine ones and the two School ones (a
+lesson and a parent-added school task). A School lesson carries **two** dates —
+the day you made the change and the day the lesson was due, which differ
+whenever you tick something you are catching up on — and both ride along so a
+replay lands on the right day. A photo upload is not queued: a photo is too
 large to hold in phone storage and is a foreground action you can simply
-repeat.
+repeat. Neither is a **Together** tick on the School tab: it fans out to every
+boy reading along, and which boys those are is something only the hub knows,
+so it is retried in the foreground with a message instead.
 
 ---
 
@@ -103,17 +125,23 @@ Two other iOS specifics worth knowing:
 
 ---
 
-## The five tabs
+## The six tabs
 
 | Tab | What it does |
 | --- | --- |
 | **Routine** | The selected child's morning routine and extra tasks; add a photo task |
+| **School** | Today's homeschool work — the read-alouds once, each boy's own work under his name; the whole year week by week; the month; parent-added tasks |
 | **Calendar** | Today and the week ahead, in the hub's local time |
 | **Board** | The shared whiteboard, the same one the TV shows |
-| **TV Remote** | Puts a panel or a profile on the television (`SetView`, `SetActiveProfile`) |
+| **Remote** | Puts a panel or a profile on the television (`SetView`, `SetActiveProfile`) |
 | **Settings** | Parent sign-in, what is queued offline, install help |
 
-The TV Remote needs a parent session: sign in with the six-digit PIN under
+The remote tab is called **Remote**, not *TV Remote*, for one reason: six
+columns across a 360-pixel phone leave 60 pixels each, and the longer label
+needs about 70. Shortening the word was cheaper than shrinking the type, which
+the design system deliberately freezes.
+
+The Remote tab needs a parent session: sign in with the six-digit PIN under
 Settings first (the very first time, enter the setup code and choose the PIN
 there). The hub enforces that itself — an unsigned phone's remote button
 reaches the server and is dropped there, never applied.
