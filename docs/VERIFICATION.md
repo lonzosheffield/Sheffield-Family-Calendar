@@ -1369,3 +1369,64 @@ and the server binary is genuinely this slow, not a hang). Both halves
 landed at `target\dx\family-calendar\release\web\` — `server.exe` and its
 sibling `public\` folder, the exact layout `docs/OWNER_CHECKLIST.md` step
 3/14 installs beside each other.
+
+---
+
+## Rendered in Chrome (School)
+
+**Date:** 2026-09-03 (Boss pass on `main` at `2380542`, after HS1–HS7 landed)  
+**Browser:** Chrome on the Windows 11 dev box, driven through the Claude-in-Chrome MCP tools (`tabs_context_mcp`, `tabs_create_mcp`, `navigate`, `resize_window`, `computer`, `read_console_messages`, `get_page_text`, `find`). **The browser tools were available**; everything below was observed, not inferred.  
+**Build:** `cargo build --features server --release --bin family-hub` (4 m 13 s) plus `dx build --platform web --release` (264 s), then `Copy-Item -Recurse target\dx\family-calendar\release\web\public target\release\public -Force` — the exact `docs/DEV_WINDOWS.md` step 6 recipe (Q1-01). `target\release\family-hub.exe run` served `/tv` fully styled (hashed `tailwind-dxh….css` 200), so the Q1-01 fix holds for the plain-cargo binary once `public\` sits beside it.  
+**Server:** started in the background with `FAMILY_HUB_DATA_DIR` pointed at a fresh temp directory whose only content was `curricula\ao-year-1.toml` (copied from the gitignored `docs/homeschool/curriculum/`; the `.expect.toml` sidecar and the source `.txt/.doc/.pdf` are not curriculum files, and the loader scans every `*.toml`, so only the real curriculum was copied). This machine also runs the owner's permanent `FamilyHub` Windows service on 8080/8443, so the test hub was bound to `FAMILY_HUB_ADDR=127.0.0.1:8095` / `FAMILY_HUB_TLS_ADDR=127.0.0.1:8096` instead of the URLs in the brief — same code path, different port; the live service was never touched (`Get-Service FamilyHub` → Running throughout, its listeners untouched).
+
+### Boot seed and `/health`
+
+`logs\familyhub.log` on the fresh data directory, in order: `scanning the curricula directory` → `loaded a curriculum file … curriculum_id=1 subjects=30 assignments=342 term_notes=29` → `finished loading curricula loaded=1 skipped=0` → **`enrollment seed: enrolled Isaiah at week 1 profile_id=1 curriculum_id=1 week_started_on="2026-09-03"`**.
+
+```
+$ curl http://127.0.0.1:8095/health           # before the TV tab
+{"db":true,"last_google_poll":null,"cert_not_after":"2027-10-05T06:07:06+00:00",
+ "days_to_expiry":396,"disk_free_bytes":224466718720,"ws_clients":0,
+ "uptime_seconds":5,"migration_version":5,"curricula":1}
+```
+
+`curricula: 1`, `migration_version: 5`. `POST /api/get_enrollments` (HTTPS origin, `curl -k`) answered four rows — user 1 `enrolled: true, curriculum_name: "Ambleside Online Year 1", current_week: 1, weeks: 36, week_started_on: "2026-09-03", school_days: "MTWRF", paused: false`; users 2–4 `enrolled: false`. `POST /api/list_curricula` → one row, `slug: "ao-year-1", weeks: 36, term_weeks: 12, subject_count: 30`.
+
+### `/tv` at 1920×1080 → School (one `Left` press)
+
+Window resized to 1920×1080 via `resize_window` (captures report ~1522–1564 px wide because the display is DPI-scaled; the layout is the 1920-wide one). Fresh load lands on **Morning Routine · Isaiah**, styled, the four seeded boys in the left rail, `0 / 8`, no Disconnected badge. One `ArrowLeft` (`computer(action: "key")`) cycled the panel to **School** — Routine is panel 1 of 4 and School panel 4, so Left wraps straight to it as `docs/homeschool/PLAN_HOMESCHOOL.md` promises. Screenshot: [tv-school-week1-2026-09-03.jpg](verification/tv-school-week1-2026-09-03.jpg).
+
+- Header: house glyph + **"School · Week 1"** in the T3.4 blue, "updated HH:MM" top-right.
+- Left rail unchanged: Isaiah selected with the yellow focus ring, Nathaniel (truncated "Nathan…" at this width — the same truncation the routine panel shows), Simeon, scroll for Ezekiel.
+- Right: a small-caps **TODAY** heading and the boy's own rows as large checkbox cards with a category glyph, title only (no AO text on the kiosk beyond the subject name), scrollable. `get_page_text` lists **6 rows**: Math, Handwriting / Copywork, Phonics / Reading practice, Recitation, Foreign language, Physical activity — i.e. the six *unshared* items of the ten `get_homeschool_today` reports as `due_today` for Isaiah on a Thursday; the other four are shared read-alouds, which W-16 keeps off the television (`his_own` in `src/client/components/tv/model.rs`) and shows under **Together** on the phone. No catch-up section (week 1, day 1: `catch_up: []`).
+- Bottom: the four panel tabs (Morning Routine / Today / Whiteboard / School), **School** filled.
+- Overscan margin visible on all four sides; nothing clipped; type readable at 10-ft scale.
+
+### Console errors
+
+`read_console_messages` across three full loads of `/tv` and the School panel: **zero errors, warnings or logs from the application.** The only entries are three `Error: A listener indicated an asynchronous response by returning true, but the message channel closed before a response was received` at `/tv:0:0` — the same installed-extension noise the 2026-08-30 pass attributed to the Acrobat extension, not the page. The hub's own log carried one WARN over the whole run: `client … idle for 90s; closing` (the realtime idle reaper doing its job while the tab sat between key presses; `ws_clients` was back to 1 afterwards).
+
+### WebSocket
+
+**Connected.** `/health` reported `"ws_clients":1` while the single `/tv` tab was open (0 before it was opened, and 1 again at `uptime_seconds: 228` after the idle close above), and the header never showed the red Disconnected badge.
+
+### `/m` (phone surface) — School › Today / Year / Month
+
+`http://127.0.0.1:8095/m` answered **308 → `https://127.0.0.1:8096/m`** (D3′; the redirect carries the configured TLS port, not a hard-coded 8443). The HTTPS URL hit Chrome's privacy interstitial for the hub's private CA (the CA is not installed in this profile, and installing it is the owner's step, not this pass's), and the MCP tools cannot attach to an interstitial (`Frame with ID 0 is showing error page` / `Cannot attach to this target`, so even the `thisisunsafe` keyboard bypass could not be typed). **The phone's School tab — Today, Year, Month — was therefore not screenshotted in Chrome in this pass**, exactly as in the 2026-08-30 pass. Verified out of band instead, against the same HTTPS origin the phone would use (`curl -k`):
+
+| call | answer |
+| --- | --- |
+| `GET /m` | 200, `<title>Sheffield Family Hub</title>`, hashed Tailwind link |
+| `POST /api/get_homeschool_today {"date":"2026-09-03"}` (Today) | `is_school_day: true, anyone_enrolled: true`, 1 group (week 1 of 36, term 1, `days_on_week: 0`, `can_finish_week: false`), **4 Together items**, Isaiah **10 due today / 0 catch-up / 0 done**, 11 term notes |
+| `POST /api/get_week_grid {"user_id":1,"week":1}` (Year) | `week: 1, weeks: 36, term: 1, dated: true`, **5 day columns × 29 subject rows** |
+| `POST /api/get_month {"user_id":1,"year":2026,"month":9}` (Month) | 30 day cells; `2026-09-03` is `in_current_week: true, week: 1, done: 0, total: 10`; the 1st and 2nd are school days with `week: null` (before the week started) |
+
+So the three panes' data paths are live on the seeded hub; rendering them on a phone with the CA installed remains `docs/OWNER_CHECKLIST.md` step 14.
+
+### Harness observation (not an app defect as far as this pass can tell)
+
+After each fresh `navigate` to `/tv`, the first one or two `ArrowLeft` presses sent by the MCP tool were swallowed and only a later press switched the panel (pass 1: the press after a screenshot worked first time; pass 2: 2nd press; pass 3: 3rd press). The 2026-08-30 pass recorded the same shape as a focus artefact of the tool (keys go nowhere until the shell's `onmounted` autofocus has landed on the key-handler `<div tabindex="0">`, which needs hydration to finish first). Worth one glance on the real Fire TV during the owner checklist: if the first D-pad press after boot is ever ignored, that is this, not the School panel.
+
+### Housekeeping
+
+Background test hub stopped (`Stop-Process`; both test listeners gone, the real `FamilyHub` service still Running), the temp data directory left under the session scratchpad, the Chrome tab closed.
