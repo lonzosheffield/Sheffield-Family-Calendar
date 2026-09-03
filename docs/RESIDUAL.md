@@ -119,6 +119,12 @@ attached verbatim so the fixing wave applies it without re-deriving it. Nothing
 below touches `migrations/`, the DTOs in `src/shared/types.rs`, or a normative
 signature.
 
+**Status at the round 4 merge (Boss, 2026-09-03):** R-5 and R-10 applied by the Boss in
+`342c0a6`; R-8's server half (the `upsert_assignment` `days` amendment) landed as HS4-qa3
+`69e6166`; R-6, R-7, R-9 and R-8's client half landed as HS5-qa3b `dacb1af`. All six are
+closed on `main` pending HS8's round 4 verdict. One new Low fell out of R-8's amendment and is
+recorded below as R-11.
+
 ## R-5. QH3-01 (High, HS5/O) — `assets/tailwind.css` was never rebuilt after the HS wave
 
 - **Origin:** `docs/qa/QA_HS_ROUND_3.md` QH3-01; HANDOFF H-21/H-30 (Boss rebuilds
@@ -320,3 +326,26 @@ signature.
   `import-curriculum --replace`, `family-hub.exe stop` / `start` the service (or
   wait for the next School change) so open phones and the TV refetch the rewritten
   plan; the rows are already on disk."
+
+## R-11. Today's inline text edit un-pins a per-week `days` override (Low, HS5 → Boss DTO amendment)
+
+- **Origin:** `docs/HANDOFF.md` H-HS5-qa3b-1 (HS5-qa3b, `dacb1af`); `src/client/components/homeschool/today.rs`
+  (`TogetherRow` and `DayItemRow` `EditAssignment` calls); `src/shared/types.rs` `LessonOccurrence`.
+- **What ships:** `SchoolAction::EditAssignment` carries `detail` **and** `days` because
+  `upsert_assignment` replaces the whole row (R-8's amendment). The Year cell sheet sends both from
+  what it has on screen, but Today's two inline-edit handlers pass `days: None`: `LessonOccurrence`
+  carries no `days`, and Today holds only the part of the week already dealt out
+  (`due_today` + `catch_up` + `done`), so `today.rs` cannot recover `assignments.days` the way
+  `assignment_ordinals` recovers the ordinal (R-2's limit). A parent who pins "Days in week 12 only"
+  from the Year sheet and later edits that row's *text* from Today drops the row back to the
+  subject's days.
+- **Why it is residual:** Low and recoverable (retype the days in the Year sheet). Closing it
+  changes a normative DTO in HS3's Owns, which needs a Boss amendment, not an HS5 branch; not
+  worth reopening the contract while round 4 is in flight.
+- **Solution (Fable):** amend PLAN §5.2 / `PLAN_HOMESCHOOL.md` HS3: `LessonOccurrence` gains
+  `days: Option<Vec<Weekday>>` (schema-additive, `#[serde(default)]`), which `occurrences()` has
+  in hand where it partitions pinned/floating rows; `today.rs` then passes
+  `days: occurrence.days.as_deref().map(days_to_string)` at both call sites, and the
+  `hs5_qa3_an_inline_text_edit_carries_the_rows_detail_and_days_through` guard drops its
+  Today-side `days: None` allowance. One `hs4`-style storage case: a pinned row's inline text edit
+  leaves `assignments.days` untouched.

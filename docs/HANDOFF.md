@@ -3379,3 +3379,16 @@ is the derivation behind that prefill: the grid columns a row occupies **are** `
 subject.days` intersected with the boy's school days (H3 rule 1), so the sheet reads the resolved
 answer off the grid rather than keeping a second copy of the rule.
 
+## Boss, round 4 merge (2026-09-03) — dispositions of HS5-qa3b's notes
+
+- `hs/HS5-qa3b` (`171c8f2`) reviewed against R-6..R-9's verbatim solutions and squash-merged as
+  `dacb1af`; fmt, both clippy gates and `cargo test --features server` green after the merge.
+  With HS4-qa3 (`69e6166`) already on `main`, every round 3 finding is now closed pending HS8's
+  round 4 verdict (`docs/RESIDUAL.md` "Status at the round 4 merge").
+- **H-HS5-qa3b-1** (Today's inline edit sends `days: None`): recorded as `RESIDUAL.md` R-11 with
+  the DTO amendment attached. Not applied here — it touches `LessonOccurrence` in `src/shared/types.rs`
+  (HS3's Owns, normative), so it waits for a Boss contract amendment rather than riding a merge.
+- **H-HS5-qa3b-2** (`YearCellSheet` and `year::entry_days` made `pub` for SSR): accepted as is; the
+  SSR reachability argument is the same one that made `DayItemRow` public.
+- Worktrees pruned at this close: every `worktree-*` branch checkout and the `hs/HS5-qa3b` checkout
+  (`.claude/worktrees/wf_53761367-3a7-1`); the branch itself is kept for the record.
