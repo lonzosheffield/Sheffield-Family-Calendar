@@ -28,6 +28,13 @@ is a defect the QA loop (T3.5) is still owed; a residual is a deliberate
 
 ## R-2. School's Today inline edit has no affordance for a row not yet on screen
 
+**Status (Boss, round-5 fix merge, 2026-09-03): CLOSED, as R-13's solution item 10 predicted.**
+The "solution, if wanted later" below is exactly what QH5-01 forced: `LessonOccurrence.ordinal`
+now carries the row's own ordinal, so Today no longer infers one and no longer has a row it
+cannot offer an edit for — `edit_ordinal_for`, which returned `None` for those rows, is deleted
+along with `assignment_ordinals`. The description below is kept as the record of what shipped
+between HS5 and the round-5 fix wave.
+
 - **Origin:** `docs/HANDOFF.md` H-HS5-6 (HS5 → HS7/HS8).
 - **What ships:** `LessonOccurrence` carries the assignment row's **id**, not
   its `ordinal`, and `upsert_assignment` is keyed on `(subject, week,
@@ -410,8 +417,28 @@ the QH3-04 amendment (R-8) introduced, R-15 of the H2 nudge being driven by
 needs a Boss DTO amendment first (same shape and provenance as R-11 / QH4-03's
 `days`); applying it also closes R-2.
 
+**Status at the round-5 fix merge (Boss, 2026-09-03): all four CLOSED, and R-2 with them.**
+The Boss DTO amendment R-13 names as its item 1 landed first (`docs/homeschool/PLAN_HOMESCHOOL.md`
+§3's `LessonOccurrence` line now carries `ordinal: i64` with the QH5-01 provenance beside `days`'s
+QH4-03 one). R-16 landed as HS4-qa5, R-13/R-14/R-15 as HS5-qa5, each solution applied verbatim; the
+Boss added the two `tests/homeschool_tests.rs` storage proofs the R-13 and R-14 solutions name
+(`hs4_i_editing_a_pinned_second_reading_never_overwrites_the_first`,
+`hs4_i_a_text_edit_from_the_year_sheet_leaves_a_floating_row_floating`), which fell between the two
+agents' file ownership. Each entry's own CLOSED line below says what shipped. Open pending HS8's
+round 6 verdict.
+
 ## R-13. QH5-01 (High, HS5/O + one DTO field in HS3's `src/shared/types.rs`) — an edit on a pinned later-ordinal row overwrites the *other* row
 
+**Status (Boss, round-5 fix merge, 2026-09-03): CLOSED.** Applied verbatim as HS5-qa5:
+`LessonOccurrence.ordinal: i64` (`#[serde(default = "first_ordinal")]`, appended last), filled
+in `sched::occurrence()` from the row, read by both surfaces; `assignment_ordinals`,
+`edit_ordinal_for`, `group_items`, `item_date`, `row_ordinals` and the `ordinals` prop on four
+components are gone. Guards: `hs3_b_a_pinned_later_ordinal_keeps_its_own_ordinal_ahead_of_an_earlier_row`
+(`--lib`), `glyph_tests::hs5_qa5_the_ordinal_an_edit_writes_to_is_the_rows_own` (source shape) and
+the Boss's storage proof `homeschool_tests::hs4_i_editing_a_pinned_second_reading_never_overwrites_the_first`,
+which pins the fixture's `Fables` week 1 ordinal 2 to Monday, replays the Year sheet's next edit
+through the real `upsert_assignment`, and asserts ordinal 1 (`The Kite and the Kettle`) is
+byte-for-byte untouched. Item 10's consequence is recorded on R-2.
 - **Origin:** `docs/qa/QA_HS_ROUND_5.md` QH5-01;
   `src/client/components/homeschool/year.rs:61-77` (`row_ordinals`), `:327-330`;
   `src/client/components/homeschool/today.rs:124-152` (`assignment_ordinals`), `:443`,
@@ -559,6 +586,14 @@ needs a Boss DTO amendment first (same shape and provenance as R-11 / QH4-03's
 
 ## R-14. QH5-02 (Med, HS5/O) — the Year cell sheet's *text* Save pins a floating row to its resolved days
 
+**Status (Boss, round-5 fix merge, 2026-09-03): CLOSED.** Applied verbatim as HS5-qa5:
+`CellEntry` computes `stored_days` from `occurrence.days` and the text **Save** sends that;
+`Save days` still sends the control's value; `pinned_days` and its unit test are deleted. Guards:
+the three source assertions added to
+`glyph_tests::hs5_qa3_the_year_cell_sheet_edits_the_days_of_one_week_not_of_every_week`, and the
+Boss's storage proof `homeschool_tests::hs4_i_a_text_edit_from_the_year_sheet_leaves_a_floating_row_floating`,
+which retypes the fixture's floating `Old Tales` week 2 split and asserts it still deals out as
+`part 1 of 2` on Monday and `2 of 2` on Wednesday.
 - **Origin:** `docs/qa/QA_HS_ROUND_5.md` QH5-02;
   `src/client/components/homeschool/year.rs:389-406` (`CellEntry`'s text **Save**,
   `days: pinned_days(&days())` at `:401`); `:447-450`; `src/shared/homeschool.rs:665-672`.
@@ -638,6 +673,14 @@ needs a Boss DTO amendment first (same shape and provenance as R-11 / QH4-03's
 
 ## R-15. QH5-03 (Med, HS5/O) — the nudge calls the week "done" on the last school day with work outstanding; H2's fortnight nudge is unreachable
 
+**Status (Boss, round-5 fix merge, 2026-09-03): CLOSED.** Applied verbatim as HS5-qa5:
+`week_is_complete()` sums the same rows `header_chip_text` sums, so the chip and the nudge cannot
+disagree; the fortnight sentence now outranks the last school day, which gets H2's "offered"
+wording with the **Finish week** button still behind `can_finish_week`. Guards:
+`the_last_school_day_offers_finish_week_without_calling_the_week_done`, the rewritten
+`a_complete_week_nudges_towards_the_next_one`, the precedence case added to
+`a_fortnight_on_one_week_nudges_by_elapsed_days_instead`, and
+`!html.contains("done — start week")` in `glyph_tests::hs5_b_today_renders_the_fixture_the_way_h6_lays_it_out`.
 - **Origin:** `docs/qa/QA_HS_ROUND_5.md` QH5-03;
   `src/client/components/homeschool/today.rs:155-173` (`nudge_line`), `:311-331`;
   `src/shared/homeschool.rs:757-774`.
@@ -714,6 +757,10 @@ needs a Boss DTO amendment first (same shape and provenance as R-11 / QH4-03's
 
 ## R-16. QH5-04 (Low, HS4/S) — `update_extra` re-files an extra to any date, escaping `add_extra`'s ±365-day window
 
+**Status (Boss, round-5 fix merge, 2026-09-03): CLOSED.** Applied verbatim as HS4-qa5:
+`check_extra_date()` sits directly above `add_extra` and both it and `update_extra` call it.
+Guard: the `update_extra(… "2099-01-01" …)` rejection assertion added to
+`hs4_k_add_extra_requires_a_session_and_bounds_scheduled_date`.
 - **Origin:** `docs/qa/QA_HS_ROUND_5.md` QH5-04; `src/server/api/homeschool.rs:1510-1558`
   (`update_extra`) vs `:1416-1431` (`add_extra`).
 - **What ships:** HS4 (k) bounds `add_extra`'s `scheduled_date` to

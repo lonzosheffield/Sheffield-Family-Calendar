@@ -11,7 +11,7 @@
 //! | f | `toggle_lesson_together` on two boys sharing a week writes exactly two rows | `hs4_f_*` |
 //! | g | `set_school_week` reaches `weeks + 1` (year complete) and Back returns to `weeks` | `hs4_g_*` |
 //! | h | `mark_all_done` ticks only the unticked and is idempotent; (QA round 4, QH4-01) an unfinished extra inside the span holds **Finish week** back | `hs4_h_*` |
-//! | i | `set_subject_schedule(days = "Th")` errors and writes nothing; (QA round 3, QH3-04) `upsert_assignment(days = "Th")` likewise, and a good string lands in `assignments.days`; (QA round 4, QH4-03) a pinned row's inline text edit from Today leaves that override untouched | `hs4_i_*` |
+//! | i | `set_subject_schedule(days = "Th")` errors and writes nothing; (QA round 3, QH3-04) `upsert_assignment(days = "Th")` likewise, and a good string lands in `assignments.days`; (QA round 4, QH4-03) a pinned row's inline text edit from Today leaves that override untouched; (QA round 5, QH5-01/QH5-02) an edit on a pinned later-ordinal row never overwrites the earlier one, and a text edit from the Year sheet leaves a floating row floating | `hs4_i_*` |
 //! | j | `get_homeschool_today` with nobody enrolled / paused | `hs4_j_*` |
 //! | k | `add_extra` / `toggle_extra` / `delete_extra` authorization and date rules | `hs4_k_*` |
 //! | l | `get_week_grid` / `get_month` boundary rules | `hs4_l_*` |
@@ -1212,6 +1212,186 @@ async fn hs4_i_a_pinned_rows_inline_text_edit_from_today_leaves_its_days_untouch
         after.1, "The Tin Whistle, retold",
         "and must still land the new text"
     );
+}
+
+/// QA round 5, QH5-01 (`docs/RESIDUAL.md` R-13). The storage proof for the
+/// `ordinal` amendment: a parent pins week 1's **second** fable to Monday from
+/// the Year cell sheet, so it falls *ahead* of the first in date order. Every
+/// surface used to recover the ordinal from that rank, so the next edit on the
+/// row was sent as `ordinal: 1` and `upsert_assignment`'s
+/// `ON CONFLICT (subject_id, week, ordinal)` silently overwrote the *other*
+/// row — replacing its text and pinning it too. The loader is
+/// insert-missing-only, so nothing brought the lost reading back.
+#[tokio::test]
+async fn hs4_i_editing_a_pinned_second_reading_never_overwrites_the_first() {
+    let _guard = hs4_lock().await;
+    let pool = db::pool().await.expect("pool");
+    reset_homeschool_state(pool).await;
+    let curriculum_id = load_fixture(pool).await;
+    let fables = subject_id(pool, curriculum_id, "Fables").await;
+    let token = parent_session().await;
+    const BOY: i64 = 1;
+    // A Monday, so the enrollment's span is an ordinary school week.
+    const ANCHOR: &str = "2026-09-07";
+
+    // "Fables" runs on T and F; the parent moves week 1's second reading to
+    // Monday from the Year cell sheet. `Save days` sends the row's own ordinal.
+    api::upsert_assignment(
+        fables,
+        1,
+        2,
+        "The Patient Heron".to_string(),
+        None,
+        Some("M".to_string()),
+        token.clone(),
+    )
+    .await
+    .expect("pin week 1's second fable to Monday from the Year sheet");
+
+    enroll_direct(pool, BOY, curriculum_id, 1, "MTWRF", ANCHOR).await;
+    let grid = api::get_week_grid(BOY, 1).await.expect("grid");
+    let row = grid
+        .rows
+        .iter()
+        .find(|row| row.title == "Fables")
+        .expect("the Fables row");
+    let monday = row.cells[0]
+        .first()
+        .cloned()
+        .expect("the pinned reading is dealt to Monday");
+    assert_eq!(monday.text.as_deref(), Some("The Patient Heron"));
+    assert_eq!(
+        monday.ordinal, 2,
+        "QH5-01: the Monday entry is ordinal 2 however early it falls"
+    );
+
+    // The Year sheet's next edit on that entry, sent the way `year.rs` sends
+    // it: with the occurrence's own ordinal, not with its rank.
+    api::upsert_assignment(
+        fables,
+        1,
+        monday.ordinal,
+        "The Patient Heron, retold".to_string(),
+        monday.detail.clone(),
+        monday.days.as_deref().map(days_to_string),
+        token.clone(),
+    )
+    .await
+    .expect("the Year sheet's edit, sent with the occurrence's own ordinal");
+
+    let rows: Vec<(i64, String, Option<String>)> = sqlx::query_as(
+        "SELECT ordinal, text, days FROM assignments WHERE subject_id = ?1 AND week = 1 ORDER BY ordinal",
+    )
+    .bind(fables)
+    .fetch_all(pool)
+    .await
+    .expect("week 1 rows");
+
+    // Leave the fixture exactly as it was loaded.
+    api::upsert_assignment(
+        fables,
+        1,
+        2,
+        "The Patient Heron".to_string(),
+        None,
+        None,
+        token,
+    )
+    .await
+    .expect("restore the fixture row");
+
+    assert_eq!(
+        rows,
+        vec![
+            (1, "The Kite and the Kettle".to_string(), None),
+            (
+                2,
+                "The Patient Heron, retold".to_string(),
+                Some("M".to_string())
+            )
+        ],
+        "the first fable is untouched and the second carries the edit"
+    );
+}
+
+/// QA round 5, QH5-02 (`docs/RESIDUAL.md` R-14). The storage proof for the
+/// Year cell sheet's *text* Save: it used to send the days control's value,
+/// which is prefilled with the row's **resolved** days, so a text-only edit of
+/// a floating split reading wrote `assignments.days = 'MW'` over its `NULL`.
+/// The row was then pinned — dealt once per pinned day with `part: None`, out
+/// of rule 5's spread — so the phone and the TV lost its `part 1 of 2` /
+/// `continue · 2 of 2` labels and that week was detached from the subject's
+/// days for good.
+#[tokio::test]
+async fn hs4_i_a_text_edit_from_the_year_sheet_leaves_a_floating_row_floating() {
+    let _guard = hs4_lock().await;
+    let pool = db::pool().await.expect("pool");
+    reset_homeschool_state(pool).await;
+    let curriculum_id = load_fixture(pool).await;
+    let old_tales = subject_id(pool, curriculum_id, "Old Tales").await;
+    let token = parent_session().await;
+    const BOY: i64 = 1;
+    const WEEK: i64 = 2;
+    const ANCHOR: &str = "2026-09-07";
+
+    enroll_direct(pool, BOY, curriculum_id, WEEK, "MTWRF", ANCHOR).await;
+    let grid = api::get_week_grid(BOY, WEEK).await.expect("grid");
+    let row = grid
+        .rows
+        .iter()
+        .find(|row| row.title == "Old Tales")
+        .expect("Old Tales");
+    let monday = row.cells[0]
+        .first()
+        .cloned()
+        .expect("part 1 of 2 on Monday");
+    assert_eq!(monday.part, Some((1, 2)));
+    assert_eq!(monday.days, None, "the fixture row floats");
+
+    // The Year sheet's text Save, sent the way `year.rs` sends it: the days it
+    // writes back are the ones the row *stores*, not the ones it displays.
+    api::upsert_assignment(
+        old_tales,
+        WEEK,
+        monday.ordinal,
+        "ch. 2 'The Long Road', retold".to_string(),
+        monday.detail.clone(),
+        monday.days.as_deref().map(days_to_string),
+        token.clone(),
+    )
+    .await
+    .expect("the Year sheet's text edit");
+
+    let after = api::get_week_grid(BOY, WEEK).await.expect("grid");
+    let row = after
+        .rows
+        .iter()
+        .find(|row| row.title == "Old Tales")
+        .expect("Old Tales");
+    let (monday_part, wednesday_part) = (
+        row.cells[0].first().and_then(|o| o.part),
+        row.cells[2].first().and_then(|o| o.part),
+    );
+
+    // Leave the fixture exactly as it was loaded.
+    api::upsert_assignment(
+        old_tales,
+        WEEK,
+        1,
+        "ch. 2 'The Long Road'".to_string(),
+        Some("stop at the bridge".to_string()),
+        None,
+        token,
+    )
+    .await
+    .expect("restore the fixture row");
+
+    assert_eq!(
+        monday_part,
+        Some((1, 2)),
+        "QH5-02: a text edit must not pin the row and lose its split"
+    );
+    assert_eq!(wednesday_part, Some((2, 2)));
 }
 
 // ---------------------------------------------------------------------------
