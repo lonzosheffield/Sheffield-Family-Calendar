@@ -14,6 +14,11 @@ pub enum MaximizedView {
     /// (`client::components::screensaver`). Not reachable through D-pad
     /// navigation or the phone's TV Remote tab — only the schedule sends it.
     Screensaver,
+    /// **HS3** — the School panel (`docs/homeschool/PLAN_HOMESCHOOL.md` H6,
+    /// TV panel 4 of 4). Appended **last** so every existing variant keeps its
+    /// serde name and its position; HS6 replaces the Boss's placeholder
+    /// `from_view` arm with the real `TvPanel::Homeschool`.
+    Homeschool,
 }
 
 /// Number of family profiles supported by the hub (user ids 1..=4).
@@ -300,6 +305,23 @@ pub enum ServerMessage {
         stale: bool,
         last_update: String,
     },
+    /// **HS3** — a homeschool log, enrollment or extra changed
+    /// (`docs/homeschool/PLAN_HOMESCHOOL.md` H6 "Realtime"). Scoped like
+    /// `RoutineUpdated`, but `user_ids` is a **list**: a Together tick fans a
+    /// `lesson_log` row out to every boy in the group in one transaction (H4)
+    /// and names all of them here.
+    HomeschoolUpdated {
+        user_ids: Vec<i64>,
+        week: i64,
+        date: String,
+    },
+    /// **HS3** — a curriculum's subjects or assignments changed (an inline
+    /// edit, a subject's days/shared toggle, or an
+    /// `import-curriculum --replace`). Unscoped by boy: it affects every
+    /// enrollment on that curriculum.
+    CurriculumUpdated {
+        curriculum_id: i64,
+    },
 }
 
 /// Percentage of the daily routine completed by a single item.
@@ -314,4 +336,222 @@ pub fn routine_item_weight(total_items: usize) -> f64 {
 pub fn routine_progress(items: &[RoutineItemView]) -> f64 {
     let done = items.iter().filter(|i| i.completed).count();
     routine_item_weight(items.len()) * done as f64
+}
+
+// ---------------------------------------------------------------------------
+// HS3 — Homeschool ("School") DTOs
+//
+// `docs/homeschool/PLAN_HOMESCHOOL.md` §3 HS3. Appended, never interleaved:
+// every type below is new, and the two additions above (`MaximizedView::
+// Homeschool`, last; `ServerMessage::HomeschoolUpdated` / `CurriculumUpdated`,
+// after `Health`) are the only edits HS3 makes to what was already here.
+//
+// Dates are `YYYY-MM-DD` strings for the same reason every other date in this
+// module is: the date crate is a server-only optional dependency and these
+// types compile to wasm (`docs/PROTOCOL.md`). The scheduling core that makes
+// them is `crate::shared::homeschool`, which is where `Weekday`, `Category`,
+// `LogStatus` and `TermNote` are defined.
+// ---------------------------------------------------------------------------
+
+use crate::shared::homeschool::{Category, LogStatus, TermNote, Weekday};
+
+/// One dated occurrence of a curriculum subject for one boy (H3).
+///
+/// `assignment_id` is `None` for the untitled daily occurrence a subject with
+/// no per-week row produces (H3 rule 3); `IFNULL(assignment_id, 0)` is what
+/// the `lesson_log_occurrence` unique index keys on (rule 9). `part` is
+/// `Some((k, n))` on a reading split over `n` days (rule 5). An **extra** is
+/// never a `LessonOccurrence` (D-2) — see [`ExtraTask`] and [`DayItem`].
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+pub struct LessonOccurrence {
+    pub subject_id: i64,
+    pub assignment_id: Option<i64>,
+    pub week: i64,
+    pub scheduled_date: String,
+    pub weekday: Weekday,
+    pub category: Category,
+    pub title: String,
+    pub text: Option<String>,
+    pub detail: Option<String>,
+    pub source: Option<String>,
+    pub icon_name: Option<String>,
+    pub part: Option<(u32, u32)>,
+    pub shared: bool,
+    pub sort_order: i64,
+    pub status: Option<LogStatus>,
+    pub note: Option<String>,
+}
+
+/// A parent-authored task pinned to one boy and one date (H8, `lesson_extras`).
+///
+/// Independent of the curriculum pointer, so a parent can plan ahead into any
+/// date; `status` is `None` while it is still to do.
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+pub struct ExtraTask {
+    pub id: i64,
+    pub user_id: i64,
+    pub scheduled_date: String,
+    pub title: String,
+    pub category: Category,
+    pub text: Option<String>,
+    pub sort_order: i64,
+    pub status: Option<LogStatus>,
+    pub note: Option<String>,
+}
+
+/// One row of a boy's day: either a curriculum occurrence or one of his
+/// parent-added tasks (D-2).
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DayItem {
+    Lesson(LessonOccurrence),
+    Extra(ExtraTask),
+}
+
+/// One boy's part of the Today view (H3 rule 8, H6 §4).
+///
+/// `due_today` is everything dated today, `catch_up` everything earlier in the
+/// week still unlogged (daily work included — R-13/P-11), `done` everything
+/// with a log row. The counts drive the header chip
+/// `14 done · 2 skipped / 22`.
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+pub struct BoyToday {
+    pub user_id: i64,
+    pub name: String,
+    pub due_today: Vec<DayItem>,
+    pub catch_up: Vec<DayItem>,
+    pub done: Vec<DayItem>,
+    pub done_count: u32,
+    pub skipped_count: u32,
+    pub total_count: u32,
+}
+
+/// A `shared` occurrence rendered **once** under Together, with the boys it
+/// covers (H4). Partial completion shows "2 of 3".
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+pub struct TogetherOccurrence {
+    pub occurrence: LessonOccurrence,
+    pub user_ids: Vec<i64>,
+    pub done_user_ids: Vec<i64>,
+}
+
+/// Every enrollment sharing `(curriculum_id, current_week)` (H4), with the
+/// state the header chip and the Finish-week nudge need (H2).
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+pub struct TogetherGroup {
+    pub curriculum_id: i64,
+    pub curriculum_name: String,
+    pub week: i64,
+    pub weeks: i64,
+    pub term: i64,
+    pub week_started_on: String,
+    pub paused: bool,
+    pub year_complete: bool,
+    pub can_finish_week: bool,
+    pub days_on_week: u32,
+    pub together: Vec<TogetherOccurrence>,
+    pub boys: Vec<BoyToday>,
+    pub term_notes: Vec<TermNote>,
+}
+
+/// What `get_homeschool_today` returns: every group, every boy, one date.
+///
+/// `anyone_enrolled = false` is the empty state ("No school plan yet"), not an
+/// error (HS4 accept (j)).
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+pub struct HomeschoolTodayView {
+    pub date: String,
+    pub is_school_day: bool,
+    pub anyone_enrolled: bool,
+    pub groups: Vec<TogetherGroup>,
+}
+
+/// One boy's enrollment as School settings renders it. `enrolled = false`
+/// leaves the curriculum fields at their zero values.
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+pub struct EnrollmentView {
+    pub user_id: i64,
+    pub enrolled: bool,
+    pub curriculum_id: i64,
+    pub curriculum_name: String,
+    pub current_week: i64,
+    pub weeks: i64,
+    pub week_started_on: String,
+    /// The `MTWRFSU` letters, as stored in `enrollments.school_days`.
+    pub school_days: String,
+    pub paused: bool,
+}
+
+/// One row of the curriculum picker.
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+pub struct CurriculumSummary {
+    pub id: i64,
+    pub slug: String,
+    pub name: String,
+    pub weeks: i64,
+    pub term_weeks: i64,
+    pub subject_count: i64,
+}
+
+/// One subject's editable schedule in School settings (H6).
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+pub struct SubjectSetting {
+    pub subject_id: i64,
+    pub name: String,
+    pub category: Category,
+    /// The `MTWRFSU` letters, as stored in `subjects.days`.
+    pub days: String,
+    pub shared: bool,
+}
+
+/// One subject's row in the Year view's grid.
+///
+/// `cells.len() == WeekGrid::days.len()`; a cell holds every occurrence dealt
+/// to that day (two, for the fixture's `Twice Told` on a Tuesday).
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+pub struct WeekGridRow {
+    pub subject_id: i64,
+    pub title: String,
+    pub category: Category,
+    pub shared: bool,
+    pub cells: Vec<Vec<LessonOccurrence>>,
+}
+
+/// The Year view's subject × school-day grid for one week (H6).
+///
+/// `dated = false` (§4 default 17) means this is **not** the current week: the
+/// dates are advisory and the surface renders neither them nor a checkbox.
+/// `free_read` subjects have no row (H3 rule 6).
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+pub struct WeekGrid {
+    pub week: i64,
+    pub weeks: i64,
+    pub term: i64,
+    pub dated: bool,
+    pub days: Vec<Weekday>,
+    pub rows: Vec<WeekGridRow>,
+}
+
+/// One cell of the Month view (H6). `total` is `Some` **only** when
+/// `in_current_week`: a past week's plan is not reconstructed and a future
+/// week has not been dealt out.
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+pub struct MonthDay {
+    pub date: String,
+    pub weekday: Weekday,
+    pub is_school_day: bool,
+    pub in_current_week: bool,
+    pub week: Option<i64>,
+    pub done: u32,
+    pub total: Option<u32>,
+    pub extras: u32,
+}
+
+/// A Mon–Fri month grid for **exactly one boy** (§4 default 17).
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+pub struct MonthView {
+    pub year: i32,
+    pub month: u32,
+    pub user_id: i64,
+    pub days: Vec<MonthDay>,
 }

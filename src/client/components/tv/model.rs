@@ -119,6 +119,11 @@ impl TvPanel {
             }
             MaximizedView::Calendar => TvPanel::Calendar,
             MaximizedView::Whiteboard => TvPanel::Whiteboard,
+            // HS3 → HS6 placeholder (`docs/homeschool/PLAN_HOMESCHOOL.md`
+            // §3 "Boss micro-commits, post-A / pre-B"): `MaximizedView` gains
+            // `Homeschool` in HS3, but `TvPanel::Homeschool` does not exist
+            // until HS6, and this match is exhaustive. HS6 replaces this arm.
+            MaximizedView::Homeschool => TvPanel::Routine,
         }
     }
 }

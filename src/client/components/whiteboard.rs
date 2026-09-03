@@ -392,6 +392,9 @@ mod tests {
             tasks_updated_for: Signal::new(None),
             profiles_version: Signal::new(0),
             calendar_version: Signal::new(0),
+            // HS3: mechanical field addition, like T1.1's migration-count
+            // bumps — no assertion in this harness changes.
+            homeschool_version: Signal::new(0),
             inbound_strokes: Signal::new(Vec::new()),
             snapshot: Signal::new(None),
             clear_version: Signal::new(0),

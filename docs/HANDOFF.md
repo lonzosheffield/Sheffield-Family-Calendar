@@ -2796,3 +2796,111 @@ documentation pass, together with a line about `FAMILY_HUB_CURRICULA_DIR`
   assertions the HS1 Owns list names (`0`, never absent, when the pool is
   closed). The test function was renamed from `..._all_eight_keys_...` to
   `..._all_nine_keys_...` to match the count it now asserts.
+
+---
+
+## HS3 (`hs/HS3`, shared types + scheduling core + protocol + realtime bus) → Boss
+
+### H-HS3-1. The post-A `from_view` placeholder had to land **inside** HS3
+
+`docs/homeschool/PLAN_HOMESCHOOL.md` §3 "Boss micro-commits" schedules the
+placeholder `MaximizedView::Homeschool => TvPanel::Routine` in
+`src/client/components/tv/model.rs::from_view` for **post-A / pre-B**. But HS3
+is a wave **A** task and it is what adds `MaximizedView::Homeschool`, and
+`TvPanel::from_view` is an *exhaustive* match over `MaximizedView` — so wave A
+cannot compile without the arm. HS3 therefore applied exactly that one line,
+verbatim as the plan specifies it, with a comment naming the micro-commit and
+HS6 as its replacement. Nothing else in `tv/model.rs` changed.
+
+**Request:** treat the micro-commit as already applied; do not apply it twice.
+HS6 still owns `tv/model.rs` and replaces the arm with the real
+`TvPanel::Homeschool`.
+
+### H-HS3-2. One mechanical field in a `whiteboard.rs` test harness
+
+`RealtimeBus` gained `homeschool_version` (HS3 Owns `src/client/realtime.rs`).
+The struct is constructed literally in one other place — the `#[cfg(test)]`
+harness in `src/client/components/whiteboard.rs:~394` — so that construction
+needed `homeschool_version: Signal::new(0)`. This is the same class of
+mechanical edit as T1.1's migration-count bumps (§3: "a migration-version or
+key-count bump in an existing test is a mechanical edit, not a weakening"): no
+assertion in `whiteboard.rs` changed, and `whiteboard_tests` is still
+`3 passed; 0 failed`.
+
+Also one line in `src/shared/mod.rs` (`pub mod homeschool;`), which is simply
+how the new file HS3 owns is reachable.
+
+### H-HS3-3. `--all-targets` cannot be used for the wasm clippy gate
+
+HS3 accept (e) asks for `cargo clippy --target wasm32-unknown-unknown
+--all-targets -- -D warnings`. `--all-targets` pulls the **dev-dependencies**
+in, and `tokio-tungstenite` → `tokio/net` → `mio` has no wasm backend:
+
+```
+error: This wasm target is unsupported by mio. If using Tokio, disable the net feature.
+  --> mio-1.2.2/src/lib.rs:44:1
+```
+
+Verified pre-existing: the identical failure reproduces on this worktree with
+**every HS3 change stashed**. It is not an HS3 regression and no HS3 file is
+implicated — the crate's own wasm targets are `--lib` only (the two binaries
+are `required-features = ["server"]`, every integration test is
+`#![cfg(feature = "server")]`).
+
+The project's canonical gate — `docs/BASELINE.md` and every prior task —
+is `cargo clippy --features web --target wasm32-unknown-unknown -- -D warnings`,
+which HS3 ran clean (exit 0). **Request:** let HS7/HS8 record the gate in that
+form, or add `--no-dev-deps` tooling if the `--all-targets` wording is to be
+kept literally.
+
+### H-HS3-4. `grep -rn chrono src/shared/` was never empty, and HS3 adds nothing
+
+Accept (e)'s second half asks for an empty `grep -rn chrono src/shared/`. One
+match pre-dates HS3 — `src/shared/types.rs:249`, the doc comment explaining
+*why* the wire dates are strings ("because `chrono` is a server-only optional
+dependency"). HS3 deliberately avoids the token in every comment it adds, so
+the grep output on `hs/HS3` is byte-identical to the output on `main`: one
+line, a comment, no `use chrono`, no `chrono::`, no dependency. The real
+assertion — the shared crate carries no date library — holds, and the wasm
+clippy above is what proves it.
+
+### H-HS3-5. Two pre-existing load-flaky tests, seen 3 times in 5 full-suite runs
+
+HS3 ran the full `cargo test --features server` five times. Runs 3 and 5 were
+completely green (29 binaries, 0 failed, exit 0) and so was `main` with every
+HS3 change stashed. Runs 1, 2 and 4 each failed **one** test, and never the
+same one twice in a row:
+
+| Run | Test | Assertion |
+| --- | --- | --- |
+| 1 | `realtime_tests::t1_2_7_a_client_reconnects_and_resnapshots_within_thirty_seconds` | `strokes.len() == 1` |
+| 2 | same | the stroke's colour marker |
+| 4 | `backup_tests::restore_drill_recreates_the_live_database_from_a_backup` | `!db_path.exists()` right after `remove_with_sidecars` |
+
+Both pass in isolation and neither touches anything HS3 changed — one is a
+whiteboard stroke assertion, the other a Windows unlink. The likely causes are
+structural, not HS3's:
+
+- `t1_2_7` aborts a hub task and then asserts the board holds exactly the one
+  stroke it drew, while the preceding `t1_2_3` pushes ~7,200 strokes through a
+  server whose writes may still be draining when `realtime::reset_board()`
+  runs.
+- the restore drill asserts a just-deleted file is gone on the same line it
+  deleted it, which on Windows races the last handle close (the same class of
+  problem `838e62f` fixed for pid-keyed scratch dirs).
+
+**Request:** hand both to HS8 as residuals. The fixes are to wait for the
+aborted hub's writes to quiesce and to retry the existence check briefly — not
+to relax either assertion.
+
+### HS3 acceptance transcript
+
+```
+cargo fmt --check                                            → exit 0
+cargo clippy --features server --all-targets -- -D warnings  → exit 0
+cargo clippy --features web --target wasm32-unknown-unknown -- -D warnings → exit 0
+cargo test --features server
+  → lib unittests: 249 passed; 0 failed (215 before HS3 + 34 HS3 unit tests)
+  → realtime_tests: 18 passed; 0 failed (17 before + the HS3 sample-vector test)
+  → 29 binaries, 0 failed, exit 0
+```

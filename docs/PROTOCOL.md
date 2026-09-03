@@ -124,6 +124,8 @@ granted but can never take one it was not (R-23b).
 | `ServerMessage::SetView { view }` | The TV should show this panel. |
 | `ServerMessage::SetActiveProfile { user_id }` | The TV should switch to this profile. |
 | `ServerMessage::Health { stale, last_update }` | Freshness signal for the TV's badge (T1.7). See §4.1. |
+| `ServerMessage::HomeschoolUpdated { user_ids, week, date }` | A homeschool lesson log, enrollment or parent-added task changed (HS3, `docs/homeschool/PLAN_HOMESCHOOL.md` H6). Scoped like `RoutineUpdated`, but `user_ids` is a **list**: a Together tick fans one row out to every boy in the group in a single transaction (H4) and names all of them. |
+| `ServerMessage::CurriculumUpdated { curriculum_id }` | A curriculum's subjects or assignments changed — an inline edit, a subject days/shared toggle, or `import-curriculum --replace` (HS3). Unscoped by boy: it affects every enrollment on that curriculum. |
 
 ### 4.1 `Health`
 
@@ -144,7 +146,7 @@ the test harness still receives nothing it was not sent.
 
 ### What a client does on `Resync`
 
-1. Bump every version signal (routine, tasks, profiles, calendar).
+1. Bump every version signal (routine, tasks, profiles, calendar, homeschool).
 2. Re-send `RequestSnapshot { board_id: 1, since_seq: 0 }`.
 3. Refetch routine/tasks/calendar for the current date.
 

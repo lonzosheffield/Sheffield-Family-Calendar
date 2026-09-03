@@ -1307,6 +1307,8 @@ fn server_variant_name(message: &ServerMessage) -> &'static str {
         ServerMessage::SetView { .. } => "SetView",
         ServerMessage::SetActiveProfile { .. } => "SetActiveProfile",
         ServerMessage::Health { .. } => "Health",
+        ServerMessage::HomeschoolUpdated { .. } => "HomeschoolUpdated",
+        ServerMessage::CurriculumUpdated { .. } => "CurriculumUpdated",
     }
 }
 
@@ -1384,7 +1386,45 @@ fn every_server_message() -> Vec<ServerMessage> {
             stale: false,
             last_update: String::new(),
         },
+        ServerMessage::HomeschoolUpdated {
+            user_ids: vec![1],
+            week: 1,
+            date: String::new(),
+        },
+        ServerMessage::CurriculumUpdated { curriculum_id: 1 },
     ]
+}
+
+/// **HS3 accept (d)** — the two homeschool variants joined the protocol, so
+/// the sample vector is the previous fourteen **plus two**, and both names
+/// reach `docs/PROTOCOL.md` §4 through
+/// `t1_2_protocol_doc_names_every_message_variant` above.
+///
+/// The count is spelled out rather than left implicit because
+/// `every_server_message()` is what proves the doc table is complete: a
+/// variant added to `ServerMessage` and forgotten here would silently stop
+/// being checked against the document.
+#[test]
+fn hs3_the_server_message_sample_vector_gained_exactly_the_two_homeschool_variants() {
+    let messages = every_server_message();
+    assert_eq!(
+        messages.len(),
+        16,
+        "fourteen protocol-v2 variants plus HomeschoolUpdated and CurriculumUpdated"
+    );
+
+    let names: Vec<&str> = messages.iter().map(server_variant_name).collect();
+    for expected in ["HomeschoolUpdated", "CurriculumUpdated"] {
+        assert!(
+            names.contains(&expected),
+            "every_server_message() must carry a ServerMessage::{expected} sample"
+        );
+    }
+    assert_eq!(
+        names.iter().collect::<HashSet<_>>().len(),
+        names.len(),
+        "every sample must be a distinct variant"
+    );
 }
 
 #[test]

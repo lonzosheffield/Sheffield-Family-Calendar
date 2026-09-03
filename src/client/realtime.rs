@@ -267,6 +267,12 @@ pub struct RealtimeBus {
     pub profiles_version: Signal<u64>,
     /// Bumped by `CalendarUpdated` and by the midnight `DayRolled`.
     pub calendar_version: Signal<u64>,
+    /// **HS3** — bumped by `HomeschoolUpdated` and by `CurriculumUpdated`
+    /// (`docs/homeschool/PLAN_HOMESCHOOL.md` H6 "Realtime"). One signal for
+    /// both, because a curriculum edit changes what every boy's Today list
+    /// holds just as a tick does, and the phone and TV both key their
+    /// `use_resource` on it.
+    pub homeschool_version: Signal<u64>,
     /// Remote strokes not yet painted. A **queue**, drained by the canvas —
     /// the single-slot v1 signal dropped everything that arrived between two
     /// renders (R-22a).
@@ -299,6 +305,7 @@ impl RealtimeBus {
         Self::bump(&mut self.tasks_version);
         Self::bump(&mut self.profiles_version);
         Self::bump(&mut self.calendar_version);
+        Self::bump(&mut self.homeschool_version);
         Self::bump(&mut self.resync_version);
     }
 
@@ -359,6 +366,8 @@ impl RealtimeBus {
                 self.requested_profile.set(Some(user_id))
             }
             ServerMessage::Health { stale, .. } => self.stale.set(stale),
+            ServerMessage::HomeschoolUpdated { .. } => Self::bump(&mut self.homeschool_version),
+            ServerMessage::CurriculumUpdated { .. } => Self::bump(&mut self.homeschool_version),
         }
     }
 
@@ -405,6 +414,7 @@ pub fn use_realtime_provider() -> RealtimeBus {
         tasks_updated_for: Signal::new(None),
         profiles_version: Signal::new(0),
         calendar_version: Signal::new(0),
+        homeschool_version: Signal::new(0),
         inbound_strokes: Signal::new(Vec::new()),
         snapshot: Signal::new(None),
         clear_version: Signal::new(0),
