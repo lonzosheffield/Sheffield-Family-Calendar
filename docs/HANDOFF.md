@@ -3424,3 +3424,27 @@ not own (`src/main.rs`, `src/server/db.rs`, `src/server/router.rs`, `src/server/
 rather than silently. `try_load()` is the new non-panicking entry point; only `family-hub.exe run`
 and `import-curriculum` use it. If a later task wants the same one-line exit for another CLI path,
 `try_load` is the seam.
+
+## HS3-qa4 (`hs/HS3-qa4`, 2026-09-03) — QH4-01: Finish week now honours H3 rule 10's completeness half
+
+`docs/qa/QA_HS_ROUND_4.md` QH4-01 applied verbatim. Two new `pub fn`s in `src/shared/homeschool.rs`
+(HS3's file gains helpers; the §3 HS3 normative signature list is untouched, and `can_finish_week`
+itself is unchanged and still `pub`):
+
+- `pub fn extras_complete(extras: &[ExtraTask], user_id: i64, week_span: (&str, &str)) -> bool` —
+  H3 rule 10: every one of that boy's parent-added tasks dated inside the span has a status.
+- `pub fn can_finish_week_with_extras(plan: &WeekPlan, enrollment: &Enrollment, logs: &[LogRow],
+  extras: &[ExtraTask], today: &str) -> bool` — `can_finish_week` with rule 10's completeness half
+  applied; the year-complete guard and the last-school-day clause are unchanged.
+
+`src/server/api/homeschool.rs::get_homeschool_today` hoists the boy's `extras` out of the
+`week_span` block and feeds them to `can_finish_week_with_extras`, so the same rows that
+`merge_extras` counts into `done_count`/`total_count` also decide `TogetherGroup.can_finish_week` —
+the header chip and the nudge beside it can no longer disagree. Nothing on the phone or the TV
+changed; both already render from `can_finish_week`.
+
+Guards: `--lib hs3_i_an_unfinished_extra_inside_the_span_holds_finish_week_back` (pure, five cases)
+and `tests/homeschool_tests.rs::hs4_h_an_unfinished_extra_inside_the_span_holds_finish_week_back`
+(end to end through `get_homeschool_today`, `add_extra`, `toggle_extra`). QH4-02 (HS4's
+`mark_all_done` shared filter) and QH4-03 (= R-11) are **not** in this branch — they are not this
+task's clauses.

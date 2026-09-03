@@ -395,6 +395,7 @@ pub async fn get_homeschool_today(date: String) -> Result<HomeschoolTodayView, S
                     .cloned()
                     .unwrap_or_default();
 
+                let mut extras: Vec<ExtraTask> = Vec::new();
                 if let Some((span_from, span_to)) = sched::week_span(&enrollment.week_started_on) {
                     let earliest = sched::add_days(&date, -sched::EXTRA_CATCH_UP_DAYS)
                         .unwrap_or_else(|| span_from.clone());
@@ -412,14 +413,14 @@ pub async fn get_homeschool_today(date: String) -> Result<HomeschoolTodayView, S
                         hs::extras_between(pool, enrollment.profile_id, &window_from, &window_to)
                             .await
                             .map_err(super::to_server_error)?;
-                    let extras = extra_rows
+                    extras = extra_rows
                         .iter()
                         .map(to_extra_task)
                         .collect::<Result<Vec<_>, _>>()?;
                     sched::merge_extras(&mut today, &extras, &date, (&span_from, &span_to));
                 }
 
-                if !sched::can_finish_week(&plan, enrollment, logs, &date) {
+                if !sched::can_finish_week_with_extras(&plan, enrollment, logs, &extras, &date) {
                     all_can_finish = false;
                 }
                 boys.push(today);

@@ -735,6 +735,41 @@ pub fn can_finish_week(
         .is_some_and(|last| today >= last.as_str())
 }
 
+/// H3 rule 10: a parent-added task counts in the Finish-week completeness
+/// check **only** while it is dated inside the current week's span.
+pub fn extras_complete(extras: &[ExtraTask], user_id: i64, week_span: (&str, &str)) -> bool {
+    extras
+        .iter()
+        .filter(|extra| {
+            extra.user_id == user_id
+                && extra.scheduled_date.as_str() >= week_span.0
+                && extra.scheduled_date.as_str() <= week_span.1
+        })
+        .all(|extra| extra.status.is_some())
+}
+
+/// [`can_finish_week`] with H3 rule 10 applied: complete only when every
+/// occurrence **and** every extra dated inside the span is logged; the
+/// last-school-day clause is unchanged.
+pub fn can_finish_week_with_extras(
+    plan: &WeekPlan,
+    enrollment: &Enrollment,
+    logs: &[LogRow],
+    extras: &[ExtraTask],
+    today: &str,
+) -> bool {
+    if enrollment.year_complete() {
+        return false;
+    }
+    let extras_done = week_span(&enrollment.week_started_on)
+        .is_some_and(|(from, to)| extras_complete(extras, enrollment.profile_id, (&from, &to)));
+    if week_complete(plan, enrollment, logs) && extras_done {
+        return true;
+    }
+    last_school_day(&enrollment.week_started_on, &enrollment.school_days)
+        .is_some_and(|last| today >= last.as_str())
+}
+
 // ---------------------------------------------------------------------------
 // H3 rule 8 — the Today view for one boy
 // ---------------------------------------------------------------------------
@@ -2083,5 +2118,69 @@ mod tests {
             view.due_today.last(),
             Some(DayItem::Extra(task)) if task.id == 11
         ));
+    }
+
+    /// QA round 4, QH4-01 — H3 rule 10's completeness half: an extra dated
+    /// inside the current week's span is part of the Finish-week check.
+    #[test]
+    fn hs3_i_an_unfinished_extra_inside_the_span_holds_finish_week_back() {
+        let plan = sample_week(2);
+        let enrollment = sample_enrollment(2, "2026-09-07");
+        let every_log: Vec<LogRow> = occurrences(&plan, &enrollment)
+            .into_iter()
+            .map(|o| LogRow {
+                subject_id: o.subject_id,
+                assignment_id: o.assignment_id,
+                scheduled_date: o.scheduled_date,
+                status: LogStatus::Done,
+                note: None,
+            })
+            .collect();
+        let midweek = "2026-09-09";
+
+        assert!(can_finish_week_with_extras(
+            &plan,
+            &enrollment,
+            &every_log,
+            &[],
+            midweek
+        ));
+        assert!(
+            !can_finish_week_with_extras(
+                &plan,
+                &enrollment,
+                &every_log,
+                &[extra(1, "2026-09-10", None)],
+                midweek
+            ),
+            "rule 10: an unfinished extra dated inside the span is part of the week"
+        );
+        assert!(can_finish_week_with_extras(
+            &plan,
+            &enrollment,
+            &every_log,
+            &[extra(1, "2026-09-10", Some(LogStatus::Done))],
+            midweek
+        ));
+        assert!(
+            can_finish_week_with_extras(
+                &plan,
+                &enrollment,
+                &every_log,
+                &[extra(2, "2026-09-18", None)],
+                midweek
+            ),
+            "an extra outside the span is not this week's"
+        );
+        assert!(
+            can_finish_week_with_extras(
+                &plan,
+                &enrollment,
+                &[],
+                &[extra(1, "2026-09-10", None)],
+                "2026-09-11"
+            ),
+            "the last-school-day clause is untouched"
+        );
     }
 }

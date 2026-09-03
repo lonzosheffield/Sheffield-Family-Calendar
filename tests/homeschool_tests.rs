@@ -10,7 +10,7 @@
 //! | e | an occurrence not in the boy's current week is rejected; an unenrolled boy is rejected | `hs4_e_*` |
 //! | f | `toggle_lesson_together` on two boys sharing a week writes exactly two rows | `hs4_f_*` |
 //! | g | `set_school_week` reaches `weeks + 1` (year complete) and Back returns to `weeks` | `hs4_g_*` |
-//! | h | `mark_all_done` ticks only the unticked and is idempotent | `hs4_h_*` |
+//! | h | `mark_all_done` ticks only the unticked and is idempotent; (QA round 4, QH4-01) an unfinished extra inside the span holds **Finish week** back | `hs4_h_*` |
 //! | i | `set_subject_schedule(days = "Th")` errors and writes nothing; (QA round 3, QH3-04) `upsert_assignment(days = "Th")` likewise, and a good string lands in `assignments.days` | `hs4_i_*` |
 //! | j | `get_homeschool_today` with nobody enrolled / paused | `hs4_j_*` |
 //! | k | `add_extra` / `toggle_extra` / `delete_extra` authorization and date rules | `hs4_k_*` |
@@ -51,7 +51,7 @@ use family_calendar::server::db;
 use family_calendar::server::homeschool::db as hs;
 use family_calendar::server::homeschool::loader;
 use family_calendar::shared::homeschool::{Category, LogStatus};
-use family_calendar::shared::types::{DayItem, ServerMessage};
+use family_calendar::shared::types::{DayItem, HomeschoolTodayView, ServerMessage};
 use futures_util::StreamExt;
 use sqlx::SqlitePool;
 use tokio_tungstenite::tungstenite::Message as WsFrame;
@@ -876,6 +876,97 @@ async fn hs4_h_mark_all_done_ticks_only_unticked_items_and_is_idempotent() {
         after_first,
         "a second call must be a no-op once everything is logged"
     );
+}
+
+/// QA round 4, QH4-01 — H3 rule 10's completeness half, end to end:
+/// `get_homeschool_today` must not offer **Finish week** while a parent-added
+/// task dated inside the current week's span is still open.
+#[tokio::test]
+async fn hs4_h_an_unfinished_extra_inside_the_span_holds_finish_week_back() {
+    let _guard = hs4_lock().await;
+    let pool = db::pool().await.expect("pool");
+    reset_homeschool_state(pool).await;
+    let curriculum_id = load_fixture(pool).await;
+
+    const BOY: i64 = 1;
+    let today = today_string();
+    // Anchored on today with MTWRFSU, so the last school day is six days off
+    // and only completeness can offer Finish week.
+    enroll_direct(pool, BOY, curriculum_id, 1, "MTWRFSU", &today).await;
+
+    let grid = api::get_week_grid(BOY, 1).await.expect("grid");
+    for occurrence in grid.rows.iter().flat_map(|row| row.cells.iter().flatten()) {
+        hs::set_occurrence(
+            pool,
+            &hs::OccurrenceKey::new(
+                BOY,
+                1,
+                occurrence.subject_id,
+                occurrence.assignment_id,
+                occurrence.scheduled_date.clone(),
+            ),
+            "done",
+            None,
+            &today,
+        )
+        .await
+        .expect("tick");
+    }
+
+    let can_finish = |view: HomeschoolTodayView| {
+        view.groups
+            .into_iter()
+            .next()
+            .expect("the boy's group")
+            .can_finish_week
+    };
+
+    assert!(
+        can_finish(
+            api::get_homeschool_today(today.clone())
+                .await
+                .expect("today")
+        ),
+        "every occurrence is logged"
+    );
+
+    let token = parent_session().await;
+    let extra = api::add_extra(
+        BOY,
+        today.clone(),
+        "Tidy the schoolroom".to_string(),
+        Category::Daily,
+        None,
+        today.clone(),
+        format!("hs4-h-extra-{}", uuid_ish()),
+        token,
+    )
+    .await
+    .expect("an extra dated inside the span");
+
+    assert!(
+        !can_finish(
+            api::get_homeschool_today(today.clone())
+                .await
+                .expect("today")
+        ),
+        "H3 rule 10: an unfinished extra inside the span holds Finish week back"
+    );
+
+    api::toggle_extra(
+        extra.id,
+        true,
+        LogStatus::Done,
+        None,
+        today.clone(),
+        format!("hs4-h-extra-{}", uuid_ish()),
+    )
+    .await
+    .expect("tick the extra");
+
+    assert!(can_finish(
+        api::get_homeschool_today(today).await.expect("today")
+    ));
 }
 
 // ---------------------------------------------------------------------------
