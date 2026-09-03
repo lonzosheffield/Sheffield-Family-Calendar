@@ -361,6 +361,11 @@ recorded below as R-11.
   runs kept in the Boss scratchpad (`full2.log`, `baseline-hs9.log`); every other run, including
   the three HS9 gate runs, passed. Not an HS9 effect: HS9 only added `init_test_env()` to this
   file's `scratch_dir`, and the first failure is from before the branch existed.
+- **Confounder:** both failing runs happened while a *second* full `cargo test --features server`
+  was running on the same machine (`full1.log`/`full2.log` are a minute apart; on 2026-09-03 a
+  stalled harness job resumed and ran 14:48-14:58 under the Boss's 14:49-14:55 baseline), which
+  the workflow forbids for exactly this reason. Every single-suite run on record is green. Treat
+  the flake as unconfirmed until it is seen with one suite running.
 - **Why it is residual:** the assertion it guards (H5: "a bad file is logged at WARN with its
   path") holds every time it is inspected by hand and the loader code has one unconditional
   `warn!` on that path. The loss is in the test's capture, not the product; nobody ships on it.
