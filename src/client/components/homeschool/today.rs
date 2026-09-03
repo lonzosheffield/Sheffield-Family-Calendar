@@ -278,10 +278,34 @@ fn GroupBlock(
                         .to_string(),
                 }
             } else if group.year_complete {
+                // H2: "`current_week > weeks` is the terminal Year complete 🎉
+                // state (not an error; **Back returns to `weeks`**)", and HS4
+                // (g) proves the server accepts it. Until QA round 3 (QH3-03)
+                // this arm was a bare card that returned before the nudge
+                // branch, so the one mis-tap a parent will make in June —
+                // Finish week on the last week — could only be undone by
+                // re-enrolling, which resets `week_started_on`.
                 StateCard {
                     glyph: glyphs::YEAR_COMPLETE_GLYPH,
                     title: "Year complete".to_string(),
                     body: "Every week of the plan is finished.".to_string(),
+                }
+                if parent {
+                    button {
+                        class: "self-start rounded-xl bg-white px-3 py-2 text-sm font-bold text-sheffield-dark ring-1 ring-slate-200",
+                        onclick: {
+                            let user_ids = user_ids.clone();
+                            let weeks = group.weeks;
+                            move |_| {
+                                on_action
+                                    .call(SchoolAction::SetWeek {
+                                        user_ids: user_ids.clone(),
+                                        week: weeks,
+                                    })
+                            }
+                        },
+                        "Back a week"
+                    }
                 }
             } else {
                 if let Some(nudge) = nudge.clone() {
@@ -402,6 +426,15 @@ fn TogetherRow(
     let subject_id = occurrence.subject_id;
     let assignment_id = occurrence.assignment_id;
     let scheduled_date = occurrence.scheduled_date.clone();
+    // QH3-02: `upsert_assignment` replaces the whole row, so an edit that
+    // carried only the new text wrote `NULL` over the source's parenthetical
+    // second line. The occurrence has the value in hand — carry it through.
+    //
+    // `days` stays `None` on this surface: Today holds only the part of the
+    // week already dealt out, so it cannot see a row's per-week `days`
+    // override, and the Year cell sheet is where H6/D-5 puts that control
+    // (`docs/HANDOFF.md`, HS5-qa3).
+    let detail = occurrence.detail.clone();
     // A shared row still on screen after its own day is the group's catch-up.
     let catch_up = occurrence.scheduled_date.as_str() < date.as_str();
     // H4: a partly-done shared row shows "2 of 3" rather than a tick.
@@ -443,6 +476,8 @@ fn TogetherRow(
                             week,
                             ordinal,
                             text,
+                            detail: detail.clone(),
+                            days: None,
                         });
                 }
             },
@@ -625,6 +660,9 @@ pub fn DayItemRow(
             let scheduled_date = occurrence.scheduled_date.clone();
             let skip_date = scheduled_date.clone();
             let note_date = scheduled_date.clone();
+            // QH3-02, as in `TogetherRow`: the row's `detail` rides along so
+            // an inline text edit does not delete the line under it.
+            let detail = occurrence.detail.clone();
             let note_status = occurrence.status.unwrap_or(LogStatus::Done);
             let edit_ordinal = edit_ordinal_for(&ordinals, subject_id, assignment_id);
             rsx! {
@@ -667,6 +705,8 @@ pub fn DayItemRow(
                                     week,
                                     ordinal,
                                     text,
+                                    detail: detail.clone(),
+                                    days: None,
                                 });
                         }
                     },

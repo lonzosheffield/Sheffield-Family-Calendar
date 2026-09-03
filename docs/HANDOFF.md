@@ -3344,3 +3344,38 @@ Dispositions in `docs/qa/QA_HS_ROUND_2.md` "Boss close".
 - `docs/BACKLOG.md` (branch `backlog/tv-viewport`) merged into `main`: B-1 TV viewport, B-2 session
   expiry heads-up, B-3 = HS9.
 
+## From HS5-qa3b (QA round 3 client fixes) → Boss / HS8 round 4
+
+### H-HS5-qa3b-1. Today's inline text edit sends `days: None`, which un-pins a per-week override
+
+`SchoolAction::EditAssignment` now carries `detail` **and** `days`, because
+`upsert_assignment` replaces the whole row (`text = excluded.text, detail = excluded.detail,
+days = excluded.days`, QH3-04's amendment). QH3-02 is fixed everywhere: all three call sites pass
+the occurrence's own `detail`. `days` is different — only the **Year cell sheet** can know it.
+
+`LessonOccurrence` carries no `days` field, and Today holds only the part of the week already dealt
+out (`due_today` + `catch_up` + `done`; a Thursday occurrence is in none of the three on Tuesday), so
+`today.rs` cannot recover a row's `assignments.days` the way `assignment_ordinals` recovers its
+ordinal — R-2's mechanism, same limit. Both Today handlers therefore pass `days: None`, so a parent
+who sets "Days in week 12 only" from the Year cell sheet and later edits that row's *text* from Today
+drops the row back to the subject's days. The Year cell sheet itself is safe: its two controls each
+send text, detail and days together.
+
+Cost of closing it, if HS8 round 4 wants it: one field — `days: Option<Vec<Weekday>>` on
+`LessonOccurrence`, which `occurrences()` has in hand at the point it builds the row (it already
+partitions `pinned`/`floating` on exactly that value). Schema-additive and backward compatible, but
+`src/shared/types.rs` is HS3's Owns and a normative DTO, so it needs a Boss amendment rather than an
+HS5 branch. Not doing it leaves a Low, recoverable slip (retype the days in the Year sheet), which is
+why HS5-qa3b only documented it.
+
+### H-HS5-qa3b-2. `YearCellSheet` and `year::entry_days` are now public
+
+`YearCellSheet` was private, so its days control — the whole subject of QH3-04 — was unreachable by
+any test: the sheet opens from an `open_cell` signal a click sets, and SSR cannot click. It is now
+`pub` and takes the grid's `days: Vec<Weekday>` as a prop, which is what lets
+`glyph_tests::hs5_qa3_the_year_cell_sheet_edits_the_days_of_one_week_not_of_every_week` render it
+directly and assert the prefill. `pub fn year::entry_days(row, days, assignment_id) -> Vec<Weekday>`
+is the derivation behind that prefill: the grid columns a row occupies **are** `assignment.days ∨
+subject.days` intersected with the boy's school days (H3 rule 1), so the sheet reads the resolved
+answer off the grid rather than keeping a second copy of the rule.
+

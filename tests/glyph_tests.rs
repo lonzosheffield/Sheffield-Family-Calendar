@@ -253,7 +253,7 @@ use family_calendar::client::components::homeschool::day_sheet::{DaySheet, EXTRA
 use family_calendar::client::components::homeschool::month::MonthPanel;
 use family_calendar::client::components::homeschool::row::CATCH_UP_CHIP_CLASS;
 use family_calendar::client::components::homeschool::today::TodayPanel;
-use family_calendar::client::components::homeschool::year::YearPanel;
+use family_calendar::client::components::homeschool::year::{entry_days, YearCellSheet, YearPanel};
 use family_calendar::client::components::homeschool::{month_label, SchoolAction};
 use family_calendar::client::components::mobile::queue::{OfflineQueue, QueuedMutation};
 use family_calendar::client::components::mobile::remote::VIEWS;
@@ -267,7 +267,7 @@ use family_calendar::shared::homeschool::{
 };
 use family_calendar::shared::types::{
     BoyToday, ClientMessage, DayItem, ExtraTask, HomeschoolTodayView, MonthView, TogetherGroup,
-    WeekGrid,
+    WeekGrid, WeekGridRow,
 };
 
 /// `2026-09-07` is a Monday; `2026-09-08` the Tuesday this fixture renders.
@@ -728,8 +728,24 @@ fn hs5_c_a_paused_group_says_school_is_out_and_a_finished_year_celebrates() {
 
     let mut complete = fixture_today_view();
     complete.groups[0].year_complete = true;
+    let complete_view_clone = complete.clone();
     let html = render_today(complete, true);
     assert!(html.contains("Year complete"), "{html}");
+
+    // QH3-03. H2: "`current_week > weeks` is the terminal Year complete 🎉
+    // state (not an error; **Back returns to `weeks`**)" — and HS4 (g) proves
+    // the server takes it. Before round 3 this arm was a bare card, so the one
+    // mis-tap every parent will make in June was unrecoverable from the phone.
+    assert_eq!(
+        count(slice_at(&html, "data-school-group", "1-2"), ">Back a week<"),
+        1,
+        "the finished year offers exactly one way back to week `weeks`: {html}"
+    );
+    let signed_out = render_today(complete_view_clone, false);
+    assert!(
+        !signed_out.contains("Back a week"),
+        "moving the week pointer stays parent-only (§4 default 18): {signed_out}"
+    );
 }
 
 #[test]
@@ -1260,6 +1276,129 @@ fn hs5_k_a_week_that_has_not_been_dealt_out_is_neither_dated_nor_tickable() {
 }
 
 // ---------------------------------------------------------------------------
+// QH3-04 — the Year cell sheet's days control is per entry, per week
+// ---------------------------------------------------------------------------
+
+#[component]
+fn YearCellSheetHarness(
+    row: WeekGridRow,
+    days: Vec<Weekday>,
+    column: usize,
+    week: i64,
+    parent: bool,
+) -> Element {
+    use_context_provider(|| {
+        Signal::new(Some(if parent {
+            SessionState::Parent
+        } else {
+            SessionState::SignedOut
+        }))
+    });
+    rsx! {
+        YearCellSheet {
+            row,
+            days,
+            column,
+            week,
+            dated: true,
+            on_action: move |_: SchoolAction| {},
+            on_close: move |_: ()| {},
+        }
+    }
+}
+
+/// The fixture grid's row for one subject, with the grid's day columns.
+fn fixture_grid_row(subject_id: i64) -> (WeekGridRow, Vec<Weekday>) {
+    let (grid, _) = fixture_grid(2, 2);
+    let row = grid
+        .rows
+        .iter()
+        .find(|row| row.subject_id == subject_id)
+        .unwrap_or_else(|| panic!("the fixture week has a row for subject {subject_id}"))
+        .clone();
+    (row, grid.days.clone())
+}
+
+#[test]
+fn hs5_qa3_the_year_cell_sheet_edits_the_days_of_one_week_not_of_every_week() {
+    // `Old Tales` is one reading row spread over MW (H3 rule 5), so its entry
+    // is dealt out on exactly Monday and Wednesday — which is what the days
+    // control must show before it lets a parent change it. Before QA round 3
+    // (QH3-04) this control sent `SetSubjectSchedule`, rewriting
+    // `subjects.days` for all 36 weeks, and started empty.
+    let (row, days) = fixture_grid_row(3);
+    assert_eq!(row.title, "Old Tales", "the fixture's split reading row");
+    assert_eq!(
+        sched::days_to_string(&entry_days(&row, &days, Some(32))),
+        "MW",
+        "the grid already resolves `assignment.days ∨ subject.days` ∩ school days"
+    );
+
+    let html = dioxus::ssr::render_element(rsx! {
+        YearCellSheetHarness {
+            row: row.clone(),
+            days: days.clone(),
+            column: 0,
+            week: 2,
+            parent: true,
+        }
+    });
+    assert_eq!(
+        count(&html, ">Save days<"),
+        1,
+        "one days control per entry, not one per subject: {html}"
+    );
+    assert!(
+        html.contains("value=\"MW\""),
+        "the control is prefilled with the days it is about to overwrite: {html}"
+    );
+    assert!(
+        html.contains("Days for Old Tales in week 2") && html.contains("Days in week 2 only"),
+        "and it says which week it changes (H6/D-5 'for that week'): {html}"
+    );
+
+    // Two entries in one cell → two independent days controls (`Twice Told`
+    // holds both its week-2 rows in the Tuesday column).
+    let (twice_told, days) = fixture_grid_row(5);
+    let html = dioxus::ssr::render_element(rsx! {
+        YearCellSheetHarness {
+            row: twice_told,
+            days: days.clone(),
+            column: 1,
+            week: 2,
+            parent: true,
+        }
+    });
+    assert_eq!(
+        count(&html, ">Save days<"),
+        2,
+        "each row of the day gets its own control: {html}"
+    );
+    assert_eq!(
+        count(&html, "value=\"T\""),
+        2,
+        "both are pinned to the Tuesday they are dealt on: {html}"
+    );
+
+    // Signed out, the sheet is read-only (H7: plan edits are parent actions).
+    let (row, days) = fixture_grid_row(3);
+    let signed_out = dioxus::ssr::render_element(rsx! {
+        YearCellSheetHarness {
+            row,
+            days,
+            column: 0,
+            week: 2,
+            parent: false,
+        }
+    });
+    assert!(
+        !signed_out.contains("Save days") && !signed_out.contains("This week&#39;s text"),
+        "a signed-out phone is offered no plan edit at all: {signed_out}"
+    );
+    println!("year cell sheet: 1 days control per entry, prefilled MW, labelled for week 2");
+}
+
+// ---------------------------------------------------------------------------
 // (i) the Month view
 // ---------------------------------------------------------------------------
 
@@ -1693,4 +1832,123 @@ fn hs5_qa1_the_year_and_month_resources_read_the_signals_they_are_keyed_on() {
 
     println!("grid_res reads grid_week()/focus(); month_res reads cursor()/focus()");
     println!("the Together arm sets notice.set(…) instead of discarding the error");
+}
+
+// ---------------------------------------------------------------------------
+// QH3-02 / QH3-04 / QH3-05 — round 3's source-shape guards
+// ---------------------------------------------------------------------------
+
+/// One file of the School tab, read from disk for a source-shape assertion.
+fn school_source(file: &str) -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("client")
+        .join("components")
+        .join("homeschool")
+        .join(file);
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("{} is readable: {err}", path.display()))
+}
+
+/// The same source with every run of whitespace collapsed to one space, so an
+/// assertion about an argument list is not a hostage to rustfmt's line breaks.
+fn one_line(source: &str) -> String {
+    source.split_whitespace().collect::<Vec<&str>>().join(" ")
+}
+
+#[test]
+fn hs5_qa3_an_inline_text_edit_carries_the_rows_detail_and_days_through() {
+    // QH3-02. `hs::upsert_assignment` is
+    // `ON CONFLICT (subject_id, week, ordinal) DO UPDATE SET text =
+    // excluded.text, detail = excluded.detail, days = excluded.days`, so an
+    // `EditAssignment` that carried only `text` wrote `NULL` over the source's
+    // parenthetical second line: `Edit text → Save` on the fixture's
+    // `Old Tales` week 2 row deleted `stop at the bridge` from Today, Year and
+    // the TV, and the insert-missing-only loader never brought it back.
+    //
+    // Invisible to an SSR test — every pane is rendered with plain props, so a
+    // render assertion can see the affordance but never what the dispatcher
+    // does with it. So this is a source-shape guard, in the same style and for
+    // the same reason as `hs5_qa1_*` above.
+    let source = school_source("mod.rs");
+    let start = source
+        .find("SchoolAction::EditAssignment {")
+        .expect("`School()` must still dispatch an assignment edit");
+    let arm = &source[start..];
+    let end = arm
+        .find("SchoolAction::AddExtra {")
+        .expect("the edit arm is followed by the add-extra arm");
+    let arm = &arm[..end];
+    let flat = one_line(arm);
+
+    for rider in ["detail", "days"] {
+        assert!(
+            arm.contains(rider),
+            "the edit arm must carry {rider} through to upsert_assignment: {arm}"
+        );
+    }
+    assert!(
+        !flat.contains("text, None"),
+        "neither rider may be defaulted away at the dispatcher: {arm}"
+    );
+
+    // And every caller hands the value it already has in hand: the occurrence
+    // carries `detail` at all three call sites (QH3-02's own wording).
+    for file in ["today.rs", "year.rs"] {
+        let source = school_source(file);
+        assert!(
+            source.contains("detail: detail.clone()"),
+            "{file} must pass the occurrence's own detail into EditAssignment"
+        );
+    }
+
+    // QH3-04: the cell sheet's days control writes `assignments.days` for that
+    // week (`EditAssignment { …, days: Some(days()) }`), never `subjects.days`
+    // for all 36. The subject-wide control stays in School settings.
+    let year = school_source("year.rs");
+    assert!(
+        one_line(&year).contains("days: Some(days())"),
+        "the Year cell sheet must send a per-week days override: {year}"
+    );
+    assert!(
+        !year.contains("SchoolAction::SetSubjectSchedule"),
+        "and must no longer reschedule every week from a cell sheet: {year}"
+    );
+    assert!(
+        school_source("settings.rs").contains("SchoolAction::SetSubjectSchedule"),
+        "School settings keeps the subject-wide control, which is honest about its reach"
+    );
+    println!("the EditAssignment arm carries detail and days; year.rs sends days: Some(days())");
+}
+
+#[test]
+fn hs5_qa3_the_year_and_month_panes_offer_enrollment_when_nobody_is_enrolled() {
+    // QH3-05. With nobody enrolled, `focus()` is `None`, so `grid_res` and
+    // `month_res` resolve to `Ok(None)` and both panes fell through to
+    // `Loading today's school work…` for ever. A loading message that never
+    // ends reads as a hung app; Today has always shown the way in.
+    let source = school_source("mod.rs");
+    assert!(
+        one_line(&source).contains("let nobody = use_memo(move || enrollments_memo()"),
+        "`School()` must decide 'nobody is enrolled' once, reactively: {source}"
+    );
+
+    for (pane, until) in [
+        ("SchoolPane::Year => rsx! {", "SchoolPane::Month => rsx! {"),
+        ("SchoolPane::Month => rsx! {", "if settings_open()"),
+    ] {
+        let start = source
+            .find(pane)
+            .unwrap_or_else(|| panic!("`School()` must still render {pane}"));
+        let arm = &source[start..];
+        let end = arm
+            .find(until)
+            .unwrap_or_else(|| panic!("{pane} must be followed by {until}"));
+        let arm = &arm[..end];
+        assert!(
+            arm.contains("if nobody()") && arm.contains("NoSchoolPlan {"),
+            "{pane} must offer enrollment rather than an endless LoadingCard: {arm}"
+        );
+    }
+    println!("the Year and Month arms both render NoSchoolPlan when nobody() is true");
 }

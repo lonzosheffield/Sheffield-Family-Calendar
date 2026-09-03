@@ -31,7 +31,7 @@ use crate::client::components::homeschool::settings::{SHEET_CARD_CLASS, SHEET_SC
 use crate::client::components::homeschool::today::BoyChips;
 use crate::client::components::homeschool::SchoolAction;
 use crate::client::components::mobile::session;
-use crate::shared::homeschool::{date_for, LogStatus};
+use crate::shared::homeschool::{date_for, days_to_string, LogStatus, Weekday};
 use crate::shared::types::{LessonOccurrence, WeekGrid, WeekGridRow};
 
 /// Every grid row — the weekday header included — is at least this tall, so a
@@ -74,6 +74,35 @@ pub fn row_ordinals(row: &WeekGridRow) -> BTreeMap<i64, i64> {
         .enumerate()
         .map(|(index, assignment_id)| (assignment_id, index as i64 + 1))
         .collect()
+}
+
+/// The days **one row of one week** is dealt out on, as a `days` string.
+///
+/// H6/D-5 calls the cell sheet's second control "inline edit of
+/// `assignment.text` / `days` **for that week**", and H3 rule 1 honours
+/// `assignments.days` as an override of `subjects.days` — a row that carries
+/// its own days is pinned to exactly those days and takes no part in rule 5's
+/// spread. The grid in hand already shows the resolved answer: the columns
+/// this row occupies **are** `assignment.days ∨ subject.days` intersected with
+/// the boy's school days, so first-hand derivation beats a second copy of the
+/// rule. Empty (which a rendered entry never is) falls back to the grid's own
+/// day columns.
+pub fn entry_days(row: &WeekGridRow, days: &[Weekday], assignment_id: Option<i64>) -> Vec<Weekday> {
+    let dealt: Vec<Weekday> = row
+        .cells
+        .iter()
+        .enumerate()
+        .filter(|(_, cell)| {
+            cell.iter()
+                .any(|occurrence| occurrence.assignment_id == assignment_id)
+        })
+        .filter_map(|(column, _)| days.get(column).copied())
+        .collect();
+    if dealt.is_empty() {
+        days.to_vec()
+    } else {
+        dealt
+    }
 }
 
 /// The Year pane.
@@ -231,6 +260,7 @@ pub fn YearPanel(
                 if let Some(row) = rows.get(row_index) {
                     YearCellSheet {
                         row: row.clone(),
+                        days: days.clone(),
                         column,
                         week,
                         dated,
@@ -244,10 +274,20 @@ pub fn YearPanel(
 }
 
 /// One cell, opened: the full text, its `part k of n`, and — for a parent —
-/// inline edit of this week's `assignment.text` and the subject's days.
+/// inline edit of **this week's** `assignment.text` and `days`.
+///
+/// Both controls are per **entry**, not per subject. Until QA round 3
+/// (QH3-04) the days control here sent `SetSubjectSchedule`, rewriting
+/// `subjects.days` for all 36 weeks while the parent believed they had moved
+/// one week's reading — and it started empty, so it did not even show what it
+/// was about to overwrite. The subject-wide control it used to duplicate lives
+/// in **School settings**, which is the one place that is honest about its
+/// reach.
 #[component]
-fn YearCellSheet(
+pub fn YearCellSheet(
     row: WeekGridRow,
+    /// The grid's day columns, so an entry's own days can be read off the row.
+    days: Vec<Weekday>,
     column: usize,
     week: i64,
     dated: bool,
@@ -258,7 +298,6 @@ fn YearCellSheet(
     let ordinals = row_ordinals(&row);
     let cell: Vec<LessonOccurrence> = row.cells.get(column).cloned().unwrap_or_default();
     let subject_id = row.subject_id;
-    let mut days = use_signal(String::new);
 
     rsx! {
         div { class: SHEET_SCRIM_CLASS, role: "dialog", aria_modal: "true",
@@ -289,33 +328,10 @@ fn YearCellSheet(
                             .assignment_id
                             .and_then(|id| ordinals.get(&id).copied())
                             .unwrap_or(1),
+                        entry_days: days_to_string(
+                            &entry_days(&row, &days, occurrence.assignment_id),
+                        ),
                         on_action,
-                    }
-                }
-
-                if parent {
-                    div { class: "mt-4 flex flex-wrap items-center gap-2",
-                        input {
-                            class: "w-28 rounded-xl border border-slate-200 bg-white p-2 text-sm text-slate-800",
-                            r#type: "text",
-                            aria_label: "Days for {row.title}",
-                            placeholder: "MTWRF",
-                            value: "{days}",
-                            oninput: move |event| days.set(event.value().to_uppercase()),
-                        }
-                        button {
-                            class: "rounded-xl bg-sheffield-dark px-3 py-2 text-sm font-bold text-white disabled:opacity-50",
-                            disabled: days().trim().is_empty(),
-                            onclick: move |_| {
-                                on_action
-                                    .call(SchoolAction::SetSubjectSchedule {
-                                        subject_id,
-                                        days: days(),
-                                        shared: row.shared,
-                                    })
-                            },
-                            "Save days"
-                        }
                     }
                 }
             }
@@ -324,6 +340,12 @@ fn YearCellSheet(
 }
 
 /// One occurrence inside the cell sheet.
+///
+/// Both parent controls write the **same row** — `upsert_assignment` replaces
+/// `text`, `detail` and `days` together — so each of them sends all three: the
+/// text control carries the days on screen, the days control carries the text
+/// on screen, and neither can quietly erase the other's value or the source's
+/// `detail` (QH3-02, QH3-04).
 #[component]
 fn CellEntry(
     occurrence: LessonOccurrence,
@@ -332,9 +354,15 @@ fn CellEntry(
     dated: bool,
     parent: bool,
     ordinal: i64,
+    /// This row's own days **for this week**, prefilled into the days control
+    /// so the parent can see what they are about to change.
+    entry_days: String,
     on_action: EventHandler<SchoolAction>,
 ) -> Element {
     let mut draft = use_signal(|| occurrence.text.clone().unwrap_or_default());
+    let mut days = use_signal(|| entry_days.clone());
+    let detail = occurrence.detail.clone();
+    let title = occurrence.title.clone();
     let body = occurrence
         .text
         .clone()
@@ -360,21 +388,65 @@ fn CellEntry(
                     }
                     button {
                         class: "shrink-0 rounded-xl bg-sheffield-dark px-3 py-2 text-sm font-bold text-white",
-                        onclick: move |_| {
-                            on_action
-                                .call(SchoolAction::EditAssignment {
-                                    subject_id,
-                                    week,
-                                    ordinal,
-                                    text: draft(),
-                                })
+                        onclick: {
+                            let detail = detail.clone();
+                            move |_| {
+                                on_action
+                                    .call(SchoolAction::EditAssignment {
+                                        subject_id,
+                                        week,
+                                        ordinal,
+                                        text: draft(),
+                                        detail: detail.clone(),
+                                        days: pinned_days(&days()),
+                                    })
+                            }
                         },
                         "Save"
+                    }
+                }
+                div { class: "mt-2 flex flex-wrap items-center gap-2",
+                    span { class: "text-xs font-semibold text-slate-600",
+                        "Days in week {week} only"
+                    }
+                    input {
+                        class: "w-28 rounded-xl border border-slate-200 bg-white p-2 text-sm text-slate-800",
+                        r#type: "text",
+                        aria_label: "Days for {title} in week {week}",
+                        placeholder: "MTWRF",
+                        value: "{days}",
+                        oninput: move |event| days.set(event.value().to_uppercase()),
+                    }
+                    button {
+                        class: "rounded-xl bg-sheffield-dark px-3 py-2 text-sm font-bold text-white disabled:opacity-50",
+                        disabled: days().trim().is_empty(),
+                        onclick: {
+                            let detail = detail.clone();
+                            move |_| {
+                                on_action
+                                    .call(SchoolAction::EditAssignment {
+                                        subject_id,
+                                        week,
+                                        ordinal,
+                                        text: draft(),
+                                        detail: detail.clone(),
+                                        days: Some(days()),
+                                    })
+                            }
+                        },
+                        "Save days"
                     }
                 }
             }
         }
     }
+}
+
+/// A days control's value as `upsert_assignment` wants it: `None` (inherit the
+/// subject's days) rather than an empty string the schema's `GLOB` would take.
+fn pinned_days(letters: &str) -> Option<String> {
+    let trimmed = letters.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
 #[cfg(test)]
@@ -455,5 +527,47 @@ mod tests {
     #[test]
     fn every_grid_row_is_at_least_a_thumb_tall() {
         assert!(YEAR_ROW_CLASS.contains("min-h-[44px]"));
+    }
+
+    #[test]
+    fn an_entrys_days_are_the_columns_it_is_dealt_out_on() {
+        // QH3-04: the cell sheet edits `assignments.days` **for that week**,
+        // so the control has to open showing the days this row already falls
+        // on — which the grid in hand has already resolved.
+        let days = fixture_days("MTWRF");
+        let row = WeekGridRow {
+            subject_id: 3,
+            title: "Old Tales".into(),
+            category: Category::Reading,
+            shared: true,
+            cells: vec![
+                vec![occurrence(Some(32), "part one")],
+                Vec::new(),
+                vec![occurrence(Some(32), "part two")],
+                Vec::new(),
+                vec![occurrence(Some(33), "the other row")],
+            ],
+        };
+        assert_eq!(
+            days_to_string(&entry_days(&row, &days, Some(32))),
+            "MW",
+            "a split reading row is pinned to the two days it was dealt on"
+        );
+        assert_eq!(days_to_string(&entry_days(&row, &days, Some(33))), "F");
+        // A row the grid does not hold falls back to the grid's own columns
+        // rather than to nothing, which the server would reject.
+        assert_eq!(days_to_string(&entry_days(&row, &days, Some(99))), "MTWRF");
+    }
+
+    #[test]
+    fn an_empty_days_control_inherits_the_subject_rather_than_writing_nonsense() {
+        assert_eq!(pinned_days("MW"), Some("MW".to_string()));
+        assert_eq!(pinned_days(" MW "), Some("MW".to_string()));
+        assert_eq!(pinned_days("   "), None);
+        assert_eq!(pinned_days(""), None);
+    }
+
+    fn fixture_days(letters: &str) -> Vec<Weekday> {
+        crate::shared::homeschool::parse_days(letters).expect("fixture day letters parse")
     }
 }

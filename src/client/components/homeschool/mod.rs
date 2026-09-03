@@ -37,6 +37,7 @@ use dioxus::prelude::*;
 
 use crate::client::components::glyphs;
 use crate::client::components::homeschool::day_sheet::DaySheet;
+use crate::client::components::homeschool::enroll::NoSchoolPlan;
 use crate::client::components::homeschool::month::MonthPanel;
 use crate::client::components::homeschool::settings::SchoolSettingsSheet;
 use crate::client::components::homeschool::today::TodayPanel;
@@ -124,11 +125,23 @@ pub enum SchoolAction {
         user_ids: Vec<i64>,
         week: i64,
     },
+    /// H6 item 6 / D-5: inline edit of one week's `assignment.text` — and,
+    /// from the Year cell sheet, of that row's own `days`.
+    ///
+    /// `detail` and `days` ride along because `upsert_assignment` writes the
+    /// whole row (`text = excluded.text, detail = excluded.detail,
+    /// days = excluded.days`): a variant that carried only `text` wrote `NULL`
+    /// over the source's parenthetical second line on every save (QA round 3,
+    /// QH3-02). Every caller passes the value it already has in hand.
     EditAssignment {
         subject_id: i64,
         week: i64,
         ordinal: i64,
         text: String,
+        detail: Option<String>,
+        /// The per-week override of `subjects.days` (QH3-04's amendment).
+        /// `None` leaves the row inheriting the subject's days.
+        days: Option<String>,
     },
     AddExtra {
         user_id: i64,
@@ -313,6 +326,12 @@ pub fn School() -> Element {
         _ => Vec::<EnrollmentView>::new(),
     });
     let focus = use_memo(move || focused_boy(boy_filter(), &enrollments_memo()));
+    // Nobody enrolled at all. `focus()` is then `None`, so `grid_res` and
+    // `month_res` resolve to `Ok(None)` and both panes used to fall through to
+    // a `Loading today's school work…` card that could never finish — a
+    // loading message that never ends reads as a hung app (QA round 3,
+    // QH3-05). Today has always shown the way in; Year and Month now do too.
+    let nobody = use_memo(move || enrollments_memo().iter().all(|row| !row.enrolled));
     let enrollment = use_memo(move || {
         focus().and_then(|id| {
             enrollments_memo()
@@ -533,16 +552,20 @@ pub fn School() -> Element {
                     week,
                     ordinal,
                     text,
+                    detail,
+                    days,
                 } => {
-                    // `days: None` leaves the row inheriting the subject's days;
-                    // HS5-qa3 wires the Year cell sheet's per-week override here.
+                    // Both riders are passed through, never defaulted: the
+                    // storage fn replaces the whole row, so dropping `detail`
+                    // erased the source's second line (QH3-02) and dropping
+                    // `days` would un-pin the Year sheet's per-week override.
                     let _ = upsert_assignment(
                         subject_id,
                         week,
                         ordinal,
                         text,
-                        None,
-                        None,
+                        detail,
+                        days,
                         String::new(),
                     )
                     .await;
@@ -712,7 +735,11 @@ pub fn School() -> Element {
                             on_action: dispatch,
                         }
                     } else {
-                        LoadingCard {}
+                        if nobody() {
+                            NoSchoolPlan { on_enroll: move |()| settings_open.set(true) }
+                        } else {
+                            LoadingCard {}
+                        }
                     }
                 },
                 SchoolPane::Month => rsx! {
@@ -729,7 +756,11 @@ pub fn School() -> Element {
                             },
                         }
                     } else {
-                        LoadingCard {}
+                        if nobody() {
+                            NoSchoolPlan { on_enroll: move |()| settings_open.set(true) }
+                        } else {
+                            LoadingCard {}
+                        }
                     }
                 },
             }
