@@ -1190,22 +1190,23 @@ test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fin
 ```
 cargo test --features server --test tv_tests
 
-     Running tests\tv_tests.rs (target\debug\deps\tv_tests-555b723658b799fa.exe)
+     Running tests	v_tests.rs (target\debug\deps	v_tests-555b723658b799fa.exe)
 
-running 39 tests
+running 40 tests
 test hs6_every_maximized_view_resolves_to_one_panel_slug ... ok
 test hs6_f_left_and_right_wrap_over_the_four_panels ... ok
 test hs6_a_the_golden_file_gains_one_school_section_and_moves_no_other ... ok
 test hs6_c_a_boy_can_tick_every_lesson_with_the_remote_alone ... ok
 test hs6_g_the_school_panel_never_renders_a_shared_subjects_row ... ok
-test hs6_e_the_school_panel_did_not_move_the_type_scale_or_the_overscan ... ok
 test hs6_h_a_parent_added_task_is_pinned_and_tickable_from_the_remote ... ok
+test hs6_e_the_school_panel_did_not_move_the_type_scale_or_the_overscan ... ok
+test hs6_i_a_fully_ticked_day_celebrates_and_a_boy_with_no_work_gets_no_school_today ... ok
 test hs6_d_a_phone_can_steer_the_television_onto_the_school_panel ... ok
 test hs6_b_every_school_row_is_within_twelve_presses_of_the_profile_selector ... ok
 test t2_1_a_the_rendered_focus_order_matches_the_golden_file ... ok
 [... 29 more pre-existing t2_1_*/d4_3_*/qd_02_*/qd_08_* rows, all ok, see the T2.1/D4.3 sections above ...]
 
-test result: ok. 39 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+test result: ok. 40 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
 ```
 
 ### Transcript — homeschool_loop_tests (HS7 accept a, b)

@@ -3262,3 +3262,43 @@ without reading the diff.
 `day_items` in `src/client/components/homeschool/mod.rs` loses its `boy.done` pull-back —
 and with it its now-unused `date` parameter — because a ticked extra no longer leaves
 `due_today`, which is what that workaround existed to undo.
+
+---
+
+## Boss, QA round 1 close (2026-09-03) — dispositions of the fixing wave's notes
+
+Landed on `main` as five squash commits, each followed by a green baseline (fmt, both clippy
+gates, full `cargo test --features server`): `082b2b3` HS4-qa1 (QH1-01, QH1-10), `b22e443`
+HS5-qa1 (QH1-02, QH1-05, QH1-07), `71220b1` HS3-qa1 (QH1-03, QH1-09), `b5de105` HS6-qa1
+(QH1-04), `0b2a7b8` HS7-qa1 (QH1-06). QH1-08 (HS1-qa1) is in `docs/BLOCKED.md`.
+
+* **HS3 note 1 (accept (e)'s `grep -rn chrono` half) — applied.** PLAN v2 §5.2 log entry:
+  `docs/homeschool/PLAN_HOMESCHOOL.md` HS3 accept (e) now reads "`src/shared/` has no
+  `use`/dependency on chrono (`grep -rn chrono src/shared/` may hit the one pre-existing
+  doc-comment in `types.rs`, nothing else — H-HS3-4)". Same assertion, stated so that the
+  command that proves it can actually pass; closes H-HS3-4.
+* **HS3 note 2 (`docs/qa/QA_HS_ROUND_1.md` dispositions) — applied.** The report landed on
+  `main` as `94c28d6` before this close; a "Boss close" section at its foot now maps every
+  QH1 item to the commit that fixed it.
+* **HS3 note 3 (`day_items()` is now `(view, user_id)`) — recorded.** Single call site,
+  updated on the same branch; no parallel branch called it (HS5-qa1 merged cleanly around it).
+* **HS6 note 1 (QH1-04 audit wording vs. its own fixture) — recorded** in the QA report's
+  close section. The normative `celebrate` formula stands; the test folds the fixture's
+  catch-up rows into `due_today` before ticking, per H3 rule 8. No contract change.
+* **HS6 note 2 (`docs/VERIFICATION.md` HS6 transcript said 39 tests) — applied.** Re-ran
+  `cargo test --features server --test tv_tests` on the merged `main` and replaced the block
+  with the captured output (40 tests).
+* **HS6 note 3 (no phone SSR case for "School's out for {name} ⚽") — recorded, not
+  written.** It is a new `hs5_c`-style case in HS5's `tests/glyph_tests.rs`; HS8 round 2
+  should name it if it wants it, and HS5's fixing task adds it. The TV side is covered by
+  `hs6_i`.
+* **HS5 / HS7 flaky-test notes — recorded, no code change.**
+  `realtime_tests::t1_2_7_a_client_reconnects_and_resnapshots_within_thirty_seconds` failed
+  once under full-suite load on HS5-qa1 (two different assertions across two runs, green
+  standalone and in two consecutive full runs with and without the branch);
+  `homeschool_db_tests::a_bad_file_beside_a_good_one_loads_exactly_one_curriculum_and_logs_the_path`
+  failed once under load on HS7-qa1 (global tracing-subscriber race). Both are the H-HS3-5
+  class; neither failed in any of the six Boss baselines of this close. Hardening belongs
+  to the owners of `tests/realtime_tests.rs` (HS3/T1.2) and `tests/homeschool_db_tests.rs`
+  (HS1); HS5's hypothesis — a stale board row in the shared `FAMILY_HUB_DATA_DIR`, the same
+  class as `838e62f`'s pid-keyed scratch-dir wipe — is the first thing to check.

@@ -439,7 +439,8 @@ appears in `catch_up` on a later day and never twice in `due_today`; Saturday wi
 `week_started_on` a Wednesday puts Mon/Tue in the following week; `last_school_day` correct for
 `MTWRF` and `MTWR`; (d) `every_server_message().len()` = previous + 2; protocol doc test green;
 (e) `cargo clippy --features web --target wasm32-unknown-unknown -- -D warnings` exits 0 and
-`grep -rn chrono src/shared/` is empty; (f) `parse_days("Th")`, `"MM"`, `"X"` → `Err`; (g) `week_grid`
+`src/shared/` has no `use`/dependency on chrono (`grep -rn chrono src/shared/` may hit the one
+pre-existing doc-comment in `types.rs`, nothing else — H-HS3-4); (f) `parse_days("Th")`, `"MM"`, `"X"` → `Err`; (g) `week_grid`
 on the fixture week 2 has **6** rows (free_read excluded) × 5 cells, `Fables` row all empty, `Twice Told`
 both rows in the Tuesday cell; with `dated = false` every `scheduled_date` is advisory and the grid
 reports `dated = false`; (h) `month_view` with `week_started_on = "2026-09-28"`, `year = 2026,

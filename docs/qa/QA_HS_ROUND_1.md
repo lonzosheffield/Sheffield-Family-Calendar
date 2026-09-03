@@ -88,3 +88,22 @@ Severity: Critical / High / Med / Low. PASS requires zero Critical/High/Med.
 - QH1-01 and QH1-03 change server/shared behaviour the phone already assumes; land them first, then QH1-02/-04/-05 (client only).
 - Nothing here touches `migrations/`, the DTOs, or a normative signature; every fix stays inside the owning task's files plus one new test each.
 - Residuals recorded by the wave (`docs/RESIDUAL.md` R-2/R-3, HANDOFF H-HS3-5 load-flaky tests) stand; neither flaky test failed in either full run here.
+
+## Boss close (2026-09-03)
+
+| Item | Fixed on | Squash commit on `main` | Note |
+| --- | --- | --- | --- |
+| QH1-01 | `hs/HS4-qa1` | `082b2b3` | `hs4_n_*` added; `hs4_d_*` extended. |
+| QH1-02 | `hs/HS5-qa1` | `b22e443` | memos read inside the resource closures; source-shape guard `hs5_qa1_*` in `glyph_tests`. |
+| QH1-03 | `hs/HS3-qa1` | `71220b1` | one pre-existing `hs3_i` assertion (`due_today.is_empty()`) encoded the defect and now asserts `["Task 2"]`; logged in `docs/HANDOFF.md`. |
+| QH1-04 | `hs/HS6-qa1` | `b5de105` | the audit's prescribed fixture ("every row `Some(Done)`" on the 9+3 day) leaves three ticked rows in `catch_up`, so the normative `celebrate` formula (`catch_up.is_empty() && …`) could not render the chip; `hs6_i` folds the catch-up rows into `due_today` before ticking (H3 rule 8 keeps only *unlogged* past work in `catch_up`). Formula unchanged; test name reads `…_and_a_boy_with_no_work_gets_no_school_today`. |
+| QH1-05 | `hs/HS5-qa1` | `b22e443` | `BoyChips` in `today.rs`; Year and Month render it with `allow_everyone: false`. |
+| QH1-06 | `hs/HS7-qa1` | `0b2a7b8` | docs-only. |
+| QH1-07 | `hs/HS5-qa1` | `b22e443` | `DaySheet.before_span`, `BEFORE_SPAN_LINE`; `hs5_j_*` past-date case. |
+| QH1-08 | `hs/HS1-qa1` @ `076367f` | **not merged** | BLOCKED — harness worktree-isolation refusal before the DONE baseline ran; see `docs/BLOCKED.md`. |
+| QH1-09 | `hs/HS3-qa1` | `71220b1` | contract amendment logged in `docs/HANDOFF.md` per PLAN §5.2; the Boss close also restated (e)'s `chrono` half (H-HS3-4). |
+| QH1-10 | `hs/HS4-qa1` | `082b2b3` | `MAX_NOTE_CHARS = 500` in both fns. |
+
+Every merge was followed by a green baseline (fmt, clippy server `--all-targets`, clippy web
+wasm, full `cargo test --features server`). Round 2 should re-audit QH1-01…-07, -09, -10 on
+`main` and pick QH1-08 up when HS1-qa1 lands.

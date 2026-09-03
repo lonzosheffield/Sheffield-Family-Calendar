@@ -139,3 +139,38 @@ wave) or accepts the gap into `docs/RESIDUAL.md`.
   and the captured `test result:` lines only. Keep the `docs_tests.rs` `PASS`
   assertions from `421932c` (they are correct as written). The Boss will
   re-run the name-vs-tree grep and the per-block count check at review.
+
+---
+
+## HS1-qa1 — QA round 1 fix QH1-08 (`import-curriculum` opens the pool before copying the file)
+
+- **Task:** HS1-qa1 (`src/server/homeschool/loader.rs`, `tests/service_tests.rs` owner),
+  applying `docs/qa/QA_HS_ROUND_1.md` QH1-08: move `db::pool().await` above the
+  `std::fs::copy` in `import_curriculum` so the command's own `insert_missing` report is
+  truthful on a first import, and add the
+  `"7 subjects, 9 assignments, 3 term notes inserted"` assertion to
+  `service_tests::import_curriculum_copies_a_valid_file_into_the_curricula_directory`.
+- **Tier reached:** O (Opus). The code change **exists**, unverified: branch `hs/HS1-qa1`
+  @ `076367f` (worktree `.claude/worktrees/wf_0b6fd056-c15-21`, 2 files, +18/−4), matching
+  the audit's prescription on a read-through. It is **not merged**.
+- **Failing assertion:** none known. The DONE criterion `cargo test --features server`
+  green was never executed to completion, so HS1's Accept clauses (a)–(i) and the new
+  `service_tests` assertion were not re-run on this machine. The agent's second attempt
+  died in the harness before starting:
+
+  > Refusing to use `C:\Family Calendar\.claude\worktrees\wf_0b6fd056-c15-22` as an
+  > isolation worktree: git could not be run to resolve it, so its git identity could not
+  > be verified. Isolation is refused rather than assumed — recreate the worktree (or
+  > remove the corrupt .git entry) and retry.
+
+- **Hypothesis (Boss):** the same harness worktree-isolation refusal T0.7 hit three times
+  (above); the `-22` worktree was a plain checkout of `c7c1339` with no commits of its own
+  and resolved fine from the main checkout at the close, so the refusal is a race in the
+  harness's own verification, not a corrupt repository. Removed at this close
+  (`git worktree remove --force`); `-21` (the branch's real worktree) is kept.
+- **What is needed:** re-dispatch HS1-qa1 at O, starting from `hs/HS1-qa1` @ `076367f`
+  rather than from scratch, with the single instruction to run the DONE baseline (fmt,
+  both clippy gates, `cargo test --features server` twice consecutively) and HS1's Accept
+  list, and to report the `service_tests` transcript. Boss reviews the diff against
+  QH1-08 verbatim and squash-merges. Until then QH1-08's console misreport stands; it is
+  cosmetic (the rows are correct on disk).
