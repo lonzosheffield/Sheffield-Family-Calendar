@@ -47,5 +47,24 @@ tv-profile-3
 tv-profile-4
 tv-join-qr
 
+[panel:homeschool]
+tv-profile-1
+tv-profile-2
+tv-profile-3
+tv-profile-4
+tv-join-qr
+tv-lesson-s101-a0-2026-09-02
+tv-lesson-s102-a0-2026-09-02
+tv-lesson-s103-a0-2026-09-02
+tv-lesson-s104-a0-2026-09-02
+tv-lesson-s105-a9001-2026-09-02
+tv-lesson-s106-a9002-2026-09-02
+tv-lesson-s107-a9003-2026-09-02
+tv-lesson-s108-a0-2026-09-02
+tv-extra-501
+tv-lesson-s101-a0-2026-09-01
+tv-lesson-s110-a9005-2026-09-01
+tv-lesson-s102-a0-2026-09-01
+
 [overlay:join-qr]
 tv-overlay-close

@@ -36,14 +36,17 @@ use crate::client::components::routine::{new_idempotency_key, RoutineDateState};
 use crate::client::components::whiteboard::Whiteboard;
 use crate::client::realtime::{now_millis, use_realtime};
 use crate::server::api::{
-    get_custom_tasks, get_daily_routine, get_today_events, list_profiles, toggle_custom_task,
-    toggle_routine_task,
+    get_custom_tasks, get_daily_routine, get_homeschool_today, get_today_events, list_profiles,
+    toggle_custom_task, toggle_extra, toggle_lesson, toggle_routine_task,
 };
-use crate::shared::types::{profile_name, ServerMessage, FAMILY_PROFILE_COUNT};
+use crate::shared::homeschool::LogStatus;
+use crate::shared::types::{profile_name, DayItem, ServerMessage, FAMILY_PROFILE_COUNT};
 
 use super::clock::{tv_clock, TvClock, CLOCK_POLL_SECS};
 use super::keymap::{push_key_log, KeyLogEntry};
-use super::model::{current_focus, FocusId, TvModel, TvProfile, TvState};
+use super::model::{
+    current_focus, day_item_focus, school_rows, FocusId, TvModel, TvProfile, TvState,
+};
 use super::nav::{on_key_for, scroll_target, TvAction};
 use super::staleness::{TvStaleness, BADGE_TICK_MS};
 use super::surface::TvSurface;
@@ -193,6 +196,21 @@ pub fn TvShell() -> Element {
         get_today_events().await
     });
 
+    // HS6: the School panel. Keyed on `homeschool_version`, which HS3 bumps
+    // for both `HomeschoolUpdated` and `CurriculumUpdated` — a tick from a
+    // phone and an edited assignment change this list the same way. Keyed on
+    // the date too, so the midnight `DayRolled` deals out the new day without
+    // a reload. Not keyed on the active profile: one fetch carries every boy,
+    // and `model::school` slices it.
+    let mut homeschool_resource = use_resource(move || async move {
+        let _version = (bus.homeschool_version)();
+        let date = mutation_date((bus.today)(), clock.read().as_ref().cloned());
+        match date {
+            Some(date) => get_homeschool_today(date).await.map(Some),
+            None => Ok(None),
+        }
+    });
+
     // Held in a signal rather than recomputed per render so the two effects
     // below see the *current* roster: `use_effect` stores its closure once,
     // so a captured `Vec` would be frozen at the first frame's fallback.
@@ -269,11 +287,20 @@ pub fn TvShell() -> Element {
 
     let today = mutation_date((bus.today)(), clock.read().as_ref().cloned());
 
+    // `None` while the hub has not answered (or could not): the School panel
+    // says "Loading today's school…" rather than "No school plan", the same
+    // distinction W3 draws on the calendar.
+    let homeschool = match &*homeschool_resource.read_unchecked() {
+        Some(Ok(Some(view))) => Some(view.clone()),
+        _ => None,
+    };
+
     let model = TvModel {
         profiles: rail,
         routine,
         tasks,
         events,
+        homeschool,
         state: current,
         connected: (bus.connected)(),
         stale: tracker.read().is_stale(now_ms()),
@@ -378,6 +405,59 @@ pub fn TvShell() -> Element {
                             .await;
                             tasks_resource.restart();
                         });
+                    }
+                    // HS6 / D1: a boy ticks his own school work with the
+                    // remote alone. The row is found by the same key the ring
+                    // is on, not by an index — the list is refetched on every
+                    // `homeschool_version` bump (D-2).
+                    FocusId::Lesson(_) | FocusId::Extra(_) => {
+                        let owner_id = profile.id;
+                        let target = focus.clone();
+                        let Some(item) = school_rows(&model)
+                            .into_iter()
+                            .find(|item| day_item_focus(item) == target)
+                        else {
+                            return;
+                        };
+                        match item {
+                            DayItem::Lesson(lesson) => {
+                                let completed = lesson.status != Some(LogStatus::Done);
+                                spawn(async move {
+                                    let _ = toggle_lesson(
+                                        owner_id,
+                                        lesson.subject_id,
+                                        lesson.assignment_id,
+                                        lesson.week,
+                                        lesson.scheduled_date,
+                                        completed,
+                                        // The remote ticks and unticks;
+                                        // skipping and notes are parent
+                                        // actions on the phone (H6).
+                                        LogStatus::Done,
+                                        None,
+                                        date,
+                                        new_idempotency_key(),
+                                    )
+                                    .await;
+                                    homeschool_resource.restart();
+                                });
+                            }
+                            DayItem::Extra(extra) => {
+                                let completed = extra.status != Some(LogStatus::Done);
+                                spawn(async move {
+                                    let _ = toggle_extra(
+                                        extra.id,
+                                        completed,
+                                        LogStatus::Done,
+                                        None,
+                                        date,
+                                        new_idempotency_key(),
+                                    )
+                                    .await;
+                                    homeschool_resource.restart();
+                                });
+                            }
+                        }
                     }
                     // Calendar rows are read-only on the television and the
                     // rail's QR entry is handled by the overlay actions:

@@ -3078,3 +3078,54 @@ can see and offers no edit affordance for the rest (`edit_ordinal_for` → `None
 future task would rather this be exact everywhere, the clean fix is one field —
 `ordinal: i64` on `LessonOccurrence`, which `occurrences()` already has in hand — rather
 than more inference on the client.
+
+---
+
+## From HS6 (TV panel) → Boss / HS8
+
+### HS-7. Two mechanical test edits in `src/client/components/tv/nav.rs`, which HS6 does not own
+
+`PLAN_HOMESCHOOL.md` §3 HS6 requires `TvPanel::ALL` to become four panels and
+`body_lens` to become `[usize; 4]`. Two unit tests inside `nav.rs` enumerate the
+cycle by hand and therefore stop compiling-as-true the instant a fourth panel
+exists — they are not assertions about School, they are assertions about the
+count:
+
+* `right_and_left_cycle_the_panels` — gained one `Right` step onto
+  `TvPanel::Homeschool`, and its trailing `Left` now expects `Homeschool`
+  instead of `Whiteboard` (a `Left` from Routine wraps onto the last panel,
+  whichever that is).
+* `enter_on_the_whiteboard_panel_cannot_strand_the_cursor_in_an_empty_list` —
+  gained a second `Left` press, because one `Left` now lands on School (which
+  has rows) rather than on the whiteboard (which has none). The assertion it
+  makes about the whiteboard is byte-identical.
+
+Nothing else in `nav.rs` changed and no assertion was weakened or removed. This
+is the "migration-version or key-count bump" class of edit §3 calls mechanical,
+but it lands in a file outside HS6's Owns list, so it is recorded here rather
+than assumed.
+
+The same class of edit inside HS6's own `tests/tv_tests.rs`:
+`t2_1_d_...`'s `Left` expectation (Whiteboard → Homeschool) and
+`d4_3_d_e_f_...`'s golden-length sum (`15 + 8 + 5 + 1` → `15 + 8 + 5 + 17 + 1`).
+`t2_1_a`, `t2_1_c`, the type-scale golden, the overscan walker, the hover grep,
+the rail budget and the whole palette suite pass **unchanged**.
+
+### HS-8. `YEAR_COMPLETE_GLYPH` (🎉) wants to live in `glyphs.rs`, not `tv/surface.rs`
+
+H6's School panel needs a fourth state card, "Year complete 🎉". Every other
+glyph the kiosk draws comes from `client::components::glyphs`, but that file is
+the Boss's pre-A micro-commit and is not HS6's to edit, so the literal sits as a
+private `const YEAR_COMPLETE_GLYPH: &str = "🎉";` at the top of HS6's School
+section in `tv/surface.rs`. Suggested fix (one line each): add
+`pub const YEAR_COMPLETE_GLYPH: &str = "🎉";` to `glyphs.rs` beside
+`EXTRA_TASK_GLYPH`, import it in `tv/surface.rs`, delete the private const. The
+phone's School tab (HS5) needs the same glyph for the same state, so doing this
+once is cheaper than doing it twice.
+
+### HS-9. `TvModel` gained a field; every construction site outside `tv/` is `..TvModel::empty()`
+
+`TvModel::homeschool: Option<HomeschoolTodayView>` is new. The two sites that
+build a model by hand (`tv/shell.rs`'s `steer` and `TvModel::empty`) are HS6's
+own and are updated; anything a later task adds should prefer
+`..TvModel::empty()` so a sixth panel's field costs it nothing.

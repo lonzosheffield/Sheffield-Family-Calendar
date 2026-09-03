@@ -33,7 +33,8 @@
 
 use crate::client::components::calendar::CalendarState;
 use crate::shared::types::{
-    CalendarEvent, CustomTaskView, MaximizedView, RoutineItemView, ServerMessage,
+    CalendarEvent, CustomTaskView, DayItem, HomeschoolTodayView, LessonOccurrence, MaximizedView,
+    RoutineItemView, ServerMessage,
 };
 
 use super::keymap::KeyLogEntry;
@@ -42,25 +43,37 @@ use super::keymap::KeyLogEntry;
 // Panels
 // ---------------------------------------------------------------------------
 
-/// The three full-screen panels Left/Right cycles between.
+/// The four full-screen panels Left/Right cycles between.
+///
+/// **HS6** appended `Homeschool` (`docs/homeschool/PLAN_HOMESCHOOL.md` H6:
+/// "TV `/tv`, panel 4 of 4 — `Routine · Calendar · Whiteboard · School`,
+/// Left/Right wraps"), so School is exactly one `Left` from the routine the
+/// kiosk boots on.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Hash)]
 pub enum TvPanel {
     #[default]
     Routine,
     Calendar,
     Whiteboard,
+    Homeschool,
 }
 
 impl TvPanel {
     /// Cycle order. `Routine` is first because it is what the kiosk exists
     /// for and where `Backspace` always lands.
-    pub const ALL: [TvPanel; 3] = [TvPanel::Routine, TvPanel::Calendar, TvPanel::Whiteboard];
+    pub const ALL: [TvPanel; 4] = [
+        TvPanel::Routine,
+        TvPanel::Calendar,
+        TvPanel::Whiteboard,
+        TvPanel::Homeschool,
+    ];
 
     pub fn index(self) -> usize {
         match self {
             TvPanel::Routine => 0,
             TvPanel::Calendar => 1,
             TvPanel::Whiteboard => 2,
+            TvPanel::Homeschool => 3,
         }
     }
 
@@ -81,6 +94,7 @@ impl TvPanel {
             TvPanel::Routine => "routine",
             TvPanel::Calendar => "calendar",
             TvPanel::Whiteboard => "whiteboard",
+            TvPanel::Homeschool => "homeschool",
         }
     }
 
@@ -89,6 +103,7 @@ impl TvPanel {
             TvPanel::Routine => "Morning Routine",
             TvPanel::Calendar => "Today",
             TvPanel::Whiteboard => "Whiteboard",
+            TvPanel::Homeschool => "School",
         }
     }
 
@@ -98,6 +113,7 @@ impl TvPanel {
             TvPanel::Routine => MaximizedView::Routine,
             TvPanel::Calendar => MaximizedView::Calendar,
             TvPanel::Whiteboard => MaximizedView::Whiteboard,
+            TvPanel::Homeschool => MaximizedView::Homeschool,
         }
     }
 
@@ -119,11 +135,9 @@ impl TvPanel {
             }
             MaximizedView::Calendar => TvPanel::Calendar,
             MaximizedView::Whiteboard => TvPanel::Whiteboard,
-            // HS3 → HS6 placeholder (`docs/homeschool/PLAN_HOMESCHOOL.md`
-            // §3 "Boss micro-commits, post-A / pre-B"): `MaximizedView` gains
-            // `Homeschool` in HS3, but `TvPanel::Homeschool` does not exist
-            // until HS6, and this match is exhaustive. HS6 replaces this arm.
-            MaximizedView::Homeschool => TvPanel::Routine,
+            // HS6: the real arm, replacing the Boss's post-A placeholder
+            // (`docs/homeschool/PLAN_HOMESCHOOL.md` §3 "Boss micro-commits").
+            MaximizedView::Homeschool => TvPanel::Homeschool,
         }
     }
 }
@@ -165,6 +179,18 @@ pub enum FocusId {
     /// phone-only (PURPLE §P5.5 default 35), but it is still focusable so a
     /// child can walk a long day without a pointer.
     Event(String),
+    /// **HS6** — one of the active boy's own lesson occurrences on the School
+    /// panel, keyed by [`lesson_key`] (`s{subject}-a{assignment|0}-{date}`)
+    /// rather than by its index in the list.
+    ///
+    /// The key has to be the occurrence's *identity* because the list is
+    /// refetched on every `homeschool_version` bump and a tick reorders
+    /// nothing but changes every row's state (D-2): an index would move the
+    /// ring onto whatever slid into that slot.
+    Lesson(String),
+    /// **HS6** — one of the boy's parent-added tasks (`lesson_extras`), keyed
+    /// by its row id for the same reason.
+    Extra(i64),
     /// The overlay's dismiss target.
     OverlayClose,
 }
@@ -178,8 +204,35 @@ impl FocusId {
             FocusId::RoutineItem(id) => format!("tv-routine-{id}"),
             FocusId::CustomTask(id) => format!("tv-task-{id}"),
             FocusId::Event(id) => format!("tv-event-{}", slugify(id)),
+            FocusId::Lesson(key) => format!("tv-lesson-{key}"),
+            FocusId::Extra(id) => format!("tv-extra-{id}"),
             FocusId::OverlayClose => "tv-overlay-close".to_string(),
         }
+    }
+}
+
+/// The stable key of one lesson occurrence: `s{subject}-a{assignment|0}-{date}`
+/// (HS6).
+///
+/// It is exactly the tuple the `lesson_log_occurrence` unique index keys on —
+/// `(subject_id, IFNULL(assignment_id, 0), scheduled_date)` for one boy in one
+/// week (H1/H3 rule 9) — so two rows the server considers the same occurrence
+/// can never be two focus targets, and a row the server considers distinct can
+/// never collide with another.
+pub fn lesson_key(occurrence: &LessonOccurrence) -> String {
+    format!(
+        "s{}-a{}-{}",
+        occurrence.subject_id,
+        occurrence.assignment_id.unwrap_or(0),
+        occurrence.scheduled_date
+    )
+}
+
+/// The focus identity of one row of the School panel.
+pub fn day_item_focus(item: &DayItem) -> FocusId {
+    match item {
+        DayItem::Lesson(lesson) => FocusId::Lesson(lesson_key(lesson)),
+        DayItem::Extra(extra) => FocusId::Extra(extra.id),
     }
 }
 
@@ -229,6 +282,14 @@ pub struct TvModel {
     /// with nothing on it. The four arms are rendered separately by
     /// [`super::surface`].
     pub events: CalendarState<Vec<CalendarEvent>>,
+    /// **HS6** — the whole Today view the hub answered with, or `None` before
+    /// `get_homeschool_today` has answered at all.
+    ///
+    /// The *whole* view rather than one boy's slice: the rail can move the
+    /// active profile between two frames without a refetch, and the panel has
+    /// to be able to say "No school plan for Simeon" the instant the cursor
+    /// lands on him. [`school`] does that slicing, purely.
+    pub homeschool: Option<HomeschoolTodayView>,
     pub state: TvState,
     /// Is the WebSocket up? Drives half of the disconnected badge (D8).
     pub connected: bool,
@@ -253,6 +314,7 @@ impl TvModel {
             routine: Vec::new(),
             tasks: Vec::new(),
             events: CalendarState::Loading,
+            homeschool: None,
             state: TvState::default(),
             connected: false,
             stale: false,
@@ -366,7 +428,7 @@ pub struct TvLayout {
     /// Profiles **plus** the trailing QR entry.
     pub rail_len: usize,
     /// Body length per panel, indexed by [`TvPanel::index`].
-    pub body_lens: [usize; 3],
+    pub body_lens: [usize; 4],
 }
 
 impl TvLayout {
@@ -382,12 +444,148 @@ impl TvLayout {
                 // television shows the board, it does not edit it, so the
                 // panel has nothing focusable.
                 0,
+                // HS6: the active boy's own rows. Each of the four state
+                // cards ("No school plan for Simeon", "No school today",
+                // "Year complete", the all-done celebration) is one
+                // unfocusable card, exactly like the calendar's three
+                // non-`Ready` arms.
+                school_rows(model).len(),
             ],
         }
     }
 
     pub fn body_len(&self, panel: TvPanel) -> usize {
         self.body_lens[panel.index()]
+    }
+}
+
+// ---------------------------------------------------------------------------
+// HS6 — the School panel, sliced for the active boy
+// ---------------------------------------------------------------------------
+
+/// What the School panel has to draw for the boy the rail has selected
+/// (`docs/homeschool/PLAN_HOMESCHOOL.md` H6, "TV `/tv`, panel 4 of 4").
+#[derive(Clone, PartialEq, Debug)]
+pub struct TvSchool {
+    /// The week number for the header (`🏠 School · Week 3`), when there is
+    /// an enrollment to take it from.
+    pub week: Option<i64>,
+    pub state: TvSchoolState,
+}
+
+/// The five things the School panel can be: the working day, and the four
+/// state cards H6 names.
+#[derive(Clone, PartialEq, Debug)]
+pub enum TvSchoolState {
+    /// `get_homeschool_today` has not answered yet — the same shape as the
+    /// routine panel's "Loading today's routine…".
+    Loading,
+    /// This boy has no enrollment (H6: "No school plan for Simeon").
+    NotEnrolled(String),
+    /// `paused`, or a day outside `school_days` (H2's "School's out ⚽").
+    NoSchoolToday,
+    /// `current_week > weeks` (H2, §4 default 9).
+    YearComplete,
+    /// Nothing left to do: the routine's 8/8-style celebration.
+    AllDone { done: u32, total: u32 },
+    /// His own work, in the two sections the remote walks.
+    Day {
+        due_today: Vec<DayItem>,
+        catch_up: Vec<DayItem>,
+        done: u32,
+        total: u32,
+    },
+}
+
+/// Only the boy's **own** rows reach the television.
+///
+/// W-16: a shared read-aloud is one book and one reader, so it is ticked on
+/// the phone by whoever is holding it — it renders under **Together** there
+/// and never on the kiosk, where two brothers would each tick it. An extra is
+/// per boy and per date by construction (§4 default 16), so it always stays.
+fn his_own(items: &[DayItem]) -> Vec<DayItem> {
+    items
+        .iter()
+        .filter(|item| match item {
+            DayItem::Lesson(lesson) => !lesson.shared,
+            DayItem::Extra(_) => true,
+        })
+        .cloned()
+        .collect()
+}
+
+/// Slice [`TvModel::homeschool`] down to the active boy (pure).
+pub fn school(model: &TvModel) -> TvSchool {
+    let loading = TvSchool {
+        week: None,
+        state: TvSchoolState::Loading,
+    };
+    let (Some(view), Some(profile)) = (model.homeschool.as_ref(), model.active_profile()) else {
+        return loading;
+    };
+
+    let Some((group, boy)) = view.groups.iter().find_map(|group| {
+        group
+            .boys
+            .iter()
+            .find(|boy| boy.user_id == profile.id)
+            .map(|boy| (group, boy))
+    }) else {
+        return TvSchool {
+            week: None,
+            state: TvSchoolState::NotEnrolled(profile.name.clone()),
+        };
+    };
+
+    let week = Some(group.week);
+    // Year complete first: on a Wednesday in June both this and "no school
+    // today" would be true of a finished year, and 🎉 is the truer sentence.
+    if group.year_complete {
+        return TvSchool {
+            week,
+            state: TvSchoolState::YearComplete,
+        };
+    }
+    if group.paused || !view.is_school_day {
+        return TvSchool {
+            week,
+            state: TvSchoolState::NoSchoolToday,
+        };
+    }
+
+    let due_today = his_own(&boy.due_today);
+    let catch_up = his_own(&boy.catch_up);
+    if due_today.is_empty() && catch_up.is_empty() {
+        return TvSchool {
+            week,
+            state: TvSchoolState::AllDone {
+                done: boy.done_count,
+                total: boy.total_count,
+            },
+        };
+    }
+
+    TvSchool {
+        week,
+        state: TvSchoolState::Day {
+            due_today,
+            catch_up,
+            done: boy.done_count,
+            total: boy.total_count,
+        },
+    }
+}
+
+/// Every focusable row of the School panel, in the order the remote walks
+/// them: today's work, then the week's catch-up.
+pub fn school_rows(model: &TvModel) -> Vec<DayItem> {
+    match school(model).state {
+        TvSchoolState::Day {
+            due_today,
+            catch_up,
+            ..
+        } => due_today.into_iter().chain(catch_up).collect(),
+        _ => Vec::new(),
     }
 }
 
@@ -442,6 +640,7 @@ pub fn body_order(model: &TvModel) -> Vec<FocusId> {
             })
             .unwrap_or_default(),
         TvPanel::Whiteboard => Vec::new(),
+        TvPanel::Homeschool => school_rows(model).iter().map(day_item_focus).collect(),
     }
 }
 
@@ -465,8 +664,11 @@ mod tests {
     fn panels_cycle_in_both_directions_and_wrap() {
         assert_eq!(TvPanel::Routine.next(), TvPanel::Calendar);
         assert_eq!(TvPanel::Calendar.next(), TvPanel::Whiteboard);
-        assert_eq!(TvPanel::Whiteboard.next(), TvPanel::Routine);
-        assert_eq!(TvPanel::Routine.previous(), TvPanel::Whiteboard);
+        assert_eq!(TvPanel::Whiteboard.next(), TvPanel::Homeschool);
+        assert_eq!(TvPanel::Homeschool.next(), TvPanel::Routine);
+        // HS6: School is one `Left` from the routine the kiosk boots on.
+        assert_eq!(TvPanel::Routine.previous(), TvPanel::Homeschool);
+        assert_eq!(TvPanel::Homeschool.previous(), TvPanel::Whiteboard);
     }
 
     #[test]
@@ -492,6 +694,37 @@ mod tests {
             FocusId::Event("google:AbC_12".into()).dom_id(),
             "tv-event-google-abc-12"
         );
+        assert_eq!(
+            FocusId::Lesson("s7-a0-2026-09-02".into()).dom_id(),
+            "tv-lesson-s7-a0-2026-09-02"
+        );
+        assert_eq!(FocusId::Extra(501).dom_id(), "tv-extra-501");
+    }
+
+    #[test]
+    fn a_lesson_key_is_the_unique_indexs_own_tuple() {
+        let mut occurrence = crate::client::components::tv::fixture::canonical_school()
+            .groups
+            .remove(0)
+            .boys
+            .remove(0)
+            .due_today
+            .into_iter()
+            .find_map(|item| match item {
+                DayItem::Lesson(lesson) => Some(lesson),
+                DayItem::Extra(_) => None,
+            })
+            .expect("the fixture day opens with a lesson");
+
+        occurrence.subject_id = 7;
+        occurrence.assignment_id = None;
+        occurrence.scheduled_date = "2026-09-02".to_string();
+        assert_eq!(lesson_key(&occurrence), "s7-a0-2026-09-02");
+
+        // A daily subject with no per-week row keys on 0, exactly as
+        // `IFNULL(assignment_id, 0)` does; a row with one keys on its id.
+        occurrence.assignment_id = Some(31);
+        assert_eq!(lesson_key(&occurrence), "s7-a31-2026-09-02");
     }
 
     #[test]

@@ -313,6 +313,9 @@ mod view_after_activity_tests {
             MaximizedView::Routine,
             MaximizedView::Calendar,
             MaximizedView::Whiteboard,
+            // HS6: the School panel is a view a phone can push, so activity
+            // must leave it alone exactly as it leaves the other three.
+            MaximizedView::Homeschool,
         ] {
             assert_eq!(
                 view_after_activity(view),

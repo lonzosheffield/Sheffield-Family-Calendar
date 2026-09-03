@@ -309,11 +309,14 @@ mod tests {
         assert_eq!(model.state.panel, TvPanel::Calendar);
         press(&mut model, TvKey::Right);
         assert_eq!(model.state.panel, TvPanel::Whiteboard);
+        // HS6 appended School as panel 4 of 4.
+        press(&mut model, TvKey::Right);
+        assert_eq!(model.state.panel, TvPanel::Homeschool);
         press(&mut model, TvKey::Right);
         assert_eq!(model.state.panel, TvPanel::Routine);
 
         press(&mut model, TvKey::Left);
-        assert_eq!(model.state.panel, TvPanel::Whiteboard);
+        assert_eq!(model.state.panel, TvPanel::Homeschool);
     }
 
     #[test]
@@ -413,6 +416,7 @@ mod tests {
     #[test]
     fn enter_on_the_whiteboard_panel_cannot_strand_the_cursor_in_an_empty_list() {
         let mut model = canonical_model();
+        press(&mut model, TvKey::Left); // school (HS6's panel 4 of 4)
         press(&mut model, TvKey::Left); // whiteboard
         assert_eq!(model.state.panel, TvPanel::Whiteboard);
         press(&mut model, TvKey::Enter);

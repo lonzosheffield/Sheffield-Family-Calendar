@@ -23,10 +23,17 @@ use dioxus::prelude::*;
 
 use crate::client::components::calendar::CalendarState;
 use crate::client::components::qr::qr_svg;
-use crate::shared::types::{routine_progress, CalendarEvent, CustomTaskView, RoutineItemView};
+use crate::shared::homeschool::{Category, LogStatus};
+use crate::shared::types::{
+    routine_progress, CalendarEvent, CustomTaskView, DayItem, ExtraTask, LessonOccurrence,
+    RoutineItemView,
+};
 
 use super::keymap::TV_KEYS;
-use super::model::{current_focus, FocusId, TvModel, TvOverlay, TvPanel, TvProfile};
+use super::model::{
+    current_focus, day_item_focus, lesson_key, school, FocusId, TvModel, TvOverlay, TvPanel,
+    TvProfile, TvSchoolState,
+};
 use super::staleness::status_line;
 use super::style::{
     focus_class, TV_BODY_LARGE, TV_BODY_TEXT, TV_CELEBRATION_SPIN_CLASS, TV_EYEBROW_CLASS,
@@ -34,7 +41,10 @@ use super::style::{
     TV_PANEL_HEADING_CLASS, TV_POSTER_CARD_CLASS, TV_PROFILE_BUTTON_CLASS, TV_PROFILE_DISC_CLASS,
     TV_PROFILE_RAIL_CLASS, TV_STAMP_CLASS, TV_WORDMARK_DISPLAY_CLASS, TV_WORDMARK_QUIET_CLASS,
 };
-use crate::client::components::glyphs::{ball_glyph, icon_glyph, ADD_PHONE_GLYPH, ROUTINE_GLYPH};
+use crate::client::components::glyphs::{
+    ball_glyph, category_glyph, icon_glyph, subject_glyph, ADD_PHONE_GLYPH, EXTRA_TASK_GLYPH,
+    HOMESCHOOL_GLYPH, ROUTINE_GLYPH,
+};
 use crate::client::components::palette::{best_ink_on, Rgb, SHEFFIELD_DARK};
 
 /// Every full-screen container on the kiosk: **the poster's blue frame**, the
@@ -131,14 +141,27 @@ fn header(model: &TvModel) -> Element {
         .unwrap_or_else(|| "Sheffield Family".to_string());
     let routine = model.state.panel == TvPanel::Routine;
     let celebrating = routine && routine_complete(model);
+    // HS6 / H6: the School panel's own header is `🏠 School · Week 3`. The
+    // week comes from the boy's enrollment, so a boy with none (or a hub that
+    // has not answered yet) gets the bare panel title rather than `Week 0`.
+    let school_glyph = (model.state.panel == TvPanel::Homeschool).then_some(HOMESCHOOL_GLYPH);
+    let heading = match (model.state.panel, school(model).week) {
+        (TvPanel::Homeschool, Some(week)) => {
+            format!("{} · Week {week}", TvPanel::Homeschool.title())
+        }
+        (panel, _) => panel.title().to_string(),
+    };
 
     rsx! {
         header { class: "flex shrink-0 items-end justify-between gap-10",
             if routine {
                 {wordmark(model.state.panel.title(), &profile, celebrating)}
             } else {
-                h1 { class: "{TV_HEADING_LARGE} {TV_PANEL_HEADING_CLASS}",
-                    "{model.state.panel.title()}"
+                h1 { class: "{TV_HEADING_LARGE} {TV_PANEL_HEADING_CLASS} flex min-w-0 items-baseline gap-5",
+                    if let Some(glyph) = school_glyph {
+                        span { class: "shrink-0 select-none", "aria-hidden": "true", "{glyph}" }
+                    }
+                    span { class: "truncate", "{heading}" }
                 }
             }
             div { class: "flex shrink-0 items-center gap-6",
@@ -296,6 +319,7 @@ fn panel_body(model: &TvModel, focused: Option<&FocusId>, board: Element) -> Ele
         TvPanel::Routine => routine_panel(model, focused),
         TvPanel::Calendar => calendar_panel(model, focused),
         TvPanel::Whiteboard => whiteboard_panel(board),
+        TvPanel::Homeschool => homeschool_panel(model, focused),
     }
 }
 
@@ -531,6 +555,215 @@ fn whiteboard_panel(board: Element) -> Element {
             div {
                 class: "min-h-0 flex-1 overflow-hidden rounded-3xl bg-white ring-4 ring-sheffield-light",
                 {board}
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// HS6 — the School panel (`docs/homeschool/PLAN_HOMESCHOOL.md` H6)
+// ---------------------------------------------------------------------------
+
+/// The year's last week, ticked off (H2 / §4 default 9).
+///
+/// A private literal rather than a `glyphs.rs` constant because `glyphs.rs` is
+/// not HS6's to edit; `docs/HANDOFF.md` asks for it to move there.
+const YEAR_COMPLETE_GLYPH: &str = "🎉";
+
+/// A section label in tracked caps — the one place on the kiosk besides the
+/// wordmark's eyebrow where capitals and tracking are allowed (§2.6), and no
+/// new type size (H6: "`TV_BODY_TEXT font-bold tracking-[0.35em] uppercase
+/// text-slate-800`, no new size").
+///
+/// Written as a `<p>`, not an `<h2>`: 30 px is under the 44 px every heading
+/// on the kiosk must clear, and a label that is not a heading should not
+/// claim to be one.
+fn section_label(text: &str) -> Element {
+    rsx! {
+        li { class: "shrink-0 list-none",
+            p { class: "{TV_BODY_TEXT} font-bold tracking-[0.35em] uppercase text-slate-800", "{text}" }
+        }
+    }
+}
+
+/// One sentence, centred in the panel — the shape the calendar's three
+/// non-`Ready` arms already use, so a state card never becomes focusable.
+fn school_card(text: String) -> Element {
+    rsx! {
+        p { id: "tv-school-state", class: "{TV_HEADING} text-slate-600", "{text}" }
+    }
+}
+
+fn homeschool_panel(model: &TvModel, focused: Option<&FocusId>) -> Element {
+    match school(model).state {
+        TvSchoolState::Loading => school_card("Loading today's school…".to_string()),
+        // H6: "not enrolled → `No school plan for Simeon`".
+        TvSchoolState::NotEnrolled(name) => school_card(format!("No school plan for {name}")),
+        // H2: paused, or a day outside his school days.
+        TvSchoolState::NoSchoolToday => school_card(format!("No school today {}", ball_glyph(1))),
+        TvSchoolState::YearComplete => school_card(format!("Year complete {YEAR_COMPLETE_GLYPH}")),
+        // The routine's 8/8 chip, in the School panel's words (§2.4).
+        TvSchoolState::AllDone { done, total } => rsx! {
+            div { class: "flex shrink-0 items-center gap-8",
+                p {
+                    id: "tv-school-count",
+                    class: "{TV_HEADING} shrink-0 rounded-full bg-sheffield-sun px-8 py-1 font-poster font-bold text-slate-800",
+                    "{done} / {total}"
+                    span { class: "select-none", "aria-hidden": "true", " {ROUTINE_GLYPH}" }
+                }
+                p { class: "{TV_HEADING} text-slate-800", "School work all done!" }
+            }
+        },
+        TvSchoolState::Day {
+            due_today,
+            catch_up,
+            ..
+        } => rsx! {
+            ul { class: "flex min-h-0 flex-1 flex-col gap-5 overflow-auto",
+                if !due_today.is_empty() {
+                    {section_label("TODAY")}
+                }
+                for item in due_today.into_iter() {
+                    li { key: "{day_item_focus(&item).dom_id()}",
+                        {day_row(&item, focused)}
+                    }
+                }
+                if !catch_up.is_empty() {
+                    {section_label("STILL TO FINISH")}
+                }
+                for item in catch_up.into_iter() {
+                    li { key: "{day_item_focus(&item).dom_id()}",
+                        {day_row(&item, focused)}
+                    }
+                }
+            }
+        },
+    }
+}
+
+fn day_row(item: &DayItem, focused: Option<&FocusId>) -> Element {
+    let is_focused = focused == Some(&day_item_focus(item));
+    match item {
+        DayItem::Lesson(lesson) => lesson_row(lesson, is_focused),
+        DayItem::Extra(extra) => extra_row(extra, is_focused),
+    }
+}
+
+/// The row's second line: the week's text, the narration prompt every reading
+/// carries (W-5), and which part of a split this is (H3 rule 5).
+fn lesson_detail(lesson: &LessonOccurrence) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(text) = lesson
+        .text
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+    {
+        parts.push(text.to_string());
+    }
+    if let Some((k, n)) = lesson.part {
+        if n > 1 {
+            parts.push(if k <= 1 {
+                format!("part {k} of {n}")
+            } else {
+                format!("continue · {k} of {n}")
+            });
+        }
+    }
+    // Narration is a prompt, never state (§1): every reading ends with the
+    // child telling it back.
+    if lesson.category == Category::Reading {
+        parts.push("(then tell it back)".to_string());
+    }
+    parts.join(" · ")
+}
+
+/// Ground and ink for a row that has been logged, in the routine row's own
+/// two declared pairs.
+fn row_fill(logged: bool) -> &'static str {
+    if logged {
+        "bg-sheffield-light/25 text-slate-800"
+    } else {
+        "bg-white text-slate-800"
+    }
+}
+
+/// A skipped occurrence is not a done one: the box stays empty and the row
+/// says why, on the same accent chip the phone's catch-up tag uses.
+fn skipped_chip() -> Element {
+    rsx! {
+        span {
+            class: "{TV_BODY_TEXT} shrink-0 rounded-full bg-sheffield-accent px-6 py-2 font-bold text-slate-800",
+            "Skipped"
+        }
+    }
+}
+
+fn lesson_row(lesson: &LessonOccurrence, focused: bool) -> Element {
+    let id = FocusId::Lesson(lesson_key(lesson)).dom_id();
+    let ring = focus_class(focused);
+    let done = lesson.status == Some(LogStatus::Done);
+    let fill = row_fill(lesson.status.is_some());
+    let glyph = subject_glyph(lesson.icon_name.as_deref(), lesson.category.as_str());
+    let detail = lesson_detail(lesson);
+
+    rsx! {
+        button {
+            id: "{id}",
+            "data-tv-focus": "lesson",
+            "aria-pressed": if done { "true" } else { "false" },
+            class: "{ring} {fill} flex items-center gap-8 px-8 py-6 shadow-lg",
+            {row_glyph(glyph)}
+            {checkbox(done)}
+            span { class: "min-w-0 flex-1",
+                span { class: "{TV_BODY_LARGE} font-bold", "{lesson.title}" }
+                if !detail.is_empty() {
+                    span { class: "{TV_BODY_TEXT} text-slate-600", " {detail}" }
+                }
+            }
+            if lesson.status == Some(LogStatus::Skipped) {
+                {skipped_chip()}
+            }
+        }
+    }
+}
+
+/// A parent-added task, in the same list and with the same anatomy — the pin
+/// rides in front of the category glyph so the boy can see at a glance which
+/// rows his mother added (H8, §4 default 6: he may tick it, never make one).
+fn extra_row(extra: &ExtraTask, focused: bool) -> Element {
+    let id = FocusId::Extra(extra.id).dom_id();
+    let ring = focus_class(focused);
+    let done = extra.status == Some(LogStatus::Done);
+    let fill = row_fill(extra.status.is_some());
+    let glyph = format!(
+        "{EXTRA_TASK_GLYPH}{}",
+        category_glyph(extra.category.as_str())
+    );
+    let text = extra
+        .text
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .unwrap_or_default()
+        .to_string();
+
+    rsx! {
+        button {
+            id: "{id}",
+            "data-tv-focus": "extra",
+            "aria-pressed": if done { "true" } else { "false" },
+            class: "{ring} {fill} flex items-center gap-8 px-8 py-6 shadow-lg",
+            {row_glyph(&glyph)}
+            {checkbox(done)}
+            span { class: "min-w-0 flex-1",
+                span { class: "{TV_BODY_LARGE} font-bold", "{extra.title}" }
+                if !text.is_empty() {
+                    span { class: "{TV_BODY_TEXT} text-slate-600", " {text}" }
+                }
+            }
+            if extra.status == Some(LogStatus::Skipped) {
+                {skipped_chip()}
             }
         }
     }

@@ -28,13 +28,17 @@
 use dioxus::prelude::*;
 
 use family_calendar::client::components::calendar::CalendarState;
-use family_calendar::client::components::glyphs::icon_glyph;
-use family_calendar::client::components::tv::fixture::{canonical_model, CANONICAL_ROUTINE};
+use family_calendar::client::components::glyphs::{icon_glyph, EXTRA_TASK_GLYPH, HOMESCHOOL_GLYPH};
+use family_calendar::client::components::tv::fixture::{
+    canonical_model, canonical_school, CANONICAL_EXTRA_ID, CANONICAL_ROUTINE,
+    CANONICAL_SCHOOL_LESSON_ROWS,
+};
 use family_calendar::client::components::tv::keymap::{
     keys_debug_enabled, KeyLogEntry, TvKey, TV_KEYS,
 };
 use family_calendar::client::components::tv::model::{
-    current_focus, focus_order, FocusId, TvLayout, TvModel, TvOverlay, TvPanel, TvState, TvZone,
+    body_order, current_focus, focus_order, lesson_key, FocusId, TvLayout, TvModel, TvOverlay,
+    TvPanel, TvState, TvZone,
 };
 use family_calendar::client::components::tv::nav::{
     on_key_for, presses_to_reach, scroll_target, TvAction,
@@ -51,7 +55,7 @@ use family_calendar::client::components::tv::surface::TvSurface;
 use family_calendar::server::db::SHEFFIELD_MORNING_ROUTINE;
 use family_calendar::server::health::STALENESS_THRESHOLD;
 use family_calendar::shared::types::{
-    CalendarEvent, MaximizedView, ServerMessage, FAMILY_PROFILE_COUNT,
+    CalendarEvent, DayItem, LessonOccurrence, MaximizedView, ServerMessage, FAMILY_PROFILE_COUNT,
 };
 
 // ---------------------------------------------------------------------------
@@ -387,6 +391,7 @@ fn t2_1_b_set_view_reaches_every_panel_including_a_phones_restore() {
     for (view, expected) in [
         (MaximizedView::Calendar, "calendar"),
         (MaximizedView::Whiteboard, "whiteboard"),
+        (MaximizedView::Homeschool, "homeschool"),
         (MaximizedView::Routine, "routine"),
         // "Restore" on the phone puts the television back on the routine.
         (MaximizedView::None, "routine"),
@@ -440,9 +445,12 @@ fn t2_1_d_every_key_in_the_d8_map_has_a_defined_transition() {
         on_key_for(&model, TvKey::Right).state.panel,
         TvPanel::Calendar
     );
+    // HS6 appended School as panel 4 of 4, so `Left` from the routine now
+    // wraps onto it rather than onto the whiteboard — which is the point:
+    // School is one press from where the kiosk boots.
     assert_eq!(
         on_key_for(&model, TvKey::Left).state.panel,
-        TvPanel::Whiteboard
+        TvPanel::Homeschool
     );
 
     // Enter: into the focused profile's list.
@@ -1132,9 +1140,13 @@ fn d4_3_d_e_f_the_poster_did_not_move_the_focus_order_or_the_type_scale() {
         .into_iter()
         .flat_map(|(_, ids)| ids)
         .collect();
+    // 15 routine + 8 calendar + 5 whiteboard + 17 School (5 rail + HS6's 12
+    // body rows) + 1 overlay. The School section is HS6's own count bump, the
+    // one kind of edit `PLAN_HOMESCHOOL.md` §3 calls mechanical; every other
+    // assertion in this test is D4.3's, unchanged.
     assert_eq!(
         ids.len(),
-        15 + 8 + 5 + 1,
+        15 + 8 + 5 + 17 + 1,
         "the golden focus order changed length: {ids:?}"
     );
     for (section, model) in golden_models() {
@@ -1430,4 +1442,456 @@ fn qd_08_every_focus_move_asks_to_be_scrolled_into_view() {
         None,
         "a press that moved nothing still asked for a scroll"
     );
+}
+
+// ---------------------------------------------------------------------------
+// HS6 — the School panel (`docs/homeschool/PLAN_HOMESCHOOL.md` §3 HS6, H6)
+// ---------------------------------------------------------------------------
+//
+// Eight assertions, lettered as the task letters them. They are written
+// against the same canonical kiosk every other test in this file uses —
+// `fixture::canonical_model()` now carries `fixture::canonical_school()`, a
+// Wednesday with **11 lesson rows and 1 extra** (D-3) and one *shared*
+// read-aloud that the television must refuse to draw (W-16).
+
+/// The canonical kiosk, showing the School panel.
+fn school_model() -> TvModel {
+    let mut model = canonical_model();
+    model.state.panel = TvPanel::Homeschool;
+    model
+}
+
+/// (a) The golden file gained exactly one section, in exactly one place, and
+/// the four that were already there did not move a byte.
+#[test]
+fn hs6_a_the_golden_file_gains_one_school_section_and_moves_no_other() {
+    let sections = golden_focus_order();
+    let names: Vec<&str> = sections.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(
+        names,
+        vec![
+            "panel:routine",
+            "panel:calendar",
+            "panel:whiteboard",
+            "panel:homeschool",
+            "overlay:join-qr",
+        ],
+        "[panel:homeschool] must land after [panel:whiteboard] and before \
+         [overlay:join-qr]"
+    );
+
+    // The four pre-HS6 sections, quoted from the file as HS6 found it. If any
+    // of them ever changes, this fails here as well as in `t2_1_a_...`.
+    let by_name = |name: &str| -> Vec<String> {
+        sections
+            .iter()
+            .find(|(section, _)| section == name)
+            .unwrap_or_else(|| panic!("no [{name}] section"))
+            .1
+            .clone()
+    };
+    const RAIL: [&str; 5] = [
+        "tv-profile-1",
+        "tv-profile-2",
+        "tv-profile-3",
+        "tv-profile-4",
+        "tv-join-qr",
+    ];
+    let rail: Vec<String> = RAIL.iter().map(|id| (*id).to_string()).collect();
+
+    let mut routine = rail.clone();
+    routine.extend((1..=8).map(|n| format!("tv-routine-{n}")));
+    routine.push("tv-task-41".to_string());
+    routine.push("tv-task-42".to_string());
+    assert_eq!(by_name("panel:routine"), routine);
+
+    let mut calendar = rail.clone();
+    calendar.extend(
+        [
+            "tv-event-local-1",
+            "tv-event-google-abc-12",
+            "tv-event-local-2",
+        ]
+        .iter()
+        .map(|id| (*id).to_string()),
+    );
+    assert_eq!(by_name("panel:calendar"), calendar);
+    assert_eq!(by_name("panel:whiteboard"), rail);
+    assert_eq!(by_name("overlay:join-qr"), vec!["tv-overlay-close"]);
+
+    // ...and the new one is the rail plus the fixture's twelve body rows.
+    let school = by_name("panel:homeschool");
+    assert_eq!(school[..5], rail[..]);
+    let body = &school[5..];
+    assert_eq!(body.len(), CANONICAL_SCHOOL_LESSON_ROWS + 1, "{body:?}");
+    assert_eq!(
+        body.iter()
+            .filter(|id| id.starts_with("tv-lesson-"))
+            .count(),
+        CANONICAL_SCHOOL_LESSON_ROWS
+    );
+    assert_eq!(
+        body.iter().filter(|id| *id == "tv-extra-501").count(),
+        1,
+        "the parent-added task is not in the focus order"
+    );
+    // Keyed by identity, never by index (D-2): every id carries its subject,
+    // its assignment (0 for the untitled daily) and its date.
+    for id in body.iter().filter(|id| id.starts_with("tv-lesson-")) {
+        let key = id.strip_prefix("tv-lesson-").expect("a lesson id");
+        assert!(key.starts_with('s'), "{id} is not keyed on its subject");
+        assert!(key.contains("-a"), "{id} carries no assignment slot");
+        assert!(
+            key.ends_with("2026-09-01") || key.ends_with("2026-09-02"),
+            "{id} is not keyed on its scheduled date"
+        );
+    }
+}
+
+/// (b) Every row of the School panel — the extra included — is within twelve
+/// presses of a freshly booted kiosk.
+#[test]
+fn hs6_b_every_school_row_is_within_twelve_presses_of_the_profile_selector() {
+    let model = school_model();
+    let body: Vec<FocusId> = focus_order(&model)
+        .into_iter()
+        .filter(|focus| matches!(focus, FocusId::Lesson(_) | FocusId::Extra(_)))
+        .collect();
+    assert_eq!(
+        body.len(),
+        CANONICAL_SCHOOL_LESSON_ROWS + 1,
+        "the fixture day is not D-3's 11 lessons and 1 extra"
+    );
+    assert!(
+        body.contains(&FocusId::Extra(CANONICAL_EXTRA_ID)),
+        "the extra is not focusable"
+    );
+
+    // The search starts where a booted kiosk starts: the routine panel, the
+    // cursor on the first boy — School is one `Left` wrap away.
+    let start = TvState::initial();
+    assert_eq!(start.panel, TvPanel::Routine);
+    assert_eq!(start.zone, TvZone::ProfileRail);
+
+    let mut worst = 0;
+    for target in &body {
+        let presses = presses_to_reach(&model, start, target)
+            .unwrap_or_else(|| panic!("{} is unreachable by remote", target.dom_id()));
+        assert!(presses <= 12, "{} took {presses} presses", target.dom_id());
+        worst = worst.max(presses);
+    }
+    // HS6 budgets a worst case of 8 (one `Left` wrap onto School, one `Enter`
+    // into the list, then at most six wrapping `Down`s over twelve rows). The
+    // real search does better — `Enter` into the routine list, `Up` to wrap
+    // near its end and *then* `Left`, which carries the body cursor across —
+    // so the assertion is the budget, not the number, and a regression that
+    // pushed any row past 8 would still fail here long before the 12 of (b).
+    assert!(worst <= 8, "the worst-case School row took {worst} presses");
+    println!("worst-case School row: {worst} key presses (HS6 budget 8, contract 12)");
+}
+
+/// (c) The sentence the whole kiosk exists to make true, for school work:
+/// **a boy ticks every one of his lessons with the remote alone.**
+#[test]
+fn hs6_c_a_boy_can_tick_every_lesson_with_the_remote_alone() {
+    let mut model = school_model();
+    let expected: Vec<FocusId> = focus_order(&model)
+        .into_iter()
+        .filter(|focus| matches!(focus, FocusId::Lesson(_) | FocusId::Extra(_)))
+        .collect();
+
+    let mut toggled = Vec::new();
+    let mut presses = 0;
+
+    // Enter on the rail steps into the list.
+    let outcome = on_key_for(&model, TvKey::Enter);
+    model.state = outcome.state;
+    presses += 1;
+    assert_eq!(model.state.zone, TvZone::PanelBody);
+
+    for _ in 0..expected.len() {
+        let outcome = on_key_for(&model, TvKey::Enter);
+        model.state = outcome.state;
+        presses += 1;
+        if let TvAction::Activate(focus) = outcome.action {
+            toggled.push(focus);
+        }
+        let outcome = on_key_for(&model, TvKey::Down);
+        model.state = outcome.state;
+        presses += 1;
+    }
+
+    assert_eq!(toggled, expected);
+    println!("full School day completed in {presses} key presses");
+}
+
+/// (d) A phone's `SetView` reaches the panel, and each state card a boy can
+/// be handed instead of a list renders as itself.
+#[test]
+fn hs6_d_a_phone_can_steer_the_television_onto_the_school_panel() {
+    let mut model = canonical_model();
+    let changed = model.apply_server_message(&ServerMessage::SetView {
+        view: MaximizedView::Homeschool,
+    });
+    assert!(changed, "SetView Homeschool must move the kiosk");
+    let html = render(&model);
+    assert_eq!(panel_attr(&html), "homeschool");
+    assert!(
+        html.contains("School · Week 3"),
+        "no School header:\n{html}"
+    );
+    assert!(html.contains(HOMESCHOOL_GLYPH), "no house glyph:\n{html}");
+
+    // A boy with no enrollment is told so by name, and his panel has nothing
+    // to focus — exactly like the calendar's three non-`Ready` arms.
+    let mut simeon = model.clone();
+    simeon.apply_server_message(&ServerMessage::SetActiveProfile { user_id: 3 });
+    let html = render(&simeon);
+    assert!(
+        html.contains("No school plan for Simeon"),
+        "an unenrolled boy is not told he has no plan:\n{html}"
+    );
+    assert_eq!(TvLayout::of(&simeon).body_len(TvPanel::Homeschool), 0);
+    assert!(rendered_focus_ids(&html)
+        .iter()
+        .all(|id| !id.starts_with("tv-lesson-") && !id.starts_with("tv-extra-")));
+
+    // Paused (H2's "School's out"): no rows, one sentence.
+    let mut paused = model.clone();
+    paused
+        .homeschool
+        .as_mut()
+        .expect("the fixture carries a school view")
+        .groups[0]
+        .paused = true;
+    let html = render(&paused);
+    assert!(html.contains("No school today"), "{html}");
+    assert_eq!(TvLayout::of(&paused).body_len(TvPanel::Homeschool), 0);
+
+    // Year complete (§4 default 9): 🎉, not an error.
+    let mut finished = model.clone();
+    finished
+        .homeschool
+        .as_mut()
+        .expect("the fixture carries a school view")
+        .groups[0]
+        .year_complete = true;
+    let html = render(&finished);
+    assert!(html.contains("Year complete"), "{html}");
+    assert_eq!(TvLayout::of(&finished).body_len(TvPanel::Homeschool), 0);
+
+    // Everything ticked: the routine's 8/8-style celebration chip.
+    let mut done = model.clone();
+    {
+        let boy = &mut done
+            .homeschool
+            .as_mut()
+            .expect("the fixture carries a school view")
+            .groups[0]
+            .boys[0];
+        boy.due_today.clear();
+        boy.catch_up.clear();
+        boy.done_count = 12;
+        boy.total_count = 12;
+    }
+    let html = render(&done);
+    assert!(html.contains("School work all done!"), "{html}");
+    assert!(html.contains("12 / 12"), "{html}");
+    assert_eq!(TvLayout::of(&done).body_len(TvPanel::Homeschool), 0);
+
+    // Before the hub has answered at all, the panel says so rather than
+    // borrowing the empty state's words (W3's distinction).
+    let mut loading = model.clone();
+    loading.homeschool = None;
+    let html = render(&loading);
+    assert!(html.contains("Loading today"), "{html}");
+    assert!(!html.contains("No school plan"), "{html}");
+}
+
+/// (e) The panel landed green *against* the standing contracts rather than
+/// around them: the four-size type scale, the overscan band, no pointer-only
+/// affordance, and the declared section-heading treatment.
+#[test]
+fn hs6_e_the_school_panel_did_not_move_the_type_scale_or_the_overscan() {
+    assert_eq!(
+        golden_type_scale(),
+        vec![
+            ("text-3xl".to_string(), 30),
+            ("text-4xl".to_string(), 36),
+            ("text-5xl".to_string(), 48),
+            ("text-6xl".to_string(), 60),
+        ],
+        "the School panel moved the type-scale golden"
+    );
+
+    let html = render(&school_model());
+    let root = tags(&html)
+        .into_iter()
+        .find(|tag| tag.attr("data-tv-surface").is_some())
+        .expect("no surface root");
+    assert!(root.classes().contains(&TV_OVERSCAN_CLASS));
+    assert!(!html.contains(concat!("hover", ":")));
+
+    // The section labels are the declared treatment, at no new size.
+    let label = tags(&html)
+        .into_iter()
+        .find(|tag| tag.name == "p" && tag.classes().contains(&"tracking-[0.35em]"))
+        .expect("the School panel renders no tracked-caps section label");
+    for token in ["text-3xl", "font-bold", "uppercase", "text-slate-800"] {
+        assert!(
+            label.classes().contains(&token),
+            "the section label is missing `{token}`: {:?}",
+            label.classes()
+        );
+    }
+    assert!(html.contains("TODAY"), "no TODAY section label:\n{html}");
+    assert!(
+        html.contains("STILL TO FINISH"),
+        "no catch-up section label:\n{html}"
+    );
+}
+
+/// (f) Left/Right wraps over four panels.
+#[test]
+fn hs6_f_left_and_right_wrap_over_the_four_panels() {
+    assert_eq!(TvPanel::ALL.len(), 4);
+    let mut model = canonical_model();
+
+    // Right, all the way round.
+    for expected in [
+        TvPanel::Calendar,
+        TvPanel::Whiteboard,
+        TvPanel::Homeschool,
+        TvPanel::Routine,
+    ] {
+        model.state = on_key_for(&model, TvKey::Right).state;
+        assert_eq!(model.state.panel, expected);
+    }
+    // ...and Left, back the other way.
+    for expected in [
+        TvPanel::Homeschool,
+        TvPanel::Whiteboard,
+        TvPanel::Calendar,
+        TvPanel::Routine,
+    ] {
+        model.state = on_key_for(&model, TvKey::Left).state;
+        assert_eq!(model.state.panel, expected);
+    }
+}
+
+/// The view -> slug list: every `MaximizedView` a phone can push resolves to
+/// exactly one panel, and every panel round-trips through its own view.
+#[test]
+fn hs6_every_maximized_view_resolves_to_one_panel_slug() {
+    for (view, slug) in [
+        (MaximizedView::None, "routine"),
+        (MaximizedView::Routine, "routine"),
+        (MaximizedView::Calendar, "calendar"),
+        (MaximizedView::Whiteboard, "whiteboard"),
+        // T2.7: the screensaver is an overlay, not a panel.
+        (MaximizedView::Screensaver, "routine"),
+        (MaximizedView::Homeschool, "homeschool"),
+    ] {
+        assert_eq!(TvPanel::from_view(view).slug(), slug, "{view:?}");
+    }
+    for panel in TvPanel::ALL {
+        assert_eq!(TvPanel::from_view(panel.to_view()), panel, "{panel:?}");
+    }
+    let slugs: Vec<&str> = TvPanel::ALL.iter().map(|panel| panel.slug()).collect();
+    assert_eq!(
+        slugs,
+        vec!["routine", "calendar", "whiteboard", "homeschool"]
+    );
+    let titles: Vec<&str> = TvPanel::ALL.iter().map(|panel| panel.title()).collect();
+    assert_eq!(
+        titles,
+        vec!["Morning Routine", "Today", "Whiteboard", "School"]
+    );
+}
+
+/// (g) A shared read-aloud is ticked on the phone by whoever holds the book
+/// (W-16): the television must not draw it and the remote must not reach it.
+#[test]
+fn hs6_g_the_school_panel_never_renders_a_shared_subjects_row() {
+    let view = canonical_school();
+    let boy = &view.groups[0].boys[0];
+    let shared: Vec<LessonOccurrence> = boy
+        .due_today
+        .iter()
+        .chain(boy.catch_up.iter())
+        .filter_map(|item| match item {
+            DayItem::Lesson(lesson) if lesson.shared => Some(lesson.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !shared.is_empty(),
+        "the fixture has no shared row, so this test proves nothing"
+    );
+
+    let model = school_model();
+    let html = render(&model);
+    let ids = rendered_focus_ids(&html);
+    for lesson in &shared {
+        assert!(
+            !html.contains(&lesson.title),
+            "the shared subject `{}` reached the television:\n{html}",
+            lesson.title
+        );
+        let id = FocusId::Lesson(lesson_key(lesson)).dom_id();
+        assert!(!ids.contains(&id), "{id} is focusable on the kiosk");
+    }
+    assert_eq!(
+        TvLayout::of(&model).body_len(TvPanel::Homeschool),
+        CANONICAL_SCHOOL_LESSON_ROWS + 1
+    );
+}
+
+/// (h) The parent-added task: pinned, focusable by its row id, and toggled by
+/// `Enter` through `toggle_extra`.
+#[test]
+fn hs6_h_a_parent_added_task_is_pinned_and_tickable_from_the_remote() {
+    let mut model = school_model();
+    let html = render(&model);
+
+    let pinned = tags(&html)
+        .into_iter()
+        .find(|tag| tag.attr("id") == Some("tv-extra-501"))
+        .expect("the extra did not render");
+    assert_eq!(pinned.attr("data-tv-focus"), Some("extra"));
+    assert_eq!(pinned.attr("aria-pressed"), Some("false"));
+    assert!(
+        html.contains(EXTRA_TASK_GLYPH),
+        "the extra lost its pin:\n{html}"
+    );
+    assert!(html.contains("Tidy the schoolroom"), "{html}");
+
+    // Walk to it with the remote and press Enter.
+    let target = FocusId::Extra(CANONICAL_EXTRA_ID);
+    let index = body_order(&model)
+        .iter()
+        .position(|focus| *focus == target)
+        .expect("the extra is not in the body order");
+    model.state.zone = TvZone::PanelBody;
+    model.state.body_index = index;
+    assert_eq!(current_focus(&model), Some(target.clone()));
+    assert_eq!(
+        on_key_for(&model, TvKey::Enter).action,
+        TvAction::Activate(target)
+    );
+
+    // ...and the shell dispatches the two School activations to the two
+    // server functions HS4 wrote for them, on the bus version HS3 added.
+    let (path, shell) = tv_sources()
+        .into_iter()
+        .find(|(path, _)| path.ends_with("shell.rs"))
+        .expect("no tv/shell.rs");
+    for needle in [
+        "toggle_extra(",
+        "toggle_lesson(",
+        "get_homeschool_today(",
+        "homeschool_version",
+    ] {
+        assert!(shell.contains(needle), "{path} never calls `{needle}`");
+    }
 }
