@@ -71,7 +71,7 @@ is a defect the QA loop (T3.5) is still owed; a residual is a deliberate
   own committed synthetic curriculum (mirroring `tests/fixtures/curricula/sample-year.toml`)
   loaded into a scratch directory rather than the real AO file.
 
-## R-4. The full suite is flaky under parallel load (pre-existing; four distinct failures catalogued)
+## R-4. The full suite is flaky under parallel load (pre-existing; six distinct failures catalogued)
 
 - **Origin:** HANDOFF H-HS3-5 (wave A), the HS5-qa1 / HS7-qa1 notes at the QA round 1 close,
   and HS1-qa2's five-run study at the QA round 2 close (reproduced on `main` @ `0889f16`, so
@@ -81,8 +81,10 @@ is a defect the QA loop (T3.5) is still owed; a residual is a deliberate
 - **What ships:** the eight Boss baselines of the two QA closes (2026-09-03) were all green
   after wiping `%TEMP%\familyhub-*` first — the round 2 close found 41 leftover scratch dirs
   (HS1-qa2 found 3478 the day before), each a pid-keyed directory some earlier run never
-  removed (`838e62f` wipes them on reuse, not on exit).
-- **The four failures seen, with the mechanism and the fix each wants:**
+  removed (`838e62f` wipes them on reuse, not on exit). The round-4 fix close (2026-09-03) found
+  48 before its first run and ~23 left behind by *each* full run after that; item 2 below fired
+  once in the first gate run of that close and was green on the immediate re-run.
+- **The failures seen, with the mechanism and the fix each wants:**
   1. `realtime_tests::t1_2_7_a_client_reconnects_and_resnapshots_within_thirty_seconds`
      ("the snapshot replays the stroke drawn before the restart, left: 149, right: 1") and
      its sibling `loop_tests::t2_6_phone_drives_the_tv_across_a_server_restart`: every test
@@ -101,6 +103,15 @@ is a defect the QA loop (T3.5) is still owed; a residual is a deliberate
      serialise that test; owner HS1.
   4. Housekeeping: the leftover `%TEMP%\familyhub-*` directories above. Fix: remove the
      scratch dir in a `Drop` guard (or a documented pre-run wipe in `docs/DEV_WINDOWS.md`).
+  5. `realtime_tests::t1_2_3_eight_clients_at_thirty_messages_per_second_for_thirty_seconds`
+     (`tests/realtime_tests.rs:572`, the `p99 < 250 ms` broadcast-latency budget): failed once on
+     HS3-qa4's box in a run started straight after a 14-minute cold clippy build, green on the next
+     run (round-4 fix wave, 2026-09-03). A wall-clock budget on a loaded box; same housekeeping
+     note as item 4 — wipe the scratch dirs, never run two builds at once; owner T1.2.
+  6. `service_tests::a_startup_bind_failure_is_logged_within_five_seconds`: a 5 s wall-clock
+     budget with no headroom — failed once at 5.103 s during HS5-qa4's full run, passed alone
+     (`5 passed`) and on the re-run (round-4 fix wave, 2026-09-03). Fix: widen the budget or
+     measure the log line rather than the process exit; owner T1.6 (service host).
 - **Why it is residual:** none of the four is a product defect — each is test isolation on a
   shared box — and none failed in any Boss baseline once the scratch dirs were wiped. Fixing
   them touches four binaries owned by four different tasks; the QA loop's DONE gate (two
@@ -329,6 +340,8 @@ recorded below as R-11.
 
 ## R-11. Today's inline text edit un-pins a per-week `days` override (Low, HS5 → Boss DTO amendment)
 
+**Status (Boss, round-4 fix merge, 2026-09-03): CLOSED.** QH4-03 concurred with the solution below verbatim and HS5-qa4 (`0dd31b7`) landed it: `LessonOccurrence.days: Option<Vec<Weekday>>` (`#[serde(default)]`, appended last), set in `sched::occurrence()`, carried by both of `today.rs`'s inline edit handlers; the `hs5_qa3` guard lost its Today-side allowance and `homeschool_tests::hs4_i_a_pinned_rows_inline_text_edit_from_today_leaves_its_days_untouched` is the storage proof. `PLAN_HOMESCHOOL.md` §2's DTO listing carries the amendment.
+
 - **Origin:** `docs/HANDOFF.md` H-HS5-qa3b-1 (HS5-qa3b, `dacb1af`); `src/client/components/homeschool/today.rs`
   (`TogetherRow` and `DayItemRow` `EditAssignment` calls); `src/shared/types.rs` `LessonOccurrence`.
 - **What ships:** `SchoolAction::EditAssignment` carries `detail` **and** `days` because
@@ -366,6 +379,10 @@ recorded below as R-11.
   stalled harness job resumed and ran 14:48-14:58 under the Boss's 14:49-14:55 baseline), which
   the workflow forbids for exactly this reason. Every single-suite run on record is green. Treat
   the flake as unconfirmed until it is seen with one suite running.
+- **Seen again (round-4 fix wave, 2026-09-03):** HS3-qa4's second full run failed at
+  `tests/homeschool_db_tests.rs:1123` and passed alone (`26 passed`) and on the next full run — but
+  two sibling worktrees (HS4-qa4, HS5-qa4) were building and testing on the same box at the time,
+  so the confounder stands. The Boss's four single-suite gate runs at the fix merge were all green.
 - **Why it is residual:** the assertion it guards (H5: "a bad file is logged at WARN with its
   path") holds every time it is inspected by hand and the loader code has one unconditional
   `warn!` on that path. The loss is in the test's capture, not the product; nobody ships on it.

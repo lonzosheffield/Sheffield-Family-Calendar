@@ -3506,3 +3506,16 @@ both are reproducible only under a loaded box, never on a re-run.
    paging file is too small for this operation to complete. (os error 1455)`. Not a test failure —
    Windows ran out of commit charge linking several test binaries at once. `-j 4` builds the same
    tree without it, which may be worth a line in `docs/DEV_WINDOWS.md`.
+
+## Boss, round-4 fix close (2026-09-03) — HS3-qa4 / HS4-qa4 / HS5-qa4 merged
+
+Squash-merged in that order as `b977736`, `7525f9f`, `0dd31b7`; every gate green after each
+(fmt, both clippy gates, `cargo test --features server`: 33 `test result:` lines, 631 passed =
+the 628 round-4 baseline + `hs3_i_…holds_finish_week_back`, `hs4_h_…holds_finish_week_back`,
+`hs4_i_a_pinned_rows_inline_text_edit_from_today_leaves_its_days_untouched`). HANDOFF asks applied:
+H-HS5-qa4-1 — `docs/RESIDUAL.md` R-11 marked CLOSED; H-HS5-qa4-3 and HS3-qa4's two run-level
+notes — R-4 gains items 5 (`realtime_tests::t1_2_3_…` p99 budget) and 6 (`service_tests::…within_five_seconds`
+5 s budget), R-12 records the fix-wave sighting with its confounder (three worktrees on one box), and
+`docs/DEV_WINDOWS.md` gains the `E0786` / paging-file troubleshooting entry (`-j 4`). The first gate run
+of this close hit R-4 item 2 (`backup_tests::restore_drill_…`, `assert!(!db_path.exists())`) once; green
+on the immediate re-run. Nothing else in the three HANDOFF sections asks for action.

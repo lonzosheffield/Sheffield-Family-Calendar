@@ -350,6 +350,12 @@ It cannot — that was the defect (G23) the absolute-path config closed, and
 `Get-NetTCPConnection -LocalPort 8080` names the owner. An installed `FamilyHub`
 service on the same box is the usual culprit — `family-hub.exe stop` before `dx serve`.
 
+### `error[E0786]` / `The paging file is too small` (os error 1455) during `cargo test`
+`found invalid metadata files for crate family_calendar … failed to mmap … The paging file is too
+small for this operation to complete` while `cargo test --features server` links its ~33 test
+binaries is Windows running out of commit charge, not a code error (seen 2026-09-03 at the default
+job count). Re-run with `cargo test --features server -j 4`, or raise the page file.
+
 ### Slow builds
 The first build will compile all dependencies. Subsequent builds are faster. On this machine (14 cores), expect 4–7 minutes for a clean build.
 
