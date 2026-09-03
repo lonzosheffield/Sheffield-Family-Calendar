@@ -650,6 +650,14 @@ fn hs5_b_today_renders_the_fixture_the_way_h6_lays_it_out() {
             "a signed-out phone must not offer `{parent_only}`: {html}"
         );
     }
+
+    // QH5-03: the fixture's finishable group is finishable because it is the
+    // last school day, not because the week is finished — nothing in it is
+    // logged. H2's "done" sentence may only appear when it is true.
+    assert!(
+        !html.contains("done — start week"),
+        "nothing in the fixture is complete, so nothing may be called done (QH5-03): {html}"
+    );
 }
 
 #[test]
@@ -1395,7 +1403,48 @@ fn hs5_qa3_the_year_cell_sheet_edits_the_days_of_one_week_not_of_every_week() {
         !signed_out.contains("Save days") && !signed_out.contains("This week&#39;s text"),
         "a signed-out phone is offered no plan edit at all: {signed_out}"
     );
+    // QH5-02: the prefill above is the row's **resolved** days, so the text
+    // control must not write it back as a pin — a text-only edit of a floating
+    // split row would otherwise pin it to MW and lose its `part 1 of 2` /
+    // `continue · 2 of 2` labels for good. The days control still sends the
+    // control's value; the text control sends what the row stores.
+    let year = school_source("year.rs");
+    assert!(
+        one_line(&year)
+            .contains("let stored_days = occurrence.days.as_deref().map(days_to_string);"),
+        "QH5-02: the text Save must write back the stored override: {year}"
+    );
+    assert!(one_line(&year).contains("days: stored_days.clone(),"));
+    assert!(
+        !year.contains("pinned_days("),
+        "a text edit must never pin a floating row (QH5-02)"
+    );
     println!("year cell sheet: 1 days control per entry, prefilled MW, labelled for week 2");
+    println!("the text Save sends days: stored_days.clone(); pinned_days() is gone");
+}
+
+/// QH5-01: no surface may recover an assignment row's `ordinal` from its rank
+/// in date order. A row pinned by `assignments.days` is dealt to its own days
+/// and takes no part in rule 5's spread, so a later-ordinal row can fall first
+/// in the week — and the next edit on that subject then overwrote the *other*
+/// row through `upsert_assignment`'s `(subject, week, ordinal)` key, replacing
+/// its text and pinning it too. `LessonOccurrence` now carries the row's own
+/// ordinal, exactly as it carries `days` (QH4-03).
+#[test]
+fn hs5_qa5_the_ordinal_an_edit_writes_to_is_the_rows_own() {
+    for file in ["today.rs", "year.rs"] {
+        let source = school_source(file);
+        for banned in ["assignment_ordinals(", "row_ordinals(", "edit_ordinal_for("] {
+            assert!(
+                !source.contains(banned),
+                "{file} must not infer an ordinal from date order (QH5-01): {banned}"
+            );
+        }
+    }
+    assert!(one_line(&school_source("today.rs"))
+        .contains("let edit_ordinal = Some(occurrence.ordinal);"));
+    assert!(one_line(&school_source("year.rs")).contains("ordinal: occurrence.ordinal,"));
+    println!("today.rs and year.rs key an edit on occurrence.ordinal, not on a rank in date order");
 }
 
 // ---------------------------------------------------------------------------

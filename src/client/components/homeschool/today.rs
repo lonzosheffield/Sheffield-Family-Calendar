@@ -22,8 +22,6 @@
 //! `h3 text-lg font-bold text-sheffield-dark` pattern; no new type size and no
 //! new palette pair appear on this surface.
 
-use std::collections::BTreeMap;
-
 use dioxus::prelude::*;
 
 use crate::client::components::glyphs;
@@ -34,7 +32,7 @@ use crate::client::components::homeschool::SchoolAction;
 use crate::client::components::mobile::session;
 use crate::shared::homeschool::{days_to_string, LogStatus, TermNoteKind};
 use crate::shared::types::{
-    BoyToday, DayItem, HomeschoolTodayView, LessonOccurrence, TogetherGroup, TogetherOccurrence,
+    BoyToday, DayItem, HomeschoolTodayView, TogetherGroup, TogetherOccurrence,
 };
 
 /// The phone's section heading, unchanged from the Routine tab's own.
@@ -93,70 +91,28 @@ pub fn BoyChips(
     }
 }
 
-/// Every day item of one group, oldest first — the order the occurrence rule
-/// itself produces.
-fn group_items(group: &TogetherGroup) -> Vec<&DayItem> {
-    let mut items: Vec<&DayItem> = group
+/// H2: "complete" is every occurrence and every in-span extra logged — the rows
+/// `header_chip_text` sums (H3 rule 8 + rule 10), so the chip and the nudge
+/// cannot disagree.
+pub fn week_is_complete(group: &TogetherGroup) -> bool {
+    let logged: u32 = group
         .boys
         .iter()
-        .flat_map(|boy| boy.done.iter().chain(&boy.catch_up).chain(&boy.due_today))
-        .collect();
-    items.sort_by(|a, b| item_date(a).cmp(item_date(b)));
-    items
+        .map(|boy| boy.done_count + boy.skipped_count)
+        .sum();
+    let total: u32 = group.boys.iter().map(|boy| boy.total_count).sum();
+    total > 0 && logged >= total
 }
 
-fn item_date(item: &DayItem) -> &str {
-    match item {
-        DayItem::Lesson(lesson) => &lesson.scheduled_date,
-        DayItem::Extra(extra) => &extra.scheduled_date,
-    }
-}
-
-/// Recover each assignment row's `ordinal` from the occurrences on screen.
-///
-/// `LessonOccurrence` carries the row's **id**, not its ordinal, and
-/// `upsert_assignment` is keyed on `(subject, week, ordinal)`. H3 rule 2 deals
-/// a subject's rows out in ordinal order and `occurrences()` sorts by date, so
-/// the rank of an assignment id in date order *is* its ordinal — for every row
-/// the parent can actually see. A row further into the week that has not been
-/// dealt out yet is simply not offered an edit here; the Year view's cell
-/// sheet, which holds the whole week at once, edits it exactly.
-fn assignment_ordinals(group: &TogetherGroup) -> BTreeMap<(i64, i64), i64> {
-    let mut seen: BTreeMap<i64, Vec<i64>> = BTreeMap::new();
-    let mut lessons: Vec<&LessonOccurrence> =
-        group.together.iter().map(|slot| &slot.occurrence).collect();
-    for item in group_items(group) {
-        if let DayItem::Lesson(lesson) = item {
-            lessons.push(lesson);
-        }
-    }
-    lessons.sort_by(|a, b| a.scheduled_date.cmp(&b.scheduled_date));
-
-    let mut out = BTreeMap::new();
-    for lesson in lessons {
-        let Some(assignment_id) = lesson.assignment_id else {
-            continue;
-        };
-        let rows = seen.entry(lesson.subject_id).or_default();
-        if !rows.contains(&assignment_id) {
-            rows.push(assignment_id);
-        }
-        let ordinal = rows
-            .iter()
-            .position(|candidate| *candidate == assignment_id)
-            .unwrap_or(0) as i64
-            + 1;
-        out.insert((lesson.subject_id, assignment_id), ordinal);
-    }
-    out
-}
-
-/// H2's nudge line, or `None` when the week needs no nudging.
+/// H2's nudge line, or `None` when the week needs no nudging. Three sentences,
+/// in H2's order: complete; a fortnight on one week; the last school day
+/// reached with work still open (Finish week is offered then too, but the week
+/// is not "done").
 pub fn nudge_line(group: &TogetherGroup) -> Option<String> {
     if group.paused || group.year_complete {
         return None;
     }
-    if group.can_finish_week {
+    if week_is_complete(group) {
         return Some(format!(
             "Week {} done — start week {}?",
             group.week,
@@ -167,6 +123,12 @@ pub fn nudge_line(group: &TogetherGroup) -> Option<String> {
         return Some(format!(
             "You've been on week {} for {} days",
             group.week, group.days_on_week
+        ));
+    }
+    if group.can_finish_week {
+        return Some(format!(
+            "Last school day of week {} — finish it now, or carry the rest into next week",
+            group.week
         ));
     }
     None
@@ -242,7 +204,6 @@ fn GroupBlock(
     on_action: EventHandler<SchoolAction>,
 ) -> Element {
     let parent = session::is_parent();
-    let ordinals = assignment_ordinals(&group);
     let week = group.week;
     let curriculum_id = group.curriculum_id;
     let user_ids: Vec<i64> = group.boys.iter().map(|boy| boy.user_id).collect();
@@ -382,7 +343,6 @@ fn GroupBlock(
                                     week,
                                     date: date.clone(),
                                     parent,
-                                    ordinals: ordinals.clone(),
                                     on_action,
                                 }
                             }
@@ -396,7 +356,6 @@ fn GroupBlock(
                         boy,
                         week,
                         parent,
-                        ordinals: ordinals.clone(),
                         on_action,
                     }
                 }
@@ -419,7 +378,6 @@ fn TogetherRow(
     week: i64,
     date: String,
     parent: bool,
-    ordinals: BTreeMap<(i64, i64), i64>,
     on_action: EventHandler<SchoolAction>,
 ) -> Element {
     let occurrence = slot.occurrence.clone();
@@ -440,7 +398,7 @@ fn TogetherRow(
     // H4: a partly-done shared row shows "2 of 3" rather than a tick.
     let covering = (slot.user_ids.len() > 1 && slot.done_user_ids.len() < slot.user_ids.len())
         .then(|| format!("{} of {}", slot.done_user_ids.len(), slot.user_ids.len()));
-    let edit_ordinal = edit_ordinal_for(&ordinals, subject_id, assignment_id);
+    let edit_ordinal = Some(occurrence.ordinal);
 
     rsx! {
         LessonRow {
@@ -530,26 +488,12 @@ pub fn together_row_actions(
         .collect()
 }
 
-fn edit_ordinal_for(
-    ordinals: &BTreeMap<(i64, i64), i64>,
-    subject_id: i64,
-    assignment_id: Option<i64>,
-) -> Option<i64> {
-    match assignment_id {
-        // H6 item 6's named case: a daily subject with no row this week —
-        // "Math: lesson 14" — where the edit *creates* ordinal 1.
-        None => Some(1),
-        Some(assignment_id) => ordinals.get(&(subject_id, assignment_id)).copied(),
-    }
-}
-
 /// One boy's own (non-shared) work, under his name.
 #[component]
 fn BoyBlock(
     boy: BoyToday,
     week: i64,
     parent: bool,
-    ordinals: BTreeMap<(i64, i64), i64>,
     on_action: EventHandler<SchoolAction>,
 ) -> Element {
     let user_id = boy.user_id;
@@ -594,7 +538,6 @@ fn BoyBlock(
                             week,
                             parent,
                             catch_up: false,
-                            ordinals: ordinals.clone(),
                             on_action,
                         }
                     }
@@ -606,7 +549,6 @@ fn BoyBlock(
                             week,
                             parent,
                             catch_up: true,
-                            ordinals: ordinals.clone(),
                             on_action,
                         }
                     }
@@ -650,7 +592,6 @@ pub fn DayItemRow(
     week: i64,
     parent: bool,
     catch_up: bool,
-    ordinals: BTreeMap<(i64, i64), i64>,
     on_action: EventHandler<SchoolAction>,
 ) -> Element {
     match item {
@@ -666,7 +607,7 @@ pub fn DayItemRow(
             let detail = occurrence.detail.clone();
             let days = occurrence.days.as_deref().map(days_to_string);
             let note_status = occurrence.status.unwrap_or(LogStatus::Done);
-            let edit_ordinal = edit_ordinal_for(&ordinals, subject_id, assignment_id);
+            let edit_ordinal = Some(occurrence.ordinal);
             rsx! {
                 LessonRow {
                     occurrence: occurrence.clone(),
@@ -834,6 +775,7 @@ pub const TAB_GLYPH: &str = glyphs::HOMESCHOOL_GLYPH;
 mod tests {
     use super::*;
     use crate::shared::homeschool::{Category, TermNote, Weekday};
+    use crate::shared::types::LessonOccurrence;
 
     fn group(week: i64, can_finish_week: bool, days_on_week: u32) -> TogetherGroup {
         TogetherGroup {
@@ -872,9 +814,23 @@ mod tests {
 
     #[test]
     fn a_complete_week_nudges_towards_the_next_one() {
+        // QH5-03: "done" is every occurrence and every in-span extra logged,
+        // not merely `can_finish_week` — which H2's last-school-day clause
+        // makes true on Friday with work still outstanding.
+        let mut done = group(2, true, 3);
+        done.boys[0].done_count = 10;
+        done.boys[0].skipped_count = 1;
         assert_eq!(
-            nudge_line(&group(2, true, 3)).as_deref(),
+            nudge_line(&done).as_deref(),
             Some("Week 2 done — start week 3?")
+        );
+    }
+
+    #[test]
+    fn the_last_school_day_offers_finish_week_without_calling_the_week_done() {
+        assert_eq!(
+            nudge_line(&group(2, true, 4)).as_deref(),
+            Some("Last school day of week 2 — finish it now, or carry the rest into next week")
         );
     }
 
@@ -883,6 +839,11 @@ mod tests {
         assert_eq!(
             nudge_line(&group(3, false, 15)).as_deref(),
             Some("You've been on week 3 for 15 days")
+        );
+        assert_eq!(
+            nudge_line(&group(3, true, 15)).as_deref(),
+            Some("You've been on week 3 for 15 days"),
+            "QH5-03: the fortnight nudge outranks the last-school-day one"
         );
         // Thirteen days is not yet a nudge: H2's threshold is 14.
         assert_eq!(nudge_line(&group(3, false, 13)), None);
@@ -919,6 +880,7 @@ mod tests {
                 status: None,
                 note: None,
                 days: None,
+                ordinal: 1,
             },
             user_ids,
             done_user_ids: Vec::new(),

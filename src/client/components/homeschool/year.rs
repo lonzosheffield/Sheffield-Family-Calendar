@@ -21,8 +21,6 @@
 //! is at least 44 px tall, which is the white team's W-9 concern answered with
 //! a sheet instead of in-cell editing.
 
-use std::collections::BTreeMap;
-
 use dioxus::prelude::*;
 
 use crate::client::components::glyphs;
@@ -51,29 +49,6 @@ pub fn short_cell_text(text: &str) -> String {
         out.push('…');
     }
     out
-}
-
-/// Recover each assignment row's `ordinal` from one grid row's cells.
-///
-/// Exact here, unlike the Today list's best effort: a grid row holds the
-/// whole week at once, and H3 rule 2 deals a subject's rows out in ordinal
-/// order, so first appearance across the cells *is* the ordinal.
-pub fn row_ordinals(row: &WeekGridRow) -> BTreeMap<i64, i64> {
-    let mut order: Vec<i64> = Vec::new();
-    for cell in &row.cells {
-        for occurrence in cell {
-            if let Some(assignment_id) = occurrence.assignment_id {
-                if !order.contains(&assignment_id) {
-                    order.push(assignment_id);
-                }
-            }
-        }
-    }
-    order
-        .into_iter()
-        .enumerate()
-        .map(|(index, assignment_id)| (assignment_id, index as i64 + 1))
-        .collect()
 }
 
 /// The days **one row of one week** is dealt out on, as a `days` string.
@@ -295,7 +270,6 @@ pub fn YearCellSheet(
     on_close: EventHandler<()>,
 ) -> Element {
     let parent = session::is_parent();
-    let ordinals = row_ordinals(&row);
     let cell: Vec<LessonOccurrence> = row.cells.get(column).cloned().unwrap_or_default();
     let subject_id = row.subject_id;
 
@@ -324,10 +298,7 @@ pub fn YearCellSheet(
                         week,
                         dated,
                         parent,
-                        ordinal: occurrence
-                            .assignment_id
-                            .and_then(|id| ordinals.get(&id).copied())
-                            .unwrap_or(1),
+                        ordinal: occurrence.ordinal,
                         entry_days: days_to_string(
                             &entry_days(&row, &days, occurrence.assignment_id),
                         ),
@@ -362,6 +333,10 @@ fn CellEntry(
     let mut draft = use_signal(|| occurrence.text.clone().unwrap_or_default());
     let mut days = use_signal(|| entry_days.clone());
     let detail = occurrence.detail.clone();
+    // QH5-02: the text control writes back the days the row *stores* (`None` =
+    // inherit the subject's), never the resolved days the control displays —
+    // otherwise a text edit pins a floating row and drops its part labels.
+    let stored_days = occurrence.days.as_deref().map(days_to_string);
     let title = occurrence.title.clone();
     let body = occurrence
         .text
@@ -390,6 +365,7 @@ fn CellEntry(
                         class: "shrink-0 rounded-xl bg-sheffield-dark px-3 py-2 text-sm font-bold text-white",
                         onclick: {
                             let detail = detail.clone();
+                            let stored_days = stored_days.clone();
                             move |_| {
                                 on_action
                                     .call(SchoolAction::EditAssignment {
@@ -398,7 +374,7 @@ fn CellEntry(
                                         ordinal,
                                         text: draft(),
                                         detail: detail.clone(),
-                                        days: pinned_days(&days()),
+                                        days: stored_days.clone(),
                                     })
                             }
                         },
@@ -442,13 +418,6 @@ fn CellEntry(
     }
 }
 
-/// A days control's value as `upsert_assignment` wants it: `None` (inherit the
-/// subject's days) rather than an empty string the schema's `GLOB` would take.
-fn pinned_days(letters: &str) -> Option<String> {
-    let trimmed = letters.trim();
-    (!trimmed.is_empty()).then(|| trimmed.to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -473,6 +442,7 @@ mod tests {
             status: None,
             note: None,
             days: None,
+            ordinal: 1,
         }
     }
 
@@ -491,38 +461,6 @@ mod tests {
         let text = "é".repeat(19);
         let short = short_cell_text(&text);
         assert_eq!(short.chars().count(), YEAR_CELL_CHARS + 1);
-    }
-
-    #[test]
-    fn ordinals_come_from_first_appearance_across_the_week() {
-        let row = WeekGridRow {
-            subject_id: 5,
-            title: "Twice Told".into(),
-            category: Category::Reading,
-            shared: true,
-            cells: vec![
-                Vec::new(),
-                vec![occurrence(Some(51), "one"), occurrence(Some(52), "two")],
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-            ],
-        };
-        let ordinals = row_ordinals(&row);
-        assert_eq!(ordinals.get(&51), Some(&1));
-        assert_eq!(ordinals.get(&52), Some(&2));
-    }
-
-    #[test]
-    fn a_daily_row_with_no_assignment_rows_has_no_ordinals_to_recover() {
-        let row = WeekGridRow {
-            subject_id: 1,
-            title: "Sums".into(),
-            category: Category::Daily,
-            shared: false,
-            cells: vec![vec![occurrence(None, "")], Vec::new()],
-        };
-        assert!(row_ordinals(&row).is_empty());
     }
 
     #[test]
@@ -558,14 +496,6 @@ mod tests {
         // A row the grid does not hold falls back to the grid's own columns
         // rather than to nothing, which the server would reject.
         assert_eq!(days_to_string(&entry_days(&row, &days, Some(99))), "MTWRF");
-    }
-
-    #[test]
-    fn an_empty_days_control_inherits_the_subject_rather_than_writing_nonsense() {
-        assert_eq!(pinned_days("MW"), Some("MW".to_string()));
-        assert_eq!(pinned_days(" MW "), Some("MW".to_string()));
-        assert_eq!(pinned_days("   "), None);
-        assert_eq!(pinned_days(""), None);
     }
 
     fn fixture_days(letters: &str) -> Vec<Weekday> {
