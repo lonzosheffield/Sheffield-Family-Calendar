@@ -1390,7 +1390,7 @@ $ curl http://127.0.0.1:8095/health           # before the TV tab
  "uptime_seconds":5,"migration_version":5,"curricula":1}
 ```
 
-`curricula: 1`, `migration_version: 5`. `POST /api/get_enrollments` (HTTPS origin, `curl -k`) answered four rows — user 1 `enrolled: true, curriculum_name: "Ambleside Online Year 1", current_week: 1, weeks: 36, week_started_on: "2026-09-03", school_days: "MTWRF", paused: false`; users 2–4 `enrolled: false`. `POST /api/list_curricula` → one row, `slug: "ao-year-1", weeks: 36, term_weeks: 12, subject_count: 30`.
+`curricula: 1`, `migration_version: 5`. `POST /api/get_enrollments` (HTTPS origin, `curl -k`) answered four rows — user 1 `enrolled: true, curriculum_name: "<the AO file's name>", current_week: 1, weeks: 36, week_started_on: "2026-09-03", school_days: "MTWRF", paused: false`; users 2–4 `enrolled: false`. `POST /api/list_curricula` → one row, `slug: "ao-year-1", weeks: 36, term_weeks: 12, subject_count: 30`.
 
 ### `/tv` at 1920×1080 → School (one `Left` press)
 
@@ -1398,7 +1398,7 @@ Window resized to 1920×1080 via `resize_window` (captures report ~1522–1564 p
 
 - Header: house glyph + **"School · Week 1"** in the T3.4 blue, "updated HH:MM" top-right.
 - Left rail unchanged: Isaiah selected with the yellow focus ring, Nathaniel (truncated "Nathan…" at this width — the same truncation the routine panel shows), Simeon, scroll for Ezekiel.
-- Right: a small-caps **TODAY** heading and the boy's own rows as large checkbox cards with a category glyph, title only (no AO text on the kiosk beyond the subject name), scrollable. `get_page_text` lists **6 rows**: Math, Handwriting / Copywork, Phonics / Reading practice, Recitation, Foreign language, Physical activity — i.e. the six *unshared* items of the ten `get_homeschool_today` reports as `due_today` for Isaiah on a Thursday; the other four are shared read-alouds, which W-16 keeps off the television (`his_own` in `src/client/components/tv/model.rs`) and shows under **Together** on the phone. No catch-up section (week 1, day 1: `catch_up: []`).
+- Right: a small-caps **TODAY** heading and the boy's own rows as large checkbox cards with a category glyph, title only (no AO text on the kiosk beyond the subject name), scrollable. `get_page_text` lists **6 rows**: the six *unshared* daily rows (Math first) — i.e. the six *unshared* items of the ten `get_homeschool_today` reports as `due_today` for Isaiah on a Thursday; the other four are shared read-alouds, which W-16 keeps off the television (`his_own` in `src/client/components/tv/model.rs`) and shows under **Together** on the phone. No catch-up section (week 1, day 1: `catch_up: []`).
 - Bottom: the four panel tabs (Morning Routine / Today / Whiteboard / School), **School** filled.
 - Overscan margin visible on all four sides; nothing clipped; type readable at 10-ft scale.
 
