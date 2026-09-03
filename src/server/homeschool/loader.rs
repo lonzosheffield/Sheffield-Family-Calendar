@@ -1076,6 +1076,17 @@ pub async fn import_curriculum(
 ) -> Result<String, String> {
     let curriculum = read_curriculum(source_path).map_err(|err| err.to_string())?;
 
+    // Open the database *before* the copy (QA_HS_ROUND_1 QH1-08). Opening the
+    // pool runs the boot loader over `curricula_dir()`, so if the copy landed
+    // first the boot loader would insert this curriculum's rows and the
+    // command's own `insert_missing` would then honestly report "0 subjects, 0
+    // assignments, 0 term notes inserted" on a first import. Running the boot
+    // loader against the directory as it was keeps the printed summary true.
+    // A rejected file still never gets here: `read_curriculum` fails above.
+    let pool = crate::server::db::pool()
+        .await
+        .map_err(|err| format!("could not open the database: {err}"))?;
+
     let dir = config.curricula_dir();
     std::fs::create_dir_all(&dir)
         .map_err(|err| format!("could not create {}: {err}", dir.display()))?;
@@ -1093,10 +1104,6 @@ pub async fn import_curriculum(
             )
         })?;
     }
-
-    let pool = crate::server::db::pool()
-        .await
-        .map_err(|err| format!("could not open the database: {err}"))?;
 
     let summary = if replace {
         let report = replace_curriculum(pool, &curriculum)

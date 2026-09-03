@@ -341,6 +341,13 @@ fn import_curriculum_copies_a_valid_file_into_the_curricula_directory() {
         stdout.contains("sample-year"),
         "the summary must name the curriculum: {stdout}"
     );
+    // QH1-08: the counts must be the ones this command inserted. Opening the
+    // pool runs the boot loader over the curricula directory, so a copy made
+    // before the pool opens would leave the command reporting all zeroes.
+    assert!(
+        stdout.contains("7 subjects, 9 assignments, 3 term notes inserted"),
+        "the summary must report the rows this import inserted, not zeroes: {stdout}"
+    );
     assert!(
         data_dir
             .join("curricula")
