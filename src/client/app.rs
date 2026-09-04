@@ -2,6 +2,7 @@ use dioxus::prelude::*;
 
 use crate::client::components::mobile::MobileShell;
 use crate::client::components::screensaver::Screensaver;
+use crate::client::components::tv::style::TV_VIEWPORT_META;
 use crate::client::components::tv::TvShell;
 use crate::client::realtime::use_realtime_provider;
 use crate::shared::types::MaximizedView;
@@ -76,10 +77,12 @@ pub fn App() -> Element {
             content: "black-translucent",
         }
         document::Meta { name: "apple-mobile-web-app-title", content: "Family Hub" }
-        document::Meta {
-            name: "viewport",
-            content: "width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no",
-        }
+        // The viewport meta is deliberately **not** here (B-1 / TV1). A single
+        // global `width=device-width` is what made the kiosk paint at 2× and
+        // clip on the Insignia, whose `wm size` override + density 320 give
+        // the WebView a 960 CSS px `device-width` while every pixel of `/tv`
+        // is designed for 1920. Each surface now declares its own — see
+        // [`KioskDashboard`] and [`Mobile`].
         document::Meta { name: "theme-color", content: "#2672B3" }
         Router::<Route> {}
     }
@@ -109,9 +112,35 @@ pub fn Tv() -> Element {
 /// [`TvShell`](crate::client::components::tv::TvShell) instead.
 /// The old `components::dashboard` was deleted at the wave 2-b close once
 /// neither `/tv` nor `/m` (T2.2's `MobileShell`) rendered it.
+///
+/// # The viewport meta lives here (`docs/BACKLOG.md` B-1)
+///
+/// `document::Meta` is not tied to the root component: it is a hook that
+/// calls `create_meta` on whichever `Document` provider is in context, and on
+/// the server that provider **collects** every meta rendered in the first SSR
+/// frame into the page's `<head>` — whichever component rendered it, as long
+/// as it rendered outside a suspense boundary. `TvShell`'s resources do not
+/// suspend, so a meta placed here lands in the head of `/tv` **and** `/`
+/// (both routes render this component) and nowhere else. The Router renders
+/// exactly one route, so a page carries exactly one Dioxus-emitted viewport
+/// meta. Hydration is safe by construction: the server writes a marker for
+/// every head element it rendered, and the wasm document skips re-creating
+/// those — the same path the `apple-mobile-web-app-*` metas already take.
+/// See `docs/design/PLAN_TV_VIEWPORT.md` §1.1.
+///
+/// **On the `dx build` bundle there will be two** (plan §1.2): the bundle's
+/// own `public/index.html` template head carries
+/// `width=device-width, initial-scale=1` ahead of everything Dioxus collects.
+/// Chromium applies viewport metas in document order, each replacing the
+/// previous description, so **the last one wins** — ours. `curl`ing the
+/// production `/tv` and seeing two tags is expected; the one that counts is
+/// the last. The integration tests boot the router without a template
+/// (`IndexHtml::ssr_only()`, empty head), so there each route carries exactly
+/// one — which is what `tests/router_tests.rs` asserts.
 #[component]
 fn KioskDashboard() -> Element {
     rsx! {
+        document::Meta { name: "viewport", content: TV_VIEWPORT_META }
         div { class: "relative h-full w-full bg-sheffield-paper font-display text-slate-800",
             TvShell {}
             Screensaver {}
@@ -132,9 +161,25 @@ pub fn MobileShort() -> Element {
 /// "Remote") — which still renders `Routine { compact: true }` as its first tab, so
 /// `tests/http_tests.rs::http_mobile_serves_routine_only_view` (a protected
 /// T0.3 assertion, `docs/HANDOFF.md` H-2) keeps holding.
+///
+/// # The phone's viewport meta lives here (B-1 / TV1)
+///
+/// Byte-identical to the global meta this replaced, so `/m` and `/mobile`
+/// (both render this component) see no change at all: `device-width` because
+/// a phone's own width *is* the design width, `viewport-fit=cover` because
+/// `mobile/mod.rs` positions the tab bar with
+/// `pb-[env(safe-area-inset-bottom)]` and that inset is zero without it. The
+/// manifest `Link`, the `apple-*` metas and `theme-color` stay global in
+/// [`App`] — only the viewport is route-scoped. See `KioskDashboard` above
+/// for how Dioxus collects a route-scoped meta into the head, and
+/// `docs/design/PLAN_TV_VIEWPORT.md` §1.1–§1.2.
 #[component]
 pub fn Mobile() -> Element {
     rsx! {
+        document::Meta {
+            name: "viewport",
+            content: "width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no",
+        }
         MobileShell {}
     }
 }

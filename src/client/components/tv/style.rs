@@ -172,9 +172,40 @@ pub const TV_CELEBRATION_SPIN_CLASS: &str =
 // page behind its back.
 
 /// The kiosk's declared render size (`docs/device.toml`).
+///
+/// **B-1 / TV1:** this is no longer an *assumption* about the television. It
+/// is a *precondition the page enforces* — [`TV_VIEWPORT_META`] pins the `/tv`
+/// layout viewport at exactly this width, so the budget below is computed for
+/// the viewport the WebView actually lays out in, on any panel.
 pub const TV_RENDER_WIDTH_PX: u32 = 1920;
 /// The kiosk's declared render size (`docs/device.toml`).
 pub const TV_RENDER_HEIGHT_PX: u32 = 1080;
+
+/// The `/tv` viewport meta (`docs/BACKLOG.md` **B-1**,
+/// `docs/design/PLAN_TV_VIEWPORT.md` §1.1–§1.3).
+///
+/// The Insignia runs a `wm size 1920x1080` override at density 320 (2 dppx),
+/// so a `width=device-width` meta gives the WebView a **960** CSS px viewport
+/// and the whole kiosk paints at 2× and clips. `width=1920` makes any WebView
+/// lay the kiosk out at the width [`tv_rail_budget_px`] and every design-QA
+/// measurement are computed for, then scale the result to fit its panel
+/// (0.5 on this television, 0.667 on a 1280-px stick, 1 on a real 1920 panel).
+/// The 1920 × 1080 precondition of the rail budget is therefore **enforced**
+/// by this constant rather than assumed from `docs/device.toml`.
+///
+/// * **No `initial-scale`, on purpose.** `initial-scale=1` beside
+///   `width=1920` would show a 960-px window onto a 1920-px page — a
+///   horizontally scrolling kiosk. Left out, Chromium computes the scale that
+///   fits the layout width into the screen, which adapts to every panel.
+/// * **No `viewport-fit=cover`**: it only moves notch/home-indicator insets,
+///   and a television has neither. The phone route keeps it.
+/// * **`user-scalable=no` stays**: it pins minimum = maximum = initial scale,
+///   so the kiosk cannot drift off the fitted scale.
+///
+/// The unit test `the_tv_viewport_meta_pins_the_render_width` below pins this
+/// string to [`TV_RENDER_WIDTH_PX`]; `tests/router_tests.rs` proves `/tv`
+/// actually serves it and that the phone routes never see it.
+pub const TV_VIEWPORT_META: &str = "width=1920, user-scalable=no";
 
 /// One step of Tailwind's spacing scale: `p-8` is 8 × 4 px = 32 px.
 pub const TV_SPACING_STEP_PX: u32 = 4;
@@ -370,6 +401,32 @@ mod tests {
             + 2 * 6 * TV_SPACING_STEP_PX;
         assert_eq!(before_budget, 580);
         assert!(before_needed > before_budget, "{before_needed}");
+    }
+
+    /// B-1 / TV1: the viewport meta and the render width the rail budget is
+    /// computed from are the same number. If someone moves
+    /// `TV_RENDER_WIDTH_PX` without moving the meta (or the other way
+    /// round), the television lays out at one width and the budget above
+    /// describes another — which is exactly the bug B-1 was.
+    #[test]
+    fn the_tv_viewport_meta_pins_the_render_width() {
+        assert!(
+            TV_VIEWPORT_META.contains(&format!("width={TV_RENDER_WIDTH_PX}")),
+            "the /tv viewport meta must pin the layout viewport at the width \
+             the rail budget is computed for, got {TV_VIEWPORT_META:?}"
+        );
+        // No `initial-scale`: with `width=1920` it would show a 960-px window
+        // onto a 1920-px page instead of scaling the page to fit (§1.3).
+        assert!(
+            !TV_VIEWPORT_META.contains("initial-scale"),
+            "the /tv viewport meta must not set initial-scale, got {TV_VIEWPORT_META:?}"
+        );
+        // No `device-width`: that is the phone's meta, and on the television
+        // it is the 960-px viewport that clipped the kiosk.
+        assert!(
+            !TV_VIEWPORT_META.contains("device-width"),
+            "the /tv viewport meta must not fall back to device-width, got {TV_VIEWPORT_META:?}"
+        );
     }
 
     // The "no pointer-only affordance" rule is asserted in
