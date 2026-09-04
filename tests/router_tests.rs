@@ -22,6 +22,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use family_calendar::client::components::tv::style::{TV_RENDER_WIDTH_PX, TV_VIEWPORT_META};
 use family_calendar::server::auth;
 use family_calendar::server::config::FamilyHubConfig;
 use family_calendar::server::db;
@@ -182,6 +183,190 @@ async fn m_route_serves_the_phone_routine_view() {
     assert!(
         body.contains("Add photo task"),
         "the /m view should render the routine's add-task button"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// B-1 / TV1: each surface declares its own viewport meta
+// (`docs/design/PLAN_TV_VIEWPORT.md` §1.1–§1.3)
+//
+// One global `width=device-width` meta used to serve every route, so on the
+// Insignia — `wm size` override 1920x1080 at density 320, i.e. 2 dppx and a
+// 960 CSS px `device-width` — the kiosk laid out at half its design width and
+// painted at 2×: one rail card, the routine rows cut at the card's edge. `/tv`
+// now pins `TV_VIEWPORT_META`; `/m` and `/mobile` keep the phone's string,
+// byte for byte.
+//
+// These tests boot `build_router` with no `public/index.html` (the harness's
+// `DIOXUS_PUBLIC_PATH` is an empty directory), so `ServeConfig` falls back to
+// an SSR-only index whose head is empty and each route carries **exactly one**
+// Dioxus-emitted viewport meta. The `dx build` bundle's template head adds a
+// second, earlier one in production; the last meta in document order wins, so
+// ours does (plan §1.2).
+// ---------------------------------------------------------------------------
+
+/// Every `content` on a `<meta name="viewport">` in `body`, in document order.
+///
+/// Parsed rather than substring-matched, because nothing guarantees the
+/// renderer emits `name` before `content` — the acceptance criterion is about
+/// the *tag*, not about a byte sequence.
+fn viewport_meta_contents(body: &str) -> Vec<String> {
+    /// The value of `attr` in one `<meta …>` tag's attribute text, for either
+    /// quoting style. `None` when the attribute is absent.
+    fn attr_value(tag: &str, attr: &str) -> Option<String> {
+        let mut rest = tag;
+        loop {
+            let at = rest.find(attr)?;
+            // Only a real attribute start: preceded by whitespace or the
+            // very beginning, and followed by `=` (so `name` never matches
+            // inside e.g. `data-name`).
+            let boundary_ok = at == 0
+                || rest[..at]
+                    .chars()
+                    .next_back()
+                    .is_some_and(|c| c.is_whitespace());
+            let after = rest[at + attr.len()..].trim_start();
+            if boundary_ok && after.starts_with('=') {
+                let value = after[1..].trim_start();
+                let quote = value.chars().next()?;
+                if quote == '"' || quote == '\'' {
+                    let end = value[1..].find(quote)?;
+                    return Some(value[1..1 + end].to_string());
+                }
+                // Unquoted: up to the next whitespace or the tag's end.
+                let end = value
+                    .find(|c: char| c.is_whitespace() || c == '>' || c == '/')
+                    .unwrap_or(value.len());
+                return Some(value[..end].to_string());
+            }
+            rest = &rest[at + attr.len()..];
+        }
+    }
+
+    let mut contents = Vec::new();
+    let mut rest = body;
+    while let Some(start) = rest.find("<meta") {
+        rest = &rest[start + "<meta".len()..];
+        let end = match rest.find('>') {
+            Some(end) => end,
+            None => break,
+        };
+        let tag = &rest[..end];
+        rest = &rest[end..];
+        if attr_value(tag, "name").as_deref() == Some("viewport") {
+            contents.push(attr_value(tag, "content").unwrap_or_default());
+        }
+    }
+    contents
+}
+
+/// (a) `/tv` serves exactly one viewport meta and it is `TV_VIEWPORT_META` —
+/// so the television lays the kiosk out at the 1920 × 1080 the rail budget,
+/// the type scale and every design-QA measurement are computed for.
+#[tokio::test]
+async fn tv_route_pins_the_kiosk_viewport_at_the_render_width() {
+    let config = test_config();
+    let addr = spawn_router(&config).await;
+
+    let response = http_client()
+        .get(format!("http://{addr}/tv"))
+        .header("accept", "text/html")
+        .send()
+        .await
+        .expect("GET /tv should respond");
+
+    assert_eq!(response.status().as_u16(), 200);
+    let body = response.text().await.expect("response body");
+
+    let metas = viewport_meta_contents(&body);
+    assert_eq!(
+        metas.len(),
+        1,
+        "/tv must carry exactly one viewport meta, got {metas:?}"
+    );
+    assert_eq!(
+        metas[0], TV_VIEWPORT_META,
+        "/tv's viewport meta must be the kiosk's own (B-1)"
+    );
+
+    // The old global meta is gone from this page entirely: `device-width` is
+    // 960 on the Insignia, and `initial-scale` beside `width=1920` would turn
+    // the kiosk into a horizontally scrolling page (plan §1.3).
+    assert!(
+        !body.contains("width=device-width"),
+        "/tv must not serve a device-width viewport any more (B-1)"
+    );
+    assert!(
+        !body.contains("initial-scale"),
+        "/tv must not set initial-scale (plan §1.3)"
+    );
+}
+
+/// (b) The phone surface is untouched: `/m` and `/mobile` both keep the
+/// original string, byte for byte, and never see the kiosk's width.
+#[tokio::test]
+async fn the_phone_routes_keep_the_device_width_viewport() {
+    let config = test_config();
+    let addr = spawn_router(&config).await;
+
+    for path in ["/m", "/mobile"] {
+        let response = http_client()
+            .get(format!("http://{addr}{path}"))
+            .header("accept", "text/html")
+            .send()
+            .await
+            .unwrap_or_else(|_| panic!("GET {path} should respond"));
+
+        assert_eq!(response.status().as_u16(), 200, "{path}");
+        let body = response.text().await.expect("response body");
+
+        let metas = viewport_meta_contents(&body);
+        assert_eq!(
+            metas.len(),
+            1,
+            "{path} must carry exactly one viewport meta, got {metas:?}"
+        );
+        let content = &metas[0];
+        for needle in [
+            "width=device-width",
+            "initial-scale=1",
+            "viewport-fit=cover",
+        ] {
+            assert!(
+                content.contains(needle),
+                "{path}'s viewport meta must keep {needle:?} \
+                 (the PWA tab bar's safe-area inset depends on it), got {content:?}"
+            );
+        }
+        assert!(
+            !body.contains(&format!("width={TV_RENDER_WIDTH_PX}")),
+            "{path} must never serve the kiosk's viewport width"
+        );
+    }
+}
+
+/// (c) The manifest `Link` stayed global in `App` — only the viewport moved.
+/// A hashed `asset!()` URL here would put `start_url: "/m"` outside the
+/// manifest's own scope and the install prompt would never appear (T2.2 / G6
+/// / R-16), which is what `tests/pwa_tests.rs` guards; assert it from this
+/// side too, since TV1 edits the component that renders it.
+#[tokio::test]
+async fn the_phone_route_still_links_the_manifest_at_its_root_url() {
+    let config = test_config();
+    let addr = spawn_router(&config).await;
+
+    let response = http_client()
+        .get(format!("http://{addr}/m"))
+        .header("accept", "text/html")
+        .send()
+        .await
+        .expect("GET /m should respond");
+
+    assert_eq!(response.status().as_u16(), 200);
+    let body = response.text().await.expect("response body");
+    assert!(
+        body.contains(r#"href="/manifest.webmanifest""#),
+        "/m must still link the manifest at its root URL"
     );
 }
 
