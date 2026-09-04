@@ -184,3 +184,43 @@ bug.
 `pointermove` flood (G20) is the cautionary tale. Should the boys' phones be able to do this at
 all, or parents only?
 
+## B-5 — Tapping a reading should open its full details (owner, 2026-09-03)
+
+**What the owner asked for:** in the School tab, tapping a reading row should open a small
+sheet with more about that reading — *"I remember on the website it had more content … the
+additional reading, or just the reading details"*. The website is Ambleside Online, where a
+week's entry carries more than the one line the row prints.
+
+**What ships today:** `row.rs` renders `category glyph → checkbox → subject → the week's text`,
+plus `part n of m`, the catch-up chip and `(then tell it back)` (H6 item 3). Tapping a row ticks
+it. There is **no detail affordance at all** on a lesson row — the Month view's day sheet is the
+only sheet, and it lists a date's rows rather than expanding one.
+
+**The part that is not a UI problem.** Sampled from the family's live hub, 2026-09-03, week 1 of
+`Ambleside Online Year 1` — 10 occurrences: **7 carry `text`, 2 carry `source`, and `detail` is
+empty on all 10.** So a sheet built against today's data would show the reading line the row
+already shows, a book label twice, and nothing else. The fields exist (`CURRICULUM_FORMAT.md`:
+`source` = "optional book / resource label", `detail` = "optional; parentheticals from the
+source"); the transcription simply did not fill them, and there is no field at all for a link to
+the reading itself.
+
+**So this is two pieces of work, and they should be planned together but sized separately:**
+
+1. **The sheet** (small, phone-first). A reading detail sheet reusing `SHEET_CARD_CLASS` /
+   `SHEET_SCRIM_CLASS` from `homeschool/settings.rs` so it matches the day sheet and the Year cell
+   sheet. Shows title, the full text (the row truncates nothing today, but a long AO entry will),
+   `source`, `detail`, the part label in words, the category, and the narration prompt. Must not
+   steal the row's tick: H6's checkbox is the primary action and a boy tapping to tick must not get
+   a sheet instead. Needs a decision on the TV too — `row.rs` is shared, the kiosk is D-pad-only,
+   and a sheet the remote cannot dismiss would be a trap.
+2. **The content** (the real bulk). Either fill `detail`/`source` across the transcription, or add
+   an optional `url` to the assignment format so the sheet can offer "open the reading" — most AO
+   Year 1 texts are online (Genesis, *Just So Stories*, *Parables from Nature*). A `url` is a
+   normative `CURRICULUM_FORMAT.md` change plus a migration column, and on the TV a link is close
+   to useless with a D-pad — a QR, as `Add a phone` already does, is the honest kiosk answer.
+   **§0 N1 still holds: no AO content may land in a tracked file.**
+
+**Open questions for the plan:** does the sheet open on the row body with the checkbox reserved,
+or on a dedicated chevron? Does the TV get it at all, or is it phone-only? If `detail`, `source`
+and `url` are all empty, does the affordance hide itself rather than open an empty sheet?
+
