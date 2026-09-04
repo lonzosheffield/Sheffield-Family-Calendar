@@ -31,15 +31,16 @@ use crate::shared::types::{
 
 use super::keymap::TV_KEYS;
 use super::model::{
-    current_focus, day_item_focus, lesson_key, school, FocusId, TvModel, TvOverlay, TvPanel,
-    TvProfile, TvSchoolState,
+    current_focus, day_item_focus, lesson_key, school, viewport_verdict, FocusId, TvModel,
+    TvOverlay, TvPanel, TvProfile, TvSchoolState, TvViewport,
 };
 use super::staleness::status_line;
 use super::style::{
     focus_class, TV_BODY_LARGE, TV_BODY_TEXT, TV_CELEBRATION_SPIN_CLASS, TV_EYEBROW_CLASS,
     TV_FRAME_CLASS, TV_HEADING, TV_HEADING_LARGE, TV_JOIN_PILL_CLASS, TV_OVERSCAN_CLASS,
     TV_PANEL_HEADING_CLASS, TV_POSTER_CARD_CLASS, TV_PROFILE_BUTTON_CLASS, TV_PROFILE_DISC_CLASS,
-    TV_PROFILE_RAIL_CLASS, TV_STAMP_CLASS, TV_WORDMARK_DISPLAY_CLASS, TV_WORDMARK_QUIET_CLASS,
+    TV_PROFILE_RAIL_CLASS, TV_RENDER_HEIGHT_PX, TV_RENDER_WIDTH_PX, TV_STAMP_CLASS,
+    TV_WORDMARK_DISPLAY_CLASS, TV_WORDMARK_QUIET_CLASS,
 };
 use crate::client::components::glyphs::{
     ball_glyph, category_glyph, icon_glyph, subject_glyph, ADD_PHONE_GLYPH, EXTRA_TASK_GLYPH,
@@ -868,6 +869,25 @@ fn join_overlay(model: &TvModel, focused: Option<&FocusId>) -> Element {
 // `?keys=1` — the key-code debug overlay (D8 / R-11)
 // ---------------------------------------------------------------------------
 
+/// The HUD's viewport line (TV2 / B-1): what the WebView measured, judged
+/// against [`TV_RENDER_WIDTH_PX`]/[`TV_RENDER_HEIGHT_PX`], the size every
+/// pixel of `/tv` is designed and budgeted for
+/// (`docs/design/PLAN_TV_VIEWPORT.md` §4.3).
+fn viewport_readout(viewport: Option<TvViewport>) -> String {
+    match viewport {
+        Some(v) => {
+            let dpr = v.dpr_centi as f64 / 100.0;
+            format!(
+                "viewport {}×{} css px, dpr {dpr:.2} — {} (target {TV_RENDER_WIDTH_PX}×{TV_RENDER_HEIGHT_PX})",
+                v.width_px,
+                v.height_px,
+                viewport_verdict(&v),
+            )
+        }
+        None => "viewport: not measured yet".to_string(),
+    }
+}
+
 /// A corner HUD listing the last presses exactly as the browser reported
 /// them, plus the map the kiosk is using.
 ///
@@ -884,6 +904,7 @@ fn keys_overlay(model: &TvModel) -> Element {
             class: "{TV_BODY_TEXT} absolute right-[5%] top-[5%] w-[38rem] rounded-3xl bg-slate-800 p-8 text-white shadow-lg",
             "aria-live": "polite",
             h2 { class: "{TV_HEADING} font-bold", "Key codes" }
+            p { id: "tv-viewport-readout", class: "text-slate-200", "{viewport_readout(model.viewport)}" }
             if log.is_empty() {
                 p { class: "text-slate-200", "Press any button on the remote." }
             }

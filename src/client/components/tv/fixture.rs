@@ -444,5 +444,8 @@ pub fn canonical_model() -> TvModel {
         join_url: Some("https://10.0.0.42:8443/m".to_string()),
         keys_debug: false,
         key_log: Vec::new(),
+        // TV2: the golden fixture makes no claim about the device that
+        // rendered it — `?keys=1` tests set this explicitly per case.
+        viewport: None,
     }
 }

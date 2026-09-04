@@ -38,6 +38,7 @@ use crate::shared::types::{
 };
 
 use super::keymap::KeyLogEntry;
+use super::style::TV_RENDER_WIDTH_PX;
 
 // ---------------------------------------------------------------------------
 // Panels
@@ -256,6 +257,40 @@ fn slugify(raw: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// TV2 — the viewport the WebView actually gave us (B-1)
+// ---------------------------------------------------------------------------
+
+/// What `window.innerWidth`/`innerHeight`/`devicePixelRatio` reported on the
+/// device that rendered the kiosk, measured once on mount and shown by the
+/// `?keys=1` HUD so the reading on the television can be compared with the
+/// reading on a PC (`docs/design/PLAN_TV_VIEWPORT.md` §4.3).
+///
+/// `dpr_centi` is `devicePixelRatio * 100`, rounded to an integer, so this
+/// struct — and therefore [`TvModel`] — can stay `PartialEq` (a bare `f64`
+/// field cannot derive `Eq`, and `TvModel` is compared in tests).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct TvViewport {
+    pub width_px: u32,
+    pub height_px: u32,
+    pub dpr_centi: u32,
+}
+
+/// Does the measured viewport match the width every pixel of `/tv` is
+/// designed and budgeted for ([`TV_RENDER_WIDTH_PX`],
+/// `src/client/components/tv/style.rs`)?
+///
+/// Only the width is judged: the height follows the width once the WebView's
+/// scale is set correctly (§2.1/§2.2 of the plan), so a width match is the
+/// one fact worth a verdict.
+pub fn viewport_verdict(v: &TvViewport) -> &'static str {
+    if v.width_px == TV_RENDER_WIDTH_PX {
+        "as designed"
+    } else {
+        "not the design width — see docs/FIRE_TV.md, Viewport scale"
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The model
 // ---------------------------------------------------------------------------
 
@@ -304,6 +339,10 @@ pub struct TvModel {
     /// `?keys=1` (see [`super::keymap::keys_debug_enabled`]).
     pub keys_debug: bool,
     pub key_log: Vec<KeyLogEntry>,
+    /// TV2 — what the WebView reported on mount, or `None` before the first
+    /// client frame has measured it (SSR, and the first frame it hydrates,
+    /// both render `None` — see `shell.rs`'s `onmounted` handler).
+    pub viewport: Option<TvViewport>,
 }
 
 impl TvModel {
@@ -322,6 +361,7 @@ impl TvModel {
             join_url: None,
             keys_debug: false,
             key_log: Vec::new(),
+            viewport: None,
         }
     }
 
@@ -800,6 +840,36 @@ mod tests {
         let layout = TvLayout::of(&model);
         model.state.set_panel(TvPanel::Calendar, &layout);
         assert!(model.state.body_index < layout.body_len(TvPanel::Calendar));
+    }
+
+    #[test]
+    fn viewport_verdict_reads_as_designed_only_at_the_exact_design_width() {
+        let designed = TvViewport {
+            width_px: TV_RENDER_WIDTH_PX,
+            height_px: 1080,
+            dpr_centi: 200,
+        };
+        assert_eq!(viewport_verdict(&designed), "as designed");
+
+        let clipped = TvViewport {
+            width_px: 960,
+            height_px: 540,
+            dpr_centi: 200,
+        };
+        assert_eq!(
+            viewport_verdict(&clipped),
+            "not the design width — see docs/FIRE_TV.md, Viewport scale"
+        );
+
+        let off_by_one = TvViewport {
+            width_px: TV_RENDER_WIDTH_PX - 1,
+            height_px: 1080,
+            dpr_centi: 200,
+        };
+        assert_eq!(
+            viewport_verdict(&off_by_one),
+            "not the design width — see docs/FIRE_TV.md, Viewport scale"
+        );
     }
 
     #[test]

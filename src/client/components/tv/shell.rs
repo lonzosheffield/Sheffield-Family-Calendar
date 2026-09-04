@@ -45,7 +45,7 @@ use crate::shared::types::{profile_name, DayItem, ServerMessage, FAMILY_PROFILE_
 use super::clock::{tv_clock, TvClock, CLOCK_POLL_SECS};
 use super::keymap::{push_key_log, KeyLogEntry};
 use super::model::{
-    current_focus, day_item_focus, school_rows, FocusId, TvModel, TvProfile, TvState,
+    current_focus, day_item_focus, school_rows, FocusId, TvModel, TvProfile, TvState, TvViewport,
 };
 use super::nav::{on_key_for, scroll_target, TvAction};
 use super::staleness::{TvStaleness, BADGE_TICK_MS};
@@ -120,6 +120,9 @@ pub fn TvShell() -> Element {
     let mut key_log = use_signal(Vec::<KeyLogEntry>::new);
     let keys_debug = use_signal(platform::keys_debug_from_location);
     let join_host = use_signal(platform::host_from_location);
+    // TV2 — measured once, on mount, so SSR and the first client frame agree
+    // (`None` on both) and hydration never mismatches (see `onmounted` below).
+    let mut viewport = use_signal(|| None::<TvViewport>);
 
     // ---------------------------------------------------------------
     // The hub's clock — and, on the same round trip, its pulse.
@@ -310,6 +313,7 @@ pub fn TvShell() -> Element {
             .map(|host| phone_join_url(host, DEFAULT_PHONE_PORT)),
         keys_debug: keys_debug(),
         key_log: key_log.read().clone(),
+        viewport: viewport(),
     };
 
     // ---------------------------------------------------------------
@@ -481,6 +485,12 @@ pub fn TvShell() -> Element {
             onmounted: move |event| async move {
                 // A kiosk has nobody to click the page first.
                 let _ = event.set_focus(true).await;
+                // TV2 — measured once, here, so SSR and the first client
+                // frame render the same `None` and hydration sees no
+                // mismatch (`docs/design/PLAN_TV_VIEWPORT.md` §1.5). No
+                // resize listener: the kiosk never reaches for a pointer
+                // event and nothing on this page moves after mount.
+                viewport.set(platform::viewport());
             },
             TvSurface { model,
                 Whiteboard {}
@@ -492,6 +502,7 @@ pub fn TvShell() -> Element {
 #[cfg(all(feature = "web", target_arch = "wasm32"))]
 mod platform {
     use super::super::keymap::keys_debug_enabled;
+    use super::super::model::TvViewport;
 
     pub async fn sleep_ms(millis: u64) {
         gloo_timers::future::TimeoutFuture::new(millis as u32).await;
@@ -511,6 +522,28 @@ mod platform {
             .and_then(|location| location.search().ok())
             .map(|query| keys_debug_enabled(&query))
             .unwrap_or(false)
+    }
+
+    /// What the WebView actually gave us (TV2 / B-1) — measured once, on
+    /// mount, from `window.innerWidth`/`innerHeight`/`devicePixelRatio`.
+    ///
+    /// `inner_width`/`inner_height`, not `outer_*` or the document element's
+    /// `client*` size: `inner*` is the layout viewport the CSS in
+    /// `tv/style.rs` is budgeted against, which is exactly the number the
+    /// viewport meta (`TV_VIEWPORT_META`, TV1) is supposed to pin to 1920.
+    /// No listener is installed — this reads the value once and never
+    /// again, so it adds nothing for `the_kiosk_never_reaches_for_a_pointer_event`
+    /// (a D-pad has no resize to react to) to catch.
+    pub fn viewport() -> Option<TvViewport> {
+        let window = web_sys::window()?;
+        let width = window.inner_width().ok()?.as_f64()?;
+        let height = window.inner_height().ok()?.as_f64()?;
+        let dpr = window.device_pixel_ratio();
+        Some(TvViewport {
+            width_px: width.round() as u32,
+            height_px: height.round() as u32,
+            dpr_centi: (dpr * 100.0).round() as u32,
+        })
     }
 
     /// Bring the element the remote's cursor just landed on into view
@@ -550,6 +583,13 @@ mod platform {
 
     pub fn keys_debug_from_location() -> bool {
         false
+    }
+
+    /// There is no WebView during SSR, so there is nothing to measure — the
+    /// same reason the first client frame also renders `None`
+    /// (`docs/design/PLAN_TV_VIEWPORT.md` §1.5, hydration safety).
+    pub fn viewport() -> Option<super::TvViewport> {
+        None
     }
 
     /// There is no viewport to scroll during SSR.

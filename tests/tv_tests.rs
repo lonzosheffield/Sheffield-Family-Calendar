@@ -38,7 +38,7 @@ use family_calendar::client::components::tv::keymap::{
 };
 use family_calendar::client::components::tv::model::{
     body_order, current_focus, focus_order, lesson_key, FocusId, TvLayout, TvModel, TvOverlay,
-    TvPanel, TvState, TvZone,
+    TvPanel, TvState, TvViewport, TvZone,
 };
 use family_calendar::client::components::tv::nav::{
     on_key_for, presses_to_reach, scroll_target, TvAction,
@@ -755,6 +755,47 @@ fn the_key_code_debug_overlay_is_off_unless_keys_equals_one() {
             .any(|id| id.contains("keys")),
         "the debug overlay must not be focusable"
     );
+}
+
+/// TV2 / B-1 — the `?keys=1` HUD reports the viewport the WebView actually
+/// gave us, judged against the design width, so a screenshot from the
+/// television answers "did the fix take?" without eyeballing pixels.
+#[test]
+fn tv_viewport_the_keys_overlay_reports_the_measured_viewport_against_the_design_width() {
+    let mut model = canonical_model();
+    model.keys_debug = true;
+
+    // At the design width: the verdict is "as designed".
+    model.viewport = Some(TvViewport {
+        width_px: 1920,
+        height_px: 1080,
+        dpr_centi: 200,
+    });
+    let html = render(&model);
+    assert!(html.contains(r#"id="tv-viewport-readout""#), "{html}");
+    assert!(html.contains("1920×1080"), "{html}");
+    assert!(html.contains("dpr 2.00"), "{html}");
+    assert!(html.contains("as designed"), "{html}");
+
+    // Clipped to the Insignia's uncorrected layout: the verdict says so.
+    model.viewport = Some(TvViewport {
+        width_px: 960,
+        height_px: 540,
+        dpr_centi: 200,
+    });
+    let html = render(&model);
+    assert!(html.contains("960×540"), "{html}");
+    assert!(html.contains("not the design width"), "{html}");
+
+    // Not measured yet: the first SSR frame, before `onmounted` has run.
+    model.viewport = None;
+    let html = render(&model);
+    assert!(html.contains("not measured yet"), "{html}");
+
+    // The HUD itself is gated on `keys_debug`, same as every other line in it.
+    model.keys_debug = false;
+    let html = render(&model);
+    assert!(!html.contains("tv-viewport-readout"), "{html}");
 }
 
 #[test]
