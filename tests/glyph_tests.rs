@@ -1414,13 +1414,22 @@ fn hs5_qa3_the_year_cell_sheet_edits_the_days_of_one_week_not_of_every_week() {
             .contains("let stored_days = occurrence.days.as_deref().map(days_to_string);"),
         "QH5-02: the text Save must write back the stored override: {year}"
     );
-    assert!(one_line(&year).contains("days: stored_days.clone(),"));
+    assert!(
+        one_line(&year)
+            .contains("days: text_save_days(stored_days.as_deref(), &prefill, &days(),)")
+            || one_line(&year).contains("days: text_save_days("),
+        "QH6-03: the text Save must decide between the stored value and a changed control: {year}"
+    );
+    assert!(
+        one_line(&year).contains("let prefill = entry_days.clone();"),
+        "QH6-03: the text Save needs the prefill to tell touched from untouched: {year}"
+    );
     assert!(
         !year.contains("pinned_days("),
         "a text edit must never pin a floating row (QH5-02)"
     );
     println!("year cell sheet: 1 days control per entry, prefilled MW, labelled for week 2");
-    println!("the text Save sends days: stored_days.clone(); pinned_days() is gone");
+    println!("the text Save sends days: text_save_days(stored_days, prefill, typed); pinned_days() is gone");
 }
 
 /// QH5-01: no surface may recover an assignment row's `ordinal` from its rank

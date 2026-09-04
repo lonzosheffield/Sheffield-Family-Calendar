@@ -3519,3 +3519,59 @@ notes — R-4 gains items 5 (`realtime_tests::t1_2_3_…` p99 budget) and 6 (`se
 `docs/DEV_WINDOWS.md` gains the `E0786` / paging-file troubleshooting entry (`-j 4`). The first gate run
 of this close hit R-4 item 2 (`backup_tests::restore_drill_…`, `assert!(!db_path.exists())`) once; green
 on the immediate re-run. Nothing else in the three HANDOFF sections asks for action.
+
+## HS5-qa6 (2026-09-03) — QA round 6 QH6-02 / QH6-03 / QH6-04, branch `hs/HS5-qa6`
+
+Branch cut from `main` @ `ae94e87`. The worktree it was assigned in was still parked on `a49a4ca`,
+which predates the round-5 fix wave the three findings are about, so nothing under repair existed
+there. Three files touched, all owned: `src/client/components/homeschool/today.rs`,
+`src/client/components/homeschool/year.rs`, `tests/glyph_tests.rs`. No Tailwind class was added, so
+`assets/tailwind.css` is untouched and the `ci_tests` guard stays green.
+
+**QH6-02.** `today.rs::week_is_complete` now returns `false` unless `group.can_finish_week`, so the
+"Week N done — start week N+1?" banner can no longer print without the **Finish week** button that
+answers it. The `total > 0` floor went with it, as the report's solution prescribes: the server's
+answer is now the floor. New unit test
+`a_paused_brothers_unfinished_week_never_calls_the_group_done`.
+
+**QH6-03.** `year.rs` gains the pure helper `text_save_days(stored, prefill, typed)` and the cell
+sheet's text **Save** sends it instead of `stored_days` unconditionally, so a days edit the parent
+has typed but not yet saved is no longer discarded — while an *untouched* control still sends the
+row's stored `None` and leaves a floating row floating (QH5-02 is not reintroduced). **Save days** is
+unchanged at `days: Some(days())`. New unit test
+`a_text_save_leaves_an_untouched_days_control_alone_and_honours_a_changed_one`; the source-shape
+guard in `glyph_tests::hs5_qa3_the_year_cell_sheet_edits_the_days_of_one_week_not_of_every_week` now
+asserts `days: text_save_days(` and `let prefill = entry_days.clone();` in place of
+`days: stored_days.clone(),`, keeping both the `let stored_days = …` and the
+`!contains("pinned_days(")` assertions as they were.
+
+**QH6-04.** `CellEntry`'s doc comment replaced with the report's wording, which is true of what now
+ships.
+
+**Asks for the Boss:**
+
+1. **QH6-05 (the Boss's own amendment).** `docs/homeschool/PLAN_HOMESCHOOL.md` §2 H2's nudge
+   sentence is still two sentences while `today.rs` ships three. This branch did not touch the plan.
+   Please replace it with the round-6 report's wording:
+
+   > The Today footer nudges (never auto-advances): "Week 3 done — start week 4?" when complete;
+   > "You've been on week 3 for 15 days" once `today − week_started_on ≥ 14`; and — the QA round 5
+   > amendment (QH5-03 / `docs/RESIDUAL.md` R-15, 2026-09-03) — "Last school day of week 3 — finish
+   > it now, or carry the rest into next week" when today has reached the last school day with work
+   > still open. The three are exclusive and are tested in that order, so the "done" sentence is
+   > never printed for a week that merely *may* be finished; **Finish week** is still offered under
+   > all three.
+
+   One thing to note against that wording: as of this branch the "done" sentence is also gated on
+   `can_finish_week`, so **Finish week** is offered under all three *and* the "done" sentence can no
+   longer be printed while the button is withheld.
+
+2. **`docs/RESIDUAL.md`.** R-15's CLOSED claim should gain the QH6-02 consequence and its fix; R-14
+   should record that the untouched/touched distinction is now carried by `text_save_days` rather
+   than by an unconditional `stored_days`. Fresh residual lines for QH6-02/03/04 belong at the fix
+   close; this task's file list does not include `RESIDUAL.md`.
+
+3. **`tests/homeschool_tests.rs` is not this branch's.**
+   `hs4_i_a_text_edit_from_the_year_sheet_leaves_a_floating_row_floating` fails on `main` (QH6-01,
+   `hs/HS4-qa6`) and fails identically here. It is the only failure in
+   `cargo test --features server --no-fail-fast` on this branch; every other target is green.
