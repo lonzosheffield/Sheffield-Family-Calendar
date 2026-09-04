@@ -3650,3 +3650,32 @@ predates the contract file named below, branch from `main` instead" — the phra
 given after the first three agents hit it. Worth fixing in the harness rather than in every
 prompt.
 
+
+## TV1-qa1 (`tv/TV1-qa1`, 2026-09-03) — QT-01 applied: the served document under test now has production's two-meta head
+
+`tests/router_tests.rs` used to boot `build_router` against an **empty** `DIOXUS_PUBLIC_PATH`, so
+`ServeConfig::new()` fell back to `IndexHtml::ssr_only()` and every route carried exactly one
+viewport meta. Three assertions were written against that document — including
+`!body.contains("width=device-width")` for `/tv` — and all three are **false of the page the
+television actually loads**, because the `dx` bundle's `public/index.html` contributes exactly
+that string ahead of everything Dioxus collects. `init_test_env()` now writes
+`DX_TEMPLATE_INDEX_HTML` (the real bundle's head shape, minus the wasm `<script>`) into that
+directory through the existing `Once`, and the assertions are about **order**, not count.
+
+### H-TV1-qa1-1. A doc comment in `src/` still says the tests boot without a template
+
+TV1-qa1 owns `tests/router_tests.rs` only, so this could not be applied here. QT-01's *"Also fold
+into the same branch"* paragraph asks for it, and it is now the last untrue sentence about this
+harness in the tree.
+
+**Ask:** in `src/client/app.rs`, `KioskDashboard`'s doc comment ends
+
+> The integration tests boot the router without a template (`IndexHtml::ssr_only()`, empty head),
+> so there each route carries exactly one — which is what `tests/router_tests.rs` asserts.
+
+Replace it with: the integration tests now ship the `dx` template's head shape on purpose
+(`DX_TEMPLATE_INDEX_HTML` in `tests/router_tests.rs`), so each route carries **two** viewport
+metas there as it does in production, and what the suite asserts is their **order** — the
+template's first, the route's own last. `tests/router_tests.rs`'s own section comment was updated
+on this branch. Nothing else in `src/` changes; the constant, the component and the served bytes
+are all untouched by TV1-qa1.
