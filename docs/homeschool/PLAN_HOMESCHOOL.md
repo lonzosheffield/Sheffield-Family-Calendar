@@ -155,8 +155,25 @@ occurrence date for weekday `d` is the first date in that span whose weekday is 
 day** of the week is the last date in the span whose weekday ∈ `school_days`.
 
 **Finish week** is offered (parent only) when every occurrence of the week is done or skipped, **or**
-today ≥ the last school day. The Today footer nudges (never auto-advances): "Week 3 done — start week
-4?" when complete; "You've been on week 3 for 15 days" once `today − week_started_on ≥ 14`.
+today ≥ the last school day. The Today footer nudges (never auto-advances) with **exactly one**
+sentence, chosen in this order — amended by QA rounds 5 and 6 (QH5-03 / `docs/RESIDUAL.md` R-15,
+QH6-02), which found the original two-sentence list unable to describe what the surface must say:
+
+1. "Week 3 done — start week 4?" when the week is **complete**. Complete means every occurrence and
+   every in-span extra is logged — the rows `header_chip_text` sums (H3 rule 8 + rule 10) — **and**
+   `can_finish_week`, so the sentence can never appear without the **Finish week** button beside it.
+   The second half is QH6-02: `sched::today_view` returns early on a paused enrollment, so a paused
+   brother contributes `0` to both sums while `can_finish_week_with_extras` still reads his unfinished
+   week and withholds the button.
+2. "You've been on week 3 for 15 days" once `today − week_started_on ≥ 14`. This outranks sentence 3:
+   `days_on_week ≥ 14` implies today is past the last school day, so without the precedence the
+   fortnight sentence would be unreachable in production — which is what QH5-03 found.
+3. "Last school day of week 3 — finish it now, or carry the rest into next week" when
+   `can_finish_week` is true but the week is not complete. **Finish week** is still offered here (H2's
+   "or today ≥ the last school day" clause); what is not true is that the week is *done*, and saying
+   so put the banner in contradiction with a `9 done · 0 skipped / 22` chip directly above it.
+
+None of the three is shown while `paused` or `year_complete`.
 
 `current_week > weeks` is the terminal **Year complete 🎉** state (not an error; Back returns to
 `weeks`). `paused = 1` renders "School's out ⚽ — no school today" on every surface and hides every
