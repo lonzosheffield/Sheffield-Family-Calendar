@@ -134,9 +134,11 @@ pub fn Tv() -> Element {
 /// Chromium applies viewport metas in document order, each replacing the
 /// previous description, so **the last one wins** — ours. `curl`ing the
 /// production `/tv` and seeing two tags is expected; the one that counts is
-/// the last. The integration tests boot the router without a template
-/// (`IndexHtml::ssr_only()`, empty head), so there each route carries exactly
-/// one — which is what `tests/router_tests.rs` asserts.
+/// the last. `tests/router_tests.rs` ships the real template's head shape into
+/// its harness, so the document under test has production's **two**-meta shape,
+/// and it asserts the *order* — template first, ours last — rather than a
+/// count. Asserting a count was the QT-01 defect: it passed against a
+/// template-less document nobody is ever served.
 #[component]
 fn KioskDashboard() -> Element {
     rsx! {

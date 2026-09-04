@@ -3613,7 +3613,7 @@ rather than their worktree HEAD — see the note at the end of this section.
 Gates on `main` after the whole wave (round-6 fixes **and** the TV viewport wave):
 `cargo fmt --check` clean; both clippy gates clean; the Tailwind rebuild leaves
 `assets/tailwind.css` byte-identical (no new class token); `cargo test --features server -j 4`
-**exit 0 — 33 `test result:` lines, 642 passed, 0 failed, 1 ignored**; and
+**exit 0 — 33 `test result:` lines, 642 passed, 0 failed, 2 ignored**; and
 `--test homeschool_tests -- --test-threads=1` **23 passed** on consecutive runs, which is the
 configuration QH6-01 failed 2-in-2 on.
 

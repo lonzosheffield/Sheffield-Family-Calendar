@@ -68,10 +68,14 @@ as designed.
   precondition the rail budget and every golden file already assumed.
 * **Files:** `src/client/app.rs`, `src/client/components/tv/style.rs` (TV1); `src/client/components/tv/{model,surface,shell,fixture}.rs` (TV2, adds the `?keys=1` viewport readout); `docs/FIRE_TV.md`,
   `docs/BACKLOG.md`, `docs/design/DESIGN_DIRECTION.md` (TV3, this entry).
-* **Tests that pin it:** `tests/router_tests.rs` asserts `GET /tv` carries exactly one viewport meta
-  equal to `TV_VIEWPORT_META` and neither `width=device-width` nor `initial-scale`, while `GET /m` and
-  `GET /mobile` keep `width=device-width, initial-scale=1, viewport-fit=cover` and never see
-  `width=1920`; a unit test on `TV_VIEWPORT_META` itself (`style.rs`) pins the constant against
+* **Tests that pin it:** `tests/router_tests.rs` ships the real `dx` template's head shape into the
+  harness and asserts the viewport metas of `GET /tv` **in document order** are exactly
+  `["width=device-width, initial-scale=1", TV_VIEWPORT_META]`, with `the_kiosk_viewport_meta_is_the_last_one_in_the_document`
+  pinning that ordering by index; `/m` and `/mobile` assert `[template, phone string]`. *(Corrected by
+  QA round 1 QT-01 and `tv/TV1-qa1`: this bullet previously claimed `/tv` carries **one** meta and no
+  `width=device-width`, which is false of the page production serves — the template contributes exactly
+  that, and the old assertions passed only because the harness served a template-less document nobody
+  receives. The property that matters is order, not count.)* a unit test on `TV_VIEWPORT_META` itself (`style.rs`) pins the constant against
   `TV_RENDER_WIDTH_PX`; `tests/tv_tests.rs` pins the `?keys=1` readout's text against a measured
   viewport and against `None`; every pre-existing `/tv` acceptance test (`t2_1_*`, `d4_3_*`, `qd_02_*`,
   `qd_08_*`, `hs6_*`) and the golden files stay green and byte-identical; `cargo test --features server
@@ -83,7 +87,35 @@ as designed.
   written: (a) the SSR assertion that `/tv` pins `width=1920`, and (b) the on-device readout below,
   not a headless run at 960×540. `docs/design/PLAN_TV_VIEWPORT.md` §1.5's last paragraph records this
   same substitution and is the source for this note.
-* On-device verification per `docs/design/PLAN_TV_VIEWPORT.md` §4, recorded by the Boss at merge.
+* **On-device verification — what actually ran, and what did not** *(rewritten after QA round 1
+  QT-02, which correctly found the original one-line claim unjustified; plan §4's gate is "all of
+  §4.2, §4.3, §4.4 and §4.5")*:
+  * **§4.2 pixel probes — RUN, passed.** On the Insignia over adb, 2026-09-03, against a build
+    serving the fix: all seven probes matched **exactly**, not within tolerance — `(48,540)` and
+    `(960,48)` = `#8BB5DA`; `(98,540)`, `(1821,540)`, `(960,98)`, `(960,981)` = `#1E293B`;
+    `(140,540)` = `#FFFFFF`. Capture committed as
+    `docs/design/current-state/tv-fixed-1920-adb-2026-09-03.png`; compare
+    `tv-clipped-fullykiosk-adb-2026-09-03.png` (same panel, before). §4.2's *composition* half also
+    held: four rail cards, the `Add a phone` pill and the **School** tab all inside the card.
+    **Caveat:** this capture was served by a scratch-database hub on port 8085, so the routine list
+    is empty — the geometry is proven, the populated panel is not.
+  * `tv-fixed-add-a-phone-live-2026-09-03.png` is the **live** service (port 8080) after the
+    reinstall, rendering the QR overlay at full width — the fix on the real hub, one panel only.
+  * **§4.3 the `?keys=1` readout — NOT RUN.** This is the one that matters most: plan §5 names it as
+    the mitigation for the wave's only High-impact risk. Fully Kiosk's kiosk mode refuses external
+    navigation (three attempts: intent to Fully, cold restart, launching Silk — all bounced by the
+    watchdog and the `SYSTEM_ALERT_WINDOW` / `GET_USAGE_STATS` appops), so the URL cannot be set from
+    the PC. It needs the owner's Remote Admin, or a temporary Start-URL change.
+  * **§4.4 the D-pad walk — NOT RUN meaningfully.** `adb shell input keyevent` does reach the kiosk,
+    but the walk performed was against the 8085 scratch hub, whose empty routine makes traversal
+    unrepresentative. No conclusion may be drawn from it either way.
+  * **§4.5 — PARTIAL.** `/health` on the live hub reported `ws_clients: 1` with the TV connected, and
+    `curricula: 1`; the service log shows the kiosk's realtime client connecting and being idle-reaped
+    at 90 s, which is documented behaviour and also proves the page hydrates. Logcat was read for the
+    SSL diagnosis but not swept clean for this gate; the phone `/m` viewport was confirmed
+    unchanged by `curl`, not on a handset.
+  * **Therefore B-1's code fix is verified on the real panel by measurement; the wave's *verification
+    procedure* is not complete.** The gap is tracked here rather than papered over.
 
 ## B-2 — Heads-up before a parent phone's sign-in lapses (owner, 2026-09-03)
 
