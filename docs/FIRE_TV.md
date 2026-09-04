@@ -190,6 +190,9 @@ On the TV, open Fully Kiosk → Settings:
 | **Screensaver** (Fully Kiosk's own) | **Never** — the hub has its own screensaver (idle 10 min, `docs/PLAN.md` D5), and two competing screensavers means the hub's never wins |
 | Screensaver timer / Daydream | 0 / disabled |
 | Kiosk mode / lock-down | on (PLUS) |
+| Web Content Settings → "Use Wide Viewport" (if present) | on — the two settings in this group are the ones that can defeat the `/tv` viewport meta (B-1); exact labels in Fully Kiosk 1.61.2 are unverified, so check by menu wording, not this row alone |
+| Web Content Settings → "Desktop Mode" | off |
+| Web Content Settings → "Initial Scale" | 0 / default |
 
 #### `http`, never `https`, for the kiosk (the owner hit this 2026-09-03)
 
@@ -228,6 +231,24 @@ clipped the same way**, which rules out anything in the hub's own markup as the 
 Fully Kiosk is **not** implicated: it was not installed at all when the owner took the
 B-1 photo (only Silk and the Chromium WebView were present), so B-1's original
 "Fully Kiosk's web content scale is not 100 %" hypothesis is dead.
+
+**The fix (TV1, `docs/design/PLAN_TV_VIEWPORT.md` §1.1):** `/tv` now serves its own
+viewport meta — `width=1920, user-scalable=no` (`tv::style::TV_VIEWPORT_META`) — as
+the last `name="viewport"` tag Dioxus writes into `<head>`, in place of the old global
+`width=device-width` meta every route used to share. With `width=1920` and no
+`initial-scale`, Chromium computes the scale that fits 1920 CSS px into the panel: on
+this TV that is 960 / 1920 = 0.5, so the layout viewport becomes 1920 × 1080 CSS px —
+exactly the size the poster card, the rail budget and the golden files are built for —
+while the WebView still rasterises the same 960 physical CSS px it always did (device
+scale factor 2.0 × page scale 0.5 = one framebuffer pixel per CSS pixel). `curl
+http://<hub-ip>:8080/tv` will still show the `dx` build's own template meta,
+`width=device-width, initial-scale=1`, first — that one ships inside
+`public/index.html` ahead of anything Dioxus renders — followed by ours. Chromium
+applies viewport metas in document order and **the last one wins**, so the template's
+earlier tag is harmless; it is not a sign the fix failed. The phone routes (`/m`,
+`/mobile`) are untouched: they keep serving
+`width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no`,
+byte-identical to before.
 
 ### 5. Disable the **television's** sleep / power-saver timers
 
@@ -322,6 +343,28 @@ adb shell input keyevent 20                                          # D-pad Dow
 the television whenever the kiosk is connected, so a `ws_clients` of 0 with a lit
 screen means the page is up but the socket is not (`docs/RECOVERY.md`).
 
+**The viewport readout.** Open `http://<hub-ip>:8080/tv?keys=1` (Fully Kiosk's remote
+admin `loadUrl`, or temporarily as the Start URL) and read the HUD's first line: it
+must say `viewport 1920×1080 css px, dpr 2.00 — as designed (target 1920×1080)`.
+Anything else — most likely `960×540` — means the WebView is still laying out at
+`device-width`: check the two Web Content Settings rows in step 4, and whether the
+running binary predates TV1 (`docs/design/PLAN_TV_VIEWPORT.md`).
+
+**Pixel probe** (`docs/design/PLAN_TV_VIEWPORT.md` §4.2). After a framebuffer capture
+(`adb exec-out screencap -p > <file>.png`), probe individual pixels from the PC:
+
+```powershell
+Add-Type -AssemblyName System.Drawing
+$b = [System.Drawing.Bitmap]::FromFile("<file>.png")
+$b.GetPixel(48, 540)    # expect ~#8BB5DA (sheffield-light, the frame), tolerance +/- 8 per channel
+$b.GetPixel(98, 540)    # expect ~#1E293B (slate-800, the card's border-4)
+$b.GetPixel(140, 540)   # expect #FFFFFF (the card)
+```
+
+Any of these off by more than the tolerance means the layout is not 1920 CSS px wide —
+see `docs/design/PLAN_TV_VIEWPORT.md` §4.2 for the full pixel set and the composition
+checklist.
+
 ## Troubleshooting
 
 | Symptom | Most likely cause | Fix |
@@ -332,6 +375,7 @@ screen means the page is up but the socket is not (`docs/RECOVERY.md`).
 | A hub-side screensaver never appears | Fully Kiosk's own **Screensaver** is on and wins | Set it to Never (step 4) |
 | `adb connect` says `unauthorized` | The one-time on-screen prompt was never accepted | Accept it on the TV with the remote, then reconnect |
 | Page loads but the clock is frozen and a red badge shows | Server unreachable for > 90 s | `docs/RECOVERY.md` — "The hub is unreachable" |
+| Kiosk is huge and clipped (one rail card, text off the card's edge) | The page is laying out at `device-width`: the running binary predates TV1, or a WebView setting is ignoring the viewport meta | Check the `/tv?keys=1` readout; reinstall the service; check the two step-4 rows |
 
 ---
 

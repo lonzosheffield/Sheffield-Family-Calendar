@@ -54,6 +54,37 @@ card; the 1920×1080 golden files stay unchanged; `docs/FIRE_TV.md` records the 
 **Also seen in the photo (not defects):** the wordmark, sun glyphs, corner balls and focus ring render
 as designed.
 
+**DONE (TV1–TV3, 2026-09-03).** `docs/design/PLAN_TV_VIEWPORT.md` is the approved plan; fix candidate
+1 above is what shipped, exactly as the VERIFIED block predicted.
+
+* **Mechanism:** `/tv` now emits its own `document::Meta { name: "viewport", content: TV_VIEWPORT_META
+  }` (`TV_VIEWPORT_META = "width=1920, user-scalable=no"`, `src/client/components/tv/style.rs`) as the
+  first node of `KioskDashboard`, and the old single global viewport meta on `App` is deleted. The
+  phone routes (`/m`, `/mobile`) render their own meta from `Mobile`, byte-identical to the string the
+  whole app used to share (`width=device-width, initial-scale=1, viewport-fit=cover,
+  user-scalable=no`), so the phone surface is untouched. With no `initial-scale`, Chromium computes
+  the scale that fits 1920 CSS px into whatever panel it is given — 0.5 on this TV's 960-wide WebView,
+  1 on a true 1920 panel — so the layout viewport is 1920 × 1080 CSS px everywhere, which is the
+  precondition the rail budget and every golden file already assumed.
+* **Files:** `src/client/app.rs`, `src/client/components/tv/style.rs` (TV1); `src/client/components/tv/{model,surface,shell,fixture}.rs` (TV2, adds the `?keys=1` viewport readout); `docs/FIRE_TV.md`,
+  `docs/BACKLOG.md`, `docs/design/DESIGN_DIRECTION.md` (TV3, this entry).
+* **Tests that pin it:** `tests/router_tests.rs` asserts `GET /tv` carries exactly one viewport meta
+  equal to `TV_VIEWPORT_META` and neither `width=device-width` nor `initial-scale`, while `GET /m` and
+  `GET /mobile` keep `width=device-width, initial-scale=1, viewport-fit=cover` and never see
+  `width=1920`; a unit test on `TV_VIEWPORT_META` itself (`style.rs`) pins the constant against
+  `TV_RENDER_WIDTH_PX`; `tests/tv_tests.rs` pins the `?keys=1` readout's text against a measured
+  viewport and against `None`; every pre-existing `/tv` acceptance test (`t2_1_*`, `d4_3_*`, `qd_02_*`,
+  `qd_08_*`, `hs6_*`) and the golden files stay green and byte-identical; `cargo test --features server
+  --test docs_tests` link-checks this file and `docs/FIRE_TV.md`.
+* **The 960×540 acceptance sentence, honestly.** B-1's original acceptance line above asks for "a
+  headless Chrome run at 960×540 viewport with DPR 2 … or a `#[test]` computing the layout budget for
+  that viewport." With the meta in place there is no 960-px layout left to budget for — the layout
+  viewport is 1920 on every device the meta reaches — so that sentence is satisfied differently than
+  written: (a) the SSR assertion that `/tv` pins `width=1920`, and (b) the on-device readout below,
+  not a headless run at 960×540. `docs/design/PLAN_TV_VIEWPORT.md` §1.5's last paragraph records this
+  same substitution and is the source for this note.
+* On-device verification per `docs/design/PLAN_TV_VIEWPORT.md` §4, recorded by the Boss at merge.
+
 ## B-2 — Heads-up before a parent phone's sign-in lapses (owner, 2026-09-03)
 
 **Ask:** the parent session cookie lasts 30 days (T1.4). When it lapses the phone simply shows the
