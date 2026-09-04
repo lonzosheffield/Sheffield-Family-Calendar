@@ -140,3 +140,47 @@ system directory without `--yes`, before it reads the file or opens a pool.
 (4) `docs/DEV_WINDOWS.md` "Never develop against the live data directory" and `docs/PLAN.md` §5.7.
 Verified: `cargo test --features server` with `FAMILY_HUB_DATA_DIR` unset left a canary file in
 `C:\ProgramData\FamilyHub` byte-identical and the directory listing unchanged.
+
+## B-4 — The phone's Remote tab can show a panel but cannot navigate inside it (owner, 2026-09-03)
+
+**What the owner hit:** with the kiosk on the Routine panel, driven from the phone's **Remote**
+tab, there is no way to scroll the routine list from the phone. Their words: *"I like the way this
+looks but I don't have the ability to scroll down on the Routine."* Reaching the rows below the
+fold means walking to the television and using the Fire TV remote.
+
+**What ships today:** `src/client/components/mobile/remote.rs` offers exactly two controls —
+*Show on the TV* (`SetView`: Dashboard · Routine · Calendar · Whiteboard · School) and
+*Whose routine* (`SetActiveProfile`). Both are one-shot state changes. There is **no directional
+input of any kind**, and the protocol has nowhere to put one: `ClientMessage`
+(`src/shared/types.rs:218`) is `Hello`, `Ping`, `Draw`, `ClearBoard`, `SetView`,
+`SetActiveProfile`, `RequestSnapshot` — no navigation variant exists. So this is a missing
+capability, not a defect: the Remote tab is a *channel changer*, and the owner expected a
+*remote control*.
+
+**Why it matters:** D1 makes the phone the parent's way to drive the television without crossing
+the room, and the TV is D-pad-only by design (no touch, no pointer). A panel the phone can open
+but not operate is half a remote — and the routine list is precisely the panel with more rows
+than fit.
+
+**Not to be confused with:** the boy-switching complaint in the same report, which is **working as
+designed** — `SetActiveProfile` is ignored by the hub unless the phone holds a parent session (or
+asks for its own profile, R-23b). The tab already says so: *"Sign in with the parent PIN under
+Settings to control the TV."* Worth checking the owner is signed in before treating that half as a
+bug.
+
+**Shape of the work (not yet planned):**
+1. A new `ClientMessage` variant — a directional/activate message. This is a **normative protocol
+   change**: `docs/PROTOCOL.md` §3 is the contract and `tests/realtime_tests.rs` holds a
+   compile-time exhaustive match that fails until every variant is documented there.
+2. Server: authorise it exactly as `SetView` / `SetActiveProfile` are authorised (§P2c — parent
+   session), then mint the fan-out `ServerMessage`; the client's bytes are never forwarded.
+3. Kiosk: apply it to the existing focus/scroll model rather than inventing a second one, so
+   phone-driven and remote-driven navigation cannot diverge.
+4. Phone: a D-pad on the Remote tab, thumb-sized per the 44 px minimum.
+
+**Open design questions for the plan:** does the phone move *focus* (a true remote) or *scroll*
+(a simpler scrollbar)? What happens when two phones press at once? The `/ws` token bucket is
+40 msg/s with burst 80 (`docs/PROTOCOL.md`) — a held key must not trip it, and the whiteboard's
+`pointermove` flood (G20) is the cautionary tale. Should the boys' phones be able to do this at
+all, or parents only?
+
