@@ -795,3 +795,67 @@ Guard: the `update_extra(… "2099-01-01" …)` rejection assertion added to
   `hs4_k_add_extra_requires_a_session_and_bounds_scheduled_date`, before the
   `toggle_extra` step:
   `assert!(api::update_extra(extra.id, "Copywork".to_string(), Category::Daily, None, "2099-01-01".to_string(), token.clone()).await.is_err(), "update_extra honours the same ±365 day window as add_extra");`.
+
+## R-17 … R-22. QA round 6 of the Homeschool wave (`docs/qa/QA_HS_ROUND_6.md`, HS8, 2026-09-03)
+
+Round 6 audited the round-5 fix wave and returned **FAIL** on one High and two Med.
+Unlike rounds 3–5, every finding was fixed **in the same session** it was raised, so
+each is recorded here already closed, with what shipped and the guard that proves it.
+
+The round's real lesson is about provenance, not about any one finding. The two
+round-5 fixing agents were interrupted by a session ending; their work was recovered
+from their worktrees and merged by the Boss, and the Boss's own gate run reported
+"633 passed, 0 failed" — a true case count and a false verdict, because that run
+passed on test ordering. **R-17 is the defect that hid inside it.** Two further
+findings (R-18, R-19) are corrections to round 5's *own* prescribed solutions, applied
+verbatim as instructed. Applying an auditor's solution verbatim is not a guarantee of
+correctness; it is a starting point that the next round has to check.
+
+- **R-17 / QH6-01 (High, HS4/S) — CLOSED (`hs/HS4-qa6`).** `cargo test --features
+  server` genuinely failed on `main` @ `2bf9555`:
+  `hs4_i_a_text_edit_from_the_year_sheet_leaves_a_floating_row_floating` asserted the
+  fixture's `Old Tales` week 2 deals as `part 1 of 2`, but
+  `hs4_f_toggle_lesson_together_writes_exactly_the_two_boys_sharing_the_week` widens
+  that subject to `MTWRFSU` through `set_subject_schedule` and
+  `reset_homeschool_state` cleared only `lesson_log`, `lesson_extras` and
+  `enrollments` — `load_fixture` being insert-missing-only, the widened row was never
+  put back, so the row dealt `part 1 of 5`. Failed 2 in 2 under `--test-threads=1`,
+  2 in 6 at the default job count, passed alone. Not an R-4 / R-12 load flake.
+  **Fixed:** the reset now also clears `assignments`, `term_notes`, `subjects` and
+  `curricula`, child-first; the QH5-02 proof states its own precondition rather than
+  assuming it; the QH5-01 proof captures its Monday-cell facts into a local and
+  asserts them *after* the fixture restore, so a mid-test failure cannot leave the
+  shared DB dirty; and `hs4_i_a_widened_subject_does_not_survive_the_reset` guards the
+  class. Verified 23 passed / 0 failed on two consecutive single-threaded runs.
+- **R-18 / QH6-02 (Med, HS5/O) — CLOSED (`hs/HS5-qa6`).** R-15's fix decoupled the
+  "done" nudge from `can_finish_week` and overshot: `sched::today_view` returns early
+  on a paused enrollment, so a paused brother contributes `0` to both sums while
+  `can_finish_week_with_extras` — which does not check `paused` — still reads his
+  unfinished week and withholds the button. The banner could ask "Week N done — start
+  week N+1?" with no **Finish week** button beside it. **Fixed:** `week_is_complete`
+  returns `false` unless `group.can_finish_week` (the `total > 0` floor dropped as part
+  of the same gate). Guard: `a_paused_brothers_unfinished_week_never_calls_the_group_done`,
+  proven red before the fix.
+- **R-19 / QH6-03 (Med, HS5/O) — CLOSED (`hs/HS5-qa6`).** R-14's fix made the Year cell
+  sheet's text **Save** send `stored_days` *unconditionally*, silently discarding a days
+  edit the parent had typed but not yet saved — a behaviour regression against the
+  pre-wave code, and against `CellEntry`'s own promise that neither control can quietly
+  erase the other's value. **Fixed:** the pure helper
+  `year::text_save_days(stored, prefill, typed)` — the stored value while the control
+  still shows its prefill, the parent's value once changed, and never a blank string
+  (the one thing the deleted `pinned_days` guarded). QH5-02 is not reintroduced:
+  `text_save_days(None, "MW", "MW") == None` is asserted. Guard:
+  `a_text_save_leaves_an_untouched_days_control_alone_and_honours_a_changed_one`
+  (7 assertions), proven red before the fix.
+- **R-20 / QH6-04 (Low) — CLOSED (`hs/HS5-qa6`).** `CellEntry`'s doc comment was stale
+  and false after R-19; rewritten to describe what ships.
+- **R-21 / QH6-05 (Low) — CLOSED (Boss, `28c7136`).** §2 H2 listed two nudge sentences;
+  the code ships three. H2 now carries the three in explicit precedence order with the
+  finding that forced each — including why the fortnight sentence must outrank the
+  last-school-day one (without it, it is unreachable in production, which is what
+  QH5-03 found). Written from the shipped code rather than the report's proposed
+  wording: `hs/HS5-qa6`'s gate had already made that wording out of date.
+- **R-22 / QH6-06 (Low) — CLOSED (Boss, this close).** `docs/HANDOFF.md` carried nothing
+  for the round-5 wave; the sections below record it, including the three `year.rs`
+  helper unit tests deleted with `row_ordinals` and `pinned_days`.
+

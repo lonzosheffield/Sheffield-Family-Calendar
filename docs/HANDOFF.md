@@ -3575,3 +3575,66 @@ ships.
    `hs4_i_a_text_edit_from_the_year_sheet_leaves_a_floating_row_floating` fails on `main` (QH6-01,
    `hs/HS4-qa6`) and fails identically here. It is the only failure in
    `cargo test --features server --no-fail-fast` on this branch; every other target is green.
+
+## Boss, round-5 fix close (2026-09-03) — recorded late (QA round 6 QH6-06 / R-22)
+
+The round-5 wave (`hs/HS4-qa5`, `hs/HS5-qa5`) left no HANDOFF record at the time, which
+round 6 filed as QH6-06. What happened, for the file:
+
+**Provenance.** Both fixing agents were interrupted mid-run by a session ending. Neither
+verified its own work: their uncommitted worktrees were recovered by the Boss, committed
+to their branches and merged. The two `tests/homeschool_tests.rs` storage proofs the
+QH5-01 and QH5-02 solutions call for fell between the two agents' file ownership — HS5-qa5
+owned the client and `tests/glyph_tests.rs`, HS4-qa5 owned the server file and
+`homeschool_tests.rs` — so neither could land them and the Boss added them at the close.
+One of those two was the QH6-01 High. **Lesson: when a wave's file ownership leaves a
+required test homeless, that test is the one most likely to be wrong.**
+
+**Deleted with the round-5 wave** (helper tests of deleted helpers, not Accept clauses):
+`year.rs::ordinals_come_from_first_appearance_across_the_week`,
+`year.rs::a_daily_row_with_no_assignment_rows_has_no_ordinals_to_recover` (both tested
+`row_ordinals`, deleted by QH5-01) and
+`year.rs::an_empty_days_control_inherits_the_subject_rather_than_writing_nonsense`
+(tested `pinned_days`, deleted by QH5-02). The last one's *substance* has since come back:
+QH6-03's `text_save_days` restores the never-write-a-blank-string rule and asserts it.
+
+**Gate reporting.** The close reported `633 passed, 0 failed`. That was an honest reading of
+a real run and still the wrong verdict — the run passed on test ordering. A green
+default-threaded run is not evidence for a test that shares mutable DB state; the round-6
+fix is verified with two consecutive `--test-threads=1` runs, and that is the standard for
+this suite from here.
+
+## Boss, round-6 fix close (2026-09-03) — HS4-qa6 / HS5-qa6 merged, R-17…R-22 closed
+
+Merged `f466aa2` (HS4-qa6, QH6-01) then `e12ba9d` (HS5-qa6, QH6-02/03/04); QH6-05 landed as
+the Boss amendment `28c7136`, QH6-06 as the section above. Both agents branched from `main`
+rather than their worktree HEAD — see the note at the end of this section.
+
+Gates on `main` after the whole wave (round-6 fixes **and** the TV viewport wave):
+`cargo fmt --check` clean; both clippy gates clean; the Tailwind rebuild leaves
+`assets/tailwind.css` byte-identical (no new class token); `cargo test --features server -j 4`
+**exit 0 — 34 `test result:` lines, 665 passed, 0 failed**; and
+`--test homeschool_tests -- --test-threads=1` **23 passed** on consecutive runs, which is the
+configuration QH6-01 failed 2-in-2 on.
+
+Both agents did the thing round 5 did not: proved their new tests **red before the fix** and
+restored the files byte-identical. HS5-qa6 also corrected the round-6 report itself — Fable's
+aside that the Today fixture's finishable group has `total_count == 0` is wrong; it is
+non-zero with nothing logged. The gate holds either way, but the agent checked rather than
+assumed.
+
+### H-BOSS-1. Agent worktrees were created at a stale base commit
+
+Four of the five agents in this session reported that their worktree HEAD was `a49a4ca` — the
+commit at the *start* of the session — not `main`'s tip, so files committed minutes before
+launch (`docs/qa/QA_HS_ROUND_6.md`, `docs/design/PLAN_TV_VIEWPORT.md`, the corrected
+`FIRE_TV.md`/`BACKLOG.md`) were absent from the tree they were told to read. Each detected it
+and re-branched from `main`, which is why every branch merged cleanly — but an agent that had
+*not* noticed would have written against a contract that did not exist, or failed looking for
+a file it had been told to read.
+
+**Ask:** any future wave prompt should open with "run `git log --oneline -1`; if your HEAD
+predates the contract file named below, branch from `main` instead" — the phrasing TV2 was
+given after the first three agents hit it. Worth fixing in the harness rather than in every
+prompt.
+
