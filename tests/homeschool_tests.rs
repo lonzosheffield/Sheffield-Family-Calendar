@@ -212,10 +212,29 @@ async fn subject_id(pool: &SqlitePool, curriculum_id: i64, name: &str) -> i64 {
     row.0
 }
 
-/// Wipe every mutable homeschool table so a test starts from a known-empty
-/// state, without re-loading the (idempotent) curriculum rows.
+/// Wipe every homeschool table — the curriculum rows included — so a test
+/// starts from a known-empty state and `load_fixture` re-inserts the fixture
+/// exactly as it is committed.
+///
+/// The curriculum tables have to go too (QA round 6, QH6-01): `load_fixture`
+/// is `loader::insert_missing`, which never updates a row it already sees, and
+/// `widen_to_every_day` writes `subjects.days = 'MTWRFSU'` permanently. Leaving
+/// `subjects` behind made every assertion about a subject's *dealt-out shape*
+/// depend on which earlier test in this binary had run — which is exactly how
+/// `hs4_i_a_text_edit_from_the_year_sheet_leaves_a_floating_row_floating` came
+/// to read `part 1 of 5` after `hs4_f_*` widened `Old Tales`. Deleted
+/// child-first rather than leaning on `ON DELETE CASCADE`, so the order is
+/// explicit and does not depend on `PRAGMA foreign_keys`.
 async fn reset_homeschool_state(pool: &SqlitePool) {
-    for table in ["lesson_log", "lesson_extras", "enrollments"] {
+    for table in [
+        "lesson_log",
+        "lesson_extras",
+        "enrollments",
+        "assignments",
+        "term_notes",
+        "subjects",
+        "curricula",
+    ] {
         sqlx::query(&format!("DELETE FROM {table}"))
             .execute(pool)
             .await
@@ -1259,11 +1278,7 @@ async fn hs4_i_editing_a_pinned_second_reading_never_overwrites_the_first() {
         .first()
         .cloned()
         .expect("the pinned reading is dealt to Monday");
-    assert_eq!(monday.text.as_deref(), Some("The Patient Heron"));
-    assert_eq!(
-        monday.ordinal, 2,
-        "QH5-01: the Monday entry is ordinal 2 however early it falls"
-    );
+    let dealt = (monday.text.clone(), monday.ordinal);
 
     // The Year sheet's next edit on that entry, sent the way `year.rs` sends
     // it: with the occurrence's own ordinal, not with its rank.
@@ -1301,6 +1316,11 @@ async fn hs4_i_editing_a_pinned_second_reading_never_overwrites_the_first() {
     .expect("restore the fixture row");
 
     assert_eq!(
+        dealt,
+        (Some("The Patient Heron".to_string()), 2),
+        "QH5-01: the Monday entry is ordinal 2 however early it falls"
+    );
+    assert_eq!(
         rows,
         vec![
             (1, "The Kite and the Kettle".to_string(), None),
@@ -1329,6 +1349,12 @@ async fn hs4_i_a_text_edit_from_the_year_sheet_leaves_a_floating_row_floating() 
     reset_homeschool_state(pool).await;
     let curriculum_id = load_fixture(pool).await;
     let old_tales = subject_id(pool, curriculum_id, "Old Tales").await;
+    // The shape this proof reads is the fixture's own: `Old Tales` runs on M
+    // and W, `shared` (a reading subject, §4 default). Stated here rather than
+    // assumed, because `subjects` is process-wide (QH6-01).
+    hs::set_subject_schedule(pool, old_tales, "MW", true)
+        .await
+        .expect("the fixture's own days for Old Tales");
     let token = parent_session().await;
     const BOY: i64 = 1;
     const WEEK: i64 = 2;
@@ -1392,6 +1418,31 @@ async fn hs4_i_a_text_edit_from_the_year_sheet_leaves_a_floating_row_floating() 
         "QH5-02: a text edit must not pin the row and lose its split"
     );
     assert_eq!(wednesday_part, Some((2, 2)));
+}
+
+/// QA round 6, QH6-01. The reset has to undo a subject-schedule write, or every
+/// assertion about a dealt-out shape in this binary is order-dependent.
+#[tokio::test]
+async fn hs4_i_a_widened_subject_does_not_survive_the_reset() {
+    let _guard = hs4_lock().await;
+    let pool = db::pool().await.expect("pool");
+    reset_homeschool_state(pool).await;
+    let curriculum_id = load_fixture(pool).await;
+    let old_tales = subject_id(pool, curriculum_id, "Old Tales").await;
+    widen_to_every_day(pool, old_tales, true).await;
+
+    reset_homeschool_state(pool).await;
+    let curriculum_id = load_fixture(pool).await;
+    let old_tales = subject_id(pool, curriculum_id, "Old Tales").await;
+    let days: (String,) = sqlx::query_as("SELECT days FROM subjects WHERE id = ?1")
+        .bind(old_tales)
+        .fetch_one(pool)
+        .await
+        .expect("the subject after a reload");
+    assert_eq!(
+        days.0, "MW",
+        "QH6-01: reset_homeschool_state must restore the fixture's own subject days"
+    );
 }
 
 // ---------------------------------------------------------------------------
