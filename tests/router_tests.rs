@@ -28,6 +28,37 @@ use family_calendar::server::config::FamilyHubConfig;
 use family_calendar::server::db;
 use family_calendar::server::router::build_router;
 
+/// The head shape of the `dx build` bundle's own `public/index.html`
+/// (`target/dx/family-calendar/release/web/public/index.html`), reduced to the
+/// parts that decide viewport policy: a `<title>`, the template's own
+/// `width=device-width, initial-scale=1` meta, and the `id="main"` mount point
+/// `dioxus_server::IndexHtml` splits on. The wasm `<script>` is deliberately
+/// left out — this binary asserts SSR output, never hydration.
+///
+/// QT-01 / B-1: production always serves this template
+/// (`build_router` → `ServeConfig::new()` → `<public>/index.html`), so the page
+/// the television loads carries **two** viewport metas. `dioxus-server`'s
+/// `ssr::render_head` writes the template head first and the collected
+/// `ServerDocument` head elements after it, before `</head>`, so ours is last —
+/// and Chromium applies viewport metas in document order, each replacing the
+/// previous description. *That ordering is the whole fix.* Without this file the
+/// harness falls back to `IndexHtml::ssr_only()` (empty head) and the ordering
+/// is never exercised at all.
+const DX_TEMPLATE_VIEWPORT_META: &str = "width=device-width, initial-scale=1";
+
+const DX_TEMPLATE_INDEX_HTML: &str = r#"<!DOCTYPE html>
+<html>
+    <head>
+        <title>Sheffield Family Hub</title>
+        <meta content="text/html;charset=utf-8" http-equiv="Content-Type">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta charset="UTF-8">
+    </head>
+    <body>
+        <div id="main"></div>
+    </body>
+</html>"#;
+
 /// One throwaway data directory (and one `DATABASE_URL`/`DIOXUS_PUBLIC_PATH`
 /// env setup) shared by every test in this binary — mirrors
 /// `tests/http_tests.rs::init_test_env`. `db::pool()` is a process-wide
@@ -50,6 +81,11 @@ fn init_test_env() -> PathBuf {
 
         let public = base.join("public");
         std::fs::create_dir_all(&public).expect("test public directory is creatable");
+        // QT-01: serve the same document shape production serves — template
+        // head first, Dioxus's collected head elements after it. See
+        // `DX_TEMPLATE_INDEX_HTML` above.
+        std::fs::write(public.join("index.html"), DX_TEMPLATE_INDEX_HTML)
+            .expect("test index.html is writable");
         std::env::set_var("DIOXUS_PUBLIC_PATH", &public);
 
         // HS9 (`docs/BACKLOG.md` B-3): this harness — never the shell — pins
@@ -197,12 +233,19 @@ async fn m_route_serves_the_phone_routine_view() {
 // now pins `TV_VIEWPORT_META`; `/m` and `/mobile` keep the phone's string,
 // byte for byte.
 //
-// These tests boot `build_router` with no `public/index.html` (the harness's
-// `DIOXUS_PUBLIC_PATH` is an empty directory), so `ServeConfig` falls back to
-// an SSR-only index whose head is empty and each route carries **exactly one**
-// Dioxus-emitted viewport meta. The `dx build` bundle's template head adds a
-// second, earlier one in production; the last meta in document order wins, so
-// ours does (plan §1.2).
+// These tests boot `build_router` against a `DIOXUS_PUBLIC_PATH` that
+// **does** hold an `index.html` — `DX_TEMPLATE_INDEX_HTML`, written by
+// `init_test_env()` on purpose, with the same head shape the `dx build`
+// bundle ships. So the document under test has production's *two*-viewport-meta
+// structure, and the assertions below are about **order**, not count: the
+// template's `width=device-width, initial-scale=1` first, the route's own meta
+// last. The last meta in document order is the one Chromium applies, and that
+// is the entirety of B-1's fix (plan §1.2, §5 risk 2; QT-01).
+//
+// (Before QT-01 the harness left that directory empty, `ServeConfig` fell back
+// to `IndexHtml::ssr_only()` — head a single space — and every route carried
+// exactly one meta. The suite then asserted `!body.contains("width=device-width")`
+// for `/tv`, which was false of the page production actually serves.)
 // ---------------------------------------------------------------------------
 
 /// Every `content` on a `<meta name="viewport">` in `body`, in document order.
@@ -260,9 +303,10 @@ fn viewport_meta_contents(body: &str) -> Vec<String> {
     contents
 }
 
-/// (a) `/tv` serves exactly one viewport meta and it is `TV_VIEWPORT_META` —
-/// so the television lays the kiosk out at the 1920 × 1080 the rail budget,
-/// the type scale and every design-QA measurement are computed for.
+/// (a) `/tv`'s viewport metas are, in document order, exactly the `dx`
+/// template's and then `TV_VIEWPORT_META` — so the television lays the kiosk
+/// out at the 1920 × 1080 the rail budget, the type scale and every design-QA
+/// measurement are computed for.
 #[tokio::test]
 async fn tv_route_pins_the_kiosk_viewport_at_the_render_width() {
     let config = test_config();
@@ -280,25 +324,68 @@ async fn tv_route_pins_the_kiosk_viewport_at_the_render_width() {
 
     let metas = viewport_meta_contents(&body);
     assert_eq!(
-        metas.len(),
-        1,
-        "/tv must carry exactly one viewport meta, got {metas:?}"
-    );
-    assert_eq!(
-        metas[0], TV_VIEWPORT_META,
-        "/tv's viewport meta must be the kiosk's own (B-1)"
+        metas,
+        vec![
+            DX_TEMPLATE_VIEWPORT_META.to_string(),
+            TV_VIEWPORT_META.to_string(),
+        ],
+        "/tv must serve the dx template's viewport meta first and the kiosk's \
+         **last**: Chromium applies viewport metas in document order and the last \
+         one wins, which is the only reason B-1's fix takes on the television \
+         (plan §1.2, §5 risk 2). Got {metas:?}"
     );
 
-    // The old global meta is gone from this page entirely: `device-width` is
-    // 960 on the Insignia, and `initial-scale` beside `width=1920` would turn
-    // the kiosk into a horizontally scrolling page (plan §1.3).
+    // ...and the winning tag is the kiosk's own: `device-width` is 960 on the
+    // Insignia, and `initial-scale` beside `width=1920` would turn the kiosk
+    // into a horizontally scrolling page (plan §1.3).
+    let winning = metas.last().expect("at least one viewport meta on /tv");
     assert!(
-        !body.contains("width=device-width"),
-        "/tv must not serve a device-width viewport any more (B-1)"
+        !winning.contains("width=device-width"),
+        "the last viewport meta on /tv must not be a device-width one (B-1), got {winning:?}"
     );
     assert!(
-        !body.contains("initial-scale"),
-        "/tv must not set initial-scale (plan §1.3)"
+        !winning.contains("initial-scale"),
+        "the last viewport meta on /tv must not set initial-scale (plan §1.3), got {winning:?}"
+    );
+}
+
+/// B-1's load-bearing property, stated once, plainly. Plan §5's risk table
+/// rates "the `dx` template's `device-width` meta wins over ours" *Very low /
+/// High — the fix would be inert*, and offers exactly one proof: the on-device
+/// readout of §4.3. This is the other one, and it runs on every commit.
+#[tokio::test]
+async fn the_kiosk_viewport_meta_is_the_last_one_in_the_document() {
+    let config = test_config();
+    let addr = spawn_router(&config).await;
+
+    let body = http_client()
+        .get(format!("http://{addr}/tv"))
+        .header("accept", "text/html")
+        .send()
+        .await
+        .expect("GET /tv should respond")
+        .text()
+        .await
+        .expect("response body");
+
+    let ours = body
+        .rfind(TV_VIEWPORT_META)
+        .expect("/tv must serve TV_VIEWPORT_META");
+    let template = body
+        .find(DX_TEMPLATE_VIEWPORT_META)
+        .expect("/tv must still serve the dx template's own viewport meta");
+    assert!(
+        template < ours,
+        "the kiosk's viewport meta must come **after** the dx template's — the last \
+         one wins in Chromium, and B-1's fix is inert if that order ever inverts \
+         (template at {template}, kiosk at {ours})"
+    );
+    let close_head = body.find("</head>").expect("/tv must have a </head>");
+    assert!(
+        ours < close_head,
+        "the kiosk's viewport meta must be inside <head> (Dioxus writes collected \
+         head elements before </head>; a meta emitted during streaming would land \
+         after it — see dioxus-server ssr::render_head)"
     );
 }
 
@@ -323,10 +410,14 @@ async fn the_phone_routes_keep_the_device_width_viewport() {
         let metas = viewport_meta_contents(&body);
         assert_eq!(
             metas.len(),
-            1,
-            "{path} must carry exactly one viewport meta, got {metas:?}"
+            2,
+            "{path} must carry the dx template's viewport meta and then its own, got {metas:?}"
         );
-        let content = &metas[0];
+        assert_eq!(
+            metas[0], DX_TEMPLATE_VIEWPORT_META,
+            "{path}: the template's meta is expected first"
+        );
+        let content = metas.last().expect("a viewport meta on the phone route");
         for needle in [
             "width=device-width",
             "initial-scale=1",
