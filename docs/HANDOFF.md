@@ -3613,9 +3613,21 @@ rather than their worktree HEAD — see the note at the end of this section.
 Gates on `main` after the whole wave (round-6 fixes **and** the TV viewport wave):
 `cargo fmt --check` clean; both clippy gates clean; the Tailwind rebuild leaves
 `assets/tailwind.css` byte-identical (no new class token); `cargo test --features server -j 4`
-**exit 0 — 34 `test result:` lines, 665 passed, 0 failed**; and
+**exit 0 — 33 `test result:` lines, 642 passed, 0 failed, 1 ignored**; and
 `--test homeschool_tests -- --test-threads=1` **23 passed** on consecutive runs, which is the
 configuration QH6-01 failed 2-in-2 on.
+
+> **Correction (Boss, 2026-09-03, after `docs/qa/QA_TV_ROUND_1.md`).** This close and its commit
+> `22585ce` first reported "34 `test result:` lines, 665 passed". That was wrong, and the TV
+> auditor refuted it with arithmetic: the gate script appended a second, serial
+> `--test homeschool_tests` run to the *same* log and the summing command read the whole file, so
+> `homeschool_tests`' 23 cases were counted twice — 665 − 642 = 23, 34 − 33 = 1, exactly one
+> duplicated suite. The tree has 29 files in `tests/` + 3 unittest targets + `Doc-tests` = 33.
+> Nothing failed under either count, so no verdict changes; the *number* was inflated and is
+> corrected above. **Second time in two rounds that a gate figure of mine was reported honestly and
+> read wrongly** (round 5's "633 passed, 0 failed" passed only on test ordering). A gate summary is
+> evidence and has to be produced as carefully as a test: one run per log, and count what the
+> runner printed rather than re-deriving it.
 
 Both agents did the thing round 5 did not: proved their new tests **red before the fix** and
 restored the files byte-identical. HS5-qa6 also corrected the round-6 report itself — Fable's
