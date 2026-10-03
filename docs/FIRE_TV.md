@@ -284,6 +284,44 @@ combination) — declared as a non-Rust dependency with this exit criterion in
 fall back to Branch B (Silk bookmark) with reduced boot-resilience, or move to
 Branch B′ (a dedicated Fully-Kiosk-capable box).
 
+### Unlock and lock the kiosk from a parent phone (B-6)
+
+Not a setup step — a shortcut for after setup (`docs/BACKLOG.md` B-6,
+`docs/design/PLAN_KIOSK_REMOTE.md`). Instead of opening Fully's Remote Admin page
+(`http://10.0.0.178:2323/home`) and signing in there, a signed-in parent opens the hub
+app's **Settings** → **TV kiosk** (just below *Offline & install*) and taps **Unlock
+Kiosk** or **Lock Kiosk**.
+
+* **Once, on either parent's phone:** enter the TV address (prefilled `10.0.0.178:2323`)
+  and the Remote Admin password Fully was configured with in step 4, then **Save**. The
+  hub checks the pair against the TV (`deviceInfo`) before it keeps it; a wrong password
+  is not saved. The password is never sent back to any phone.
+* **Shared:** there is one saved TV address and password for the whole family. The second
+  parent's phone shows the buttons with no setup, and changing the address or password
+  from either phone changes it for both.
+* **One tap, no confirm dialog** (the owner's choice). After an unlock the phone says
+  *"Kiosk unlocked on the TV. Tap Lock Kiosk when you're finished."* — nothing re-locks
+  the TV automatically.
+* **How it travels:** phone → hub (HTTPS `:8443`) → TV (plain HTTP `:2323`, Fully's
+  `?cmd=unlockKiosk|lockKiosk|deviceInfo&password=…&type=json`). The hub only ever talks
+  to a private (RFC 1918) IPv4 address typed with an optional port, never a host name,
+  and never follows a redirect. The code is `src/server/api/kiosk.rs`.
+* **Only over HTTPS.** The parent session cookie is `Secure`, so over the plain
+  `http://…:8080` origin these buttons answer *"Your sign-in expired. Enter the PIN
+  again."* rather than reaching the TV.
+* **Where the password lives:** in the hub's database (`settings` rows `kiosk_admin_url`
+  and `kiosk_admin_password`), in plain text because it has to be replayed to Fully on
+  every tap. The nightly backups (`src/server/backup.rs`) therefore contain it too —
+  treat the backup folder like the password itself.
+* **If the TV's address changes** (a DHCP move after a router restart), the phone says
+  *"Can't reach the TV. Is it on? If it was restarted, its address may have changed."* —
+  tap **Change TV address or password** and enter the new one (the password is always
+  asked for again with a new address).
+
+**Recorded on device (K-A7, pending the owner's reinstall):** the three real Fully
+response bodies for `deviceInfo`, `unlockKiosk` and `lockKiosk`, password redacted, go
+here once the hub has been reinstalled and the buttons tried on the Insignia.
+
 ## Branch B — Vega OS (no sideloading)
 
 Applies to newer Fire TV Stick 4K Select (2025) / Stick HD (2026) hardware running

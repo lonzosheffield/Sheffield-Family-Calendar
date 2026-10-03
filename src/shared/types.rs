@@ -576,3 +576,58 @@ pub struct MonthView {
     pub user_id: i64,
     pub days: Vec<MonthDay>,
 }
+
+// ---------------------------------------------------------------------------
+// B-6 — Unlock / Lock the TV kiosk from a parent phone
+//
+// `docs/design/PLAN_KIOSK_REMOTE.md` §2.1. Appended, never interleaved, for
+// the same reason as the HS3 block above. These are the wire shapes of the
+// three `#[server]` fns in `crate::server::api::kiosk`; they compile to wasm
+// and carry **no** secret in either direction except the password the phone
+// sends once to `set_kiosk_admin` (it is never sent back).
+// ---------------------------------------------------------------------------
+
+/// Which Fully Kiosk remote-admin command a parent's tap asks the hub to send.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub enum KioskAction {
+    /// Fully's `unlockKiosk`.
+    Unlock,
+    /// Fully's `lockKiosk`.
+    Lock,
+}
+
+/// What Settings needs to draw the **TV kiosk** section.
+///
+/// `address` is the normalised `http://a.b.c.d:port` the hub stores — never
+/// the password (§2.1: "never the password"). `locked` is Fully's own
+/// `kioskLocked` from a best-effort `deviceInfo`, `None` whenever the TV did
+/// not say (white #2: the phone then shows only the last action).
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub struct KioskStatus {
+    pub configured: bool,
+    pub address: String,
+    pub locked: Option<bool>,
+}
+
+/// Every answer the kiosk fns can give, each mapped to one fixed sentence on
+/// the phone (§2.4's table). `TvError` deliberately carries **no** Fully text
+/// (white #6): whatever the TV said stays on the hub.
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub enum KioskOutcome {
+    /// The TV accepted the request; `locked` as in [`KioskStatus::locked`].
+    Done { locked: Option<bool> },
+    /// No TV address / password has been saved yet.
+    NotConfigured,
+    /// Fully answered "Please login" (or an empty password was offered).
+    PasswordRejected,
+    /// The TV did not answer at all (off, asleep, moved address, timeout).
+    TvUnreachable,
+    /// The TV answered, but with something the hub does not recognise.
+    TvError,
+    /// The typed address failed the RFC 1918 allow-list (§2.2, red #3).
+    BadAddress,
+    /// No valid parent session (red #6) — the phone drops to sign-in.
+    NotSignedIn,
+    /// Another request to the TV is still in flight (red #7).
+    Busy,
+}
