@@ -318,9 +318,9 @@ Kiosk** or **Lock Kiosk**.
   tap **Change TV address or password** and enter the new one (the password is always
   asked for again with a new address).
 
-**Recorded on device (K-A7, pending the owner's reinstall):** the three real Fully
-response bodies for `deviceInfo`, `unlockKiosk` and `lockKiosk`, password redacted, go
-here once the hub has been reinstalled and the buttons tried on the Insignia.
+**Verified on device (K-A7, owner, 2026-10-03):** after the reinstall, the owner saved the
+password on a parent phone and both **Unlock Kiosk** and **Lock Kiosk** worked on the
+Insignia. Fully's raw response bodies were not captured.
 
 ## Branch B — Vega OS (no sideloading)
 
