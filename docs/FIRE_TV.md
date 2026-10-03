@@ -293,7 +293,7 @@ app's **Settings** → **TV kiosk** (just below *Offline & install*) and taps **
 Kiosk** or **Lock Kiosk**.
 
 * **Once, on either parent's phone:** enter the TV address (prefilled `10.0.0.178:2323`)
-  and the Remote Admin password Fully was configured with in step 4, then **Save**. The
+  and the password set under Fully's Settings → Remote Administration, then **Save**. The
   hub checks the pair against the TV (`deviceInfo`) before it keeps it; a wrong password
   is not saved. The password is never sent back to any phone.
 * **Shared:** there is one saved TV address and password for the whole family. The second

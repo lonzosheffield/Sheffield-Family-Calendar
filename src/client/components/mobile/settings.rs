@@ -253,9 +253,11 @@ fn KioskSection(session_state: SessionSignal, status: Signal<Option<String>>) ->
         }
         busy.set(true);
         message.set(None);
+        // A server-fn `Err` means the hub, not the TV, failed — so the
+        // generic TvError sentence, never "Can't reach the TV" (B-6 QA Low #3).
         let outcome = kiosk_command(String::new(), action)
             .await
-            .unwrap_or(KioskOutcome::TvUnreachable);
+            .unwrap_or(KioskOutcome::TvError);
         busy.set(false);
         apply(outcome, KioskRequest::Command(action));
     };
@@ -285,7 +287,7 @@ fn KioskSection(session_state: SessionSignal, status: Signal<Option<String>>) ->
                                 password(),
                             )
                             .await
-                            .unwrap_or(KioskOutcome::TvUnreachable);
+                            .unwrap_or(KioskOutcome::TvError);
                         busy.set(false);
                         apply(outcome, KioskRequest::Save);
                     },
