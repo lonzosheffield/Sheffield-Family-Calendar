@@ -320,7 +320,9 @@ Kiosk** or **Lock Kiosk**.
 
 **Verified on device (K-A7, owner, 2026-10-03):** after the reinstall, the owner saved the
 password on a parent phone and both **Unlock Kiosk** and **Lock Kiosk** worked on the
-Insignia. Fully's raw response bodies were not captured.
+Insignia, and the section's state line ("The TV is locked." / "The TV is unlocked.")
+shows correctly, so Fully 1.61.2's `deviceInfo` does carry `kioskLocked`. Fully's raw
+response bodies were not captured.
 
 ## Branch B — Vega OS (no sideloading)
 
