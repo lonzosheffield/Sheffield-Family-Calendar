@@ -154,6 +154,8 @@ signed-in phone shows **Sign out** instead. The session itself is a 30-day
 `HttpOnly` cookie the hub sets — nothing on the phone stores a token, so
 signing out revokes it on the hub rather than merely forgetting it here.
 
+A signed-in parent's Settings also shows **TV kiosk** (below *Offline & install*): **Unlock Kiosk** / **Lock Kiosk** for Fully Kiosk on the television, after saving the TV's remote-admin password once — see `docs/FIRE_TV.md`, "Unlock and lock the kiosk from a parent phone (B-6)".
+
 ---
 
 ## If something looks wrong

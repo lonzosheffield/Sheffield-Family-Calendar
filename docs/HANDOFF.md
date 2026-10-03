@@ -3679,3 +3679,43 @@ metas there as it does in production, and what the suite asserts is their **orde
 template's first, the route's own last. `tests/router_tests.rs`'s own section comment was updated
 on this branch. Nothing else in `src/` changes; the constant, the component and the served bytes
 are all untouched by TV1-qa1.
+
+## B-6 (`feature/kiosk-remote`, 2026-10-03) — Unlock / Lock the TV kiosk from a parent phone
+
+Implements `docs/design/PLAN_KIOSK_REMOTE.md` v2 (`src/server/api/kiosk.rs`, `KioskSection` in
+`src/client/components/mobile/settings.rs`, `tests/kiosk_tests.rs`). Three notes for the Boss.
+
+### H-B6-1. Two new `settings` keys
+
+| key | value | written by | read by |
+| --- | --- | --- | --- |
+| `kiosk_admin_url` | normalised `http://a.b.c.d:port`, rebuilt from the parsed IPv4 + port (never the typed text) | `set_kiosk_admin`, only after Fully accepted the pair | `kiosk_admin_status`, `kiosk_command` (read pool, H-9) |
+| `kiosk_admin_password` | Fully's Remote Admin password, **plain text** (it is replayed to Fully on every tap) | same, in the **same transaction** as the URL | same; never returned to any client |
+
+No migration: both are ordinary rows of the existing `settings` table. They ride along in the
+nightly backups, which `docs/FIRE_TV.md` now says. Deleting both rows returns the phone to the
+"Not configured" form. Both are constants in `kiosk.rs` (`KIOSK_URL_SETTING`,
+`KIOSK_PASSWORD_SETTING`).
+
+### H-B6-2. Deviation: `kiosk_admin_status` returns a nested `Result`
+
+§2.1 types `KioskStatus { configured, address, locked }` and also requires every fn to answer an
+auth failure with `KioskOutcome::NotSignedIn` "not an error" (red #6). `KioskStatus` has nowhere to
+put that, so the fn's signature is
+`kiosk_admin_status(auth) -> Result<Result<KioskStatus, KioskOutcome>, ServerFnError>`:
+`Ok(Err(NotSignedIn))` is the only inner `Err` it ever produces; the outer `Err` is reserved for a
+database failure, as in every other server fn. The shared types themselves are exactly as §2.1 lists them.
+
+### H-B6-3. Deviation: K-A3's "rejected password stores nothing" runs through the plain core
+
+The allow-list (§2.2) rightly refuses `127.0.0.1`, so the public `set_kiosk_admin` cannot be aimed
+at the loopback fake Fully with a typed address. Its save half is therefore a plain `pub async fn
+save_if_accepted(pool, &KioskBase, &Secret)` (same precedent as `fully_command`), which the test
+drives with a `KioskBase` read from a seeded row. The public fn is still covered for the empty
+password (zero hits on the fake), a typed loopback address (`BadAddress`, zero hits) and every
+`NotSignedIn` case. Two smaller choices, both inside the plan's latitude: an empty password answers
+`PasswordRejected` (the form reopens with "The TV didn't accept that password. Enter it again."),
+and the phone trims surrounding whitespace off the address before sending it (the hub's allow-list
+still refuses any whitespace it receives). The Fully HTTP client also sets
+`pool_max_idle_per_host(0)` — the calls are rare, and a pooled connection must not outlive the
+tokio runtime that opened it.

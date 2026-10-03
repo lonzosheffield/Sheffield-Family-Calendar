@@ -256,3 +256,38 @@ the reading itself.
 or on a dedicated chevron? Does the TV get it at all, or is it phone-only? If `detail`, `source`
 and `url` are all empty, does the affordance hide itself rather than open an empty sheet?
 
+## B-6 — Unlock / Lock the TV kiosk from a parent phone (owner, 2026-10-03)
+
+**What the owner asked for:** *"Once the parent signs in, in the settings screen, I want the
+ability to unlock kiosk mode. Right now I literally have to go to the remote admin location
+(10.0.0.178:2323/home) … sign in with the password … then unlock kiosk mode. I want a shortcut
+button that says **Unlock Kiosk**, just below *Offline & install*, shown once signed in as
+parent."* Asked the same day, the owner decided: the Fully Kiosk admin password is **entered once
+on the phone** by a signed-in parent and kept by the hub (never sent back to a phone), and a
+**Lock Kiosk** button sits beside **Unlock Kiosk**.
+
+**DONE (`feature/kiosk-remote`, 2026-10-03).** `docs/design/PLAN_KIOSK_REMOTE.md` v2 is the
+approved plan, implemented as written; the deviations are recorded in `docs/HANDOFF.md` under B-6.
+
+* **Mechanism:** the hub proxies phone → `#[server]` fn → Fully's Remote Admin
+  (`?cmd=deviceInfo|unlockKiosk|lockKiosk&password=…&type=json`). `set_kiosk_admin` checks a typed
+  address against an RFC 1918 IPv4 allow-list and stores the address + password (one transaction)
+  only after Fully accepted them; `kiosk_command` replays the stored pair; `kiosk_admin_status`
+  reports configured / address / best-effort `kioskLocked`, never the password. Every fn is gated
+  by the parent session plus, on the cookie path, a same-origin check, and answers `NotSignedIn`
+  rather than erroring. One process-wide lock serialises calls to the TV (`Busy` past 5 s); the
+  HTTP client has a 5 s / 2 s timeout, no proxy and no redirects; the password is a `Secret`
+  that prints `***`, and no log line carries a URL or a body.
+* **Files:** `src/server/api/kiosk.rs` (new), `src/server/api/mod.rs`, `src/shared/types.rs`
+  (`KioskAction`, `KioskStatus`, `KioskOutcome`), `src/client/components/mobile/settings.rs`
+  (`KioskSection`, the §2.4 sentence table), `tests/kiosk_tests.rs` (new), `docs/FIRE_TV.md`,
+  `docs/PWA.md`, `docs/HANDOFF.md`, this entry. No `Cargo.toml` change, no migration, no Tailwind
+  rebuild (existing classes only).
+* **Tests:** K-A1 allow-list and K-A5 `Secret`/clamp — unit tests in `src/server/api/kiosk.rs`;
+  K-A2 protocol, K-A3 save + command, K-A4 gating, K-A5 log capture — `tests/kiosk_tests.rs`
+  against a loopback fake Fully; K-A6 SSR + verbatim sentences — `settings.rs` tests.
+* **Pending — K-A7 on device:** after the owner's reinstall (`docs/OWNER_CHECKLIST.md`), on a
+  parent phone over HTTPS: save the password, Unlock, Lock, a wrong password, the TV unplugged,
+  and a signed-out phone showing no **TV kiosk** section; then record Fully's three real response
+  bodies (password redacted) in `docs/FIRE_TV.md`.
+

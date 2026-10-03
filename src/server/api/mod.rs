@@ -18,12 +18,14 @@
 //! | [`tv`] | T2.1 (kiosk clock; moved here from `client::components::tv::clock` by Boss at the 2-a close) |
 //! | [`photos`] | T2.5 (photo tasks v2 — multipart upload route, delete-with-file) |
 //! | [`homeschool`] | HS4 (School tab server functions, `docs/homeschool/PLAN_HOMESCHOOL.md` §3) |
+//! | [`kiosk`] | B-6 (Unlock / Lock the TV kiosk from a parent phone, `docs/design/PLAN_KIOSK_REMOTE.md`) |
 //!
 //! Every server function is re-exported here, so call sites keep using
 //! `crate::server::api::<name>` exactly as before the split.
 
 pub mod calendar;
 pub mod homeschool;
+pub mod kiosk;
 pub mod photos;
 pub mod profiles;
 #[cfg(feature = "server")]
@@ -43,6 +45,7 @@ pub use homeschool::{
     set_school_week, set_subject_schedule, toggle_extra, toggle_lesson, toggle_lesson_together,
     unenroll, update_extra, upsert_assignment,
 };
+pub use kiosk::{kiosk_admin_status, kiosk_command, set_kiosk_admin};
 pub use photos::delete_custom_task;
 pub use profiles::{
     change_parent_pin, create_profile, delete_profile, list_profiles, parent_setup_status,
